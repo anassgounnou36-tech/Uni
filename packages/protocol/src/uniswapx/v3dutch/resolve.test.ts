@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { encodeAbiParameters } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
@@ -13,7 +14,8 @@ import { classifySupport } from './supportPolicy.js';
 import type { SignedV3DutchOrder, SupportPolicyV1, V3DutchOrder } from './types.js';
 
 const FIXTURES_ROOT = path.resolve(
-  '/home/runner/work/Uni/Uni/fixtures/orders/arbitrum'
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../../../fixtures/orders/arbitrum'
 );
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as const;
 const COSIGNER_PK = '0x59c6995e998f97a5a0044966f094538e6f5f4f2f7e4e2af23f0f3fbe7d2f4f0a' as const;
