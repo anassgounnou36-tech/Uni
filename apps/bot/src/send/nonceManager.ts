@@ -100,9 +100,10 @@ export class NonceManager {
     this.inflightByAccount.delete(lease.account.toLowerCase());
     const nextNonce = event === 'REPLACED' ? lease.nonce + 1n : lease.nonce;
     await this.config.ledger.writeNextNonce(lease.account, nextNonce, event, lease.orderId);
-    if (event !== 'REPLACED') {
-      this.replacementPolicy.settle(lease.orderId);
+    if (event === 'REPLACED') {
+      return;
     }
+    this.replacementPolicy.settle(lease.orderId);
   }
 
   getReplacementHistory() {

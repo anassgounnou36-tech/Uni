@@ -106,7 +106,9 @@ export class SequencerClient {
   ): Promise<SendAttempt> {
     try {
       const params =
-        method === 'eth_sendRawTransactionConditional' ? [rawTransaction, conditional ?? {}] : [rawTransaction];
+        method === 'eth_sendRawTransactionConditional'
+          ? [rawTransaction, this.assertConditionalEnvelope(conditional)]
+          : [rawTransaction];
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -140,5 +142,12 @@ export class SequencerClient {
         })
       };
     }
+  }
+
+  private assertConditionalEnvelope(conditional: ConditionalEnvelope | undefined): ConditionalEnvelope {
+    if (!conditional) {
+      throw new Error('conditional envelope is required for eth_sendRawTransactionConditional');
+    }
+    return conditional;
   }
 }

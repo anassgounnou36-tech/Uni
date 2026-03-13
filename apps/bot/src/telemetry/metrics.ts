@@ -16,7 +16,7 @@ function quantile(values: readonly number[], q: number): number {
     return 0;
   }
   const sorted = [...values].sort((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor(sorted.length * q));
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * q) - 1);
   return sorted[index] ?? 0;
 }
 
