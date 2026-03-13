@@ -60,7 +60,11 @@ importers:
         specifier: ^3.24.2
         version: 3.25.76
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      viem:
+        specifier: ^2.23.5
+        version: 2.47.2(typescript@5.9.3)(zod@3.25.76)
 
   packages/routing: {}
 
