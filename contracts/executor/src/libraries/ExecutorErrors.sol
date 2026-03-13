@@ -14,4 +14,7 @@ library ExecutorErrors {
     error ZeroAddress();
     error NotOwner();
     error Reentrancy();
+    error NotPaused();
+    error TokenTransferFailed();
+    error TokenApprovalFailed();
 }

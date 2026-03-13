@@ -128,18 +128,18 @@ contract UniswapXDutchV3Executor is IReactorCallback {
     }
 
     function rescueToken(address token, address to, uint256 amount) external onlyOwner nonReentrant {
-        if (!paused) revert ExecutorErrors.Paused();
+        if (!paused) revert ExecutorErrors.NotPaused();
         if (token == address(0) || to == address(0)) revert ExecutorErrors.ZeroAddress();
         _safeTransfer(token, to, amount);
     }
 
     function _safeTransfer(address token, address to, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.transfer, (to, amount)));
-        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert ExecutorErrors.BadRoute();
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert ExecutorErrors.TokenTransferFailed();
     }
 
     function _safeApprove(address token, address spender, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.approve, (spender, amount)));
-        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert ExecutorErrors.BadRoute();
+        if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert ExecutorErrors.TokenApprovalFailed();
     }
 }

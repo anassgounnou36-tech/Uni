@@ -57,7 +57,7 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
     function _safeApprove(address token, address spender, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.approve, (spender, amount)));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {
-            revert ExecutorErrors.BadRoute();
+            revert ExecutorErrors.TokenApprovalFailed();
         }
     }
 }
