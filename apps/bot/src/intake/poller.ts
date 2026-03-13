@@ -1,7 +1,6 @@
 import type { OrdersApiClient } from './ordersApiClient.js';
 import { normalizeApiOrder } from './ordersApiClient.js';
 import type { OrderStore } from '../store/types.js';
-import type { OrderReasonCode } from '../store/types.js';
 
 export type PollerResult = {
   discovered: number;
@@ -65,8 +64,4 @@ export class OrdersPoller {
     clearInterval(this.timer);
     this.timer = undefined;
   }
-}
-
-export function reasonFromUnsupportedSupportCheck(reason: OrderReasonCode): OrderReasonCode {
-  return reason;
 }
