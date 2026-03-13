@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "baseUrl": "../..",
+    "paths": {
+      "@uni/config": ["packages/config/src/index.ts"],
+      "@uni/protocol": ["packages/protocol/src/index.ts"],
+      "@uni/routing": ["packages/routing/src/index.ts"],
+      "@uni/sim": ["packages/sim/src/index.ts"],
+      "@uni/telemetry": ["packages/telemetry/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}
