@@ -1,9 +1,28 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
+import {UniV3SwapRouter02Adapter} from "../src/adapters/UniV3SwapRouter02Adapter.sol";
+import {UniswapXDutchV3Executor} from "../src/UniswapXDutchV3Executor.sol";
+import {ExecutorErrors} from "../src/libraries/ExecutorErrors.sol";
+import {ExecutorTypes} from "../src/libraries/ExecutorTypes.sol";
+
 interface Vm {
     function createSelectFork(string calldata rpcUrl) external returns (uint256);
     function envOr(string calldata name, string calldata defaultValue) external returns (string memory);
+    function deal(address account, uint256 newBalance) external;
+    function prank(address msgSender) external;
+    function expectRevert(bytes4 revertData) external;
+    function expectRevert() external;
+}
+
+interface IERC20 {
+    function balanceOf(address account) external view returns (uint256);
+    function allowance(address owner, address spender) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+
+interface IWETH is IERC20 {
+    function deposit() external payable;
 }
 
 contract ArbitrumForkSmokeTest {
@@ -15,8 +34,14 @@ contract ArbitrumForkSmokeTest {
     address private constant UNIV3_FACTORY = 0x1F98431c8aD98523631AE4a59f267346ea31F984;
     address private constant UNIV3_QUOTER_V2 = 0x61fFE014bA17989E743c5F6cB21bF9697530B21e;
     address private constant UNIV3_SWAP_ROUTER_02 = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
-    address private constant UNIVERSAL_ROUTER = 0xa51afafe0263b40edaef0df8781ea9aa03e381a3;
+    address private constant UNIVERSAL_ROUTER = 0xA51afAFe0263b40EdaEf0Df8781eA9aa03E381a3;
     address private constant TIMEBOOST_AUCTION_CONTRACT = 0x5fcb496a31b7AE91e7c9078Ec662bd7A55cd3079;
+    address private constant WETH = 0x82aF49447D8a07e3bd95BD0d56f35241523fBab1;
+    address private constant USDC = 0xaf88d065e77c8cC2239327C5EDb3A432268e5831;
+    address private constant TREASURY = address(0x123456);
+
+    UniV3SwapRouter02Adapter private adapter;
+    UniswapXDutchV3Executor private executor;
 
     function testArbitrumAddressesHaveBytecode() public {
         string memory forkUrl = vm.envOr("ARB1_RPC_URL", "https://arb1-sequencer.arbitrum.io/rpc");
@@ -31,4 +56,129 @@ contract ArbitrumForkSmokeTest {
         require(UNIVERSAL_ROUTER.code.length > 0, "missing universal router bytecode");
         require(TIMEBOOST_AUCTION_CONTRACT.code.length > 0, "missing timeboost auction bytecode");
     }
+
+    function testForkEndToEndCallbackSettlement() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        uint256 requiredOutput = 10_000;
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        executor.reactorCallback(_singleOrder(0.01 ether, requiredOutput), _route(1, 500));
+
+        require(
+            IERC20(USDC).allowance(address(executor), UNISWAPX_DUTCH_V3_REACTOR) == requiredOutput,
+            "missing reactor approval"
+        );
+    }
+
+    function testForkWrongCallerReverts() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        vm.expectRevert(ExecutorErrors.UnauthorizedCaller.selector);
+        executor.reactorCallback(_singleOrder(0.01 ether, 1), _route(1, 500));
+    }
+
+    function testForkPausedReverts() public {
+        _setUpForkExecutor();
+        executor.setPaused(true);
+
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        vm.expectRevert(ExecutorErrors.Paused.selector);
+        executor.reactorCallback(_singleOrder(0.01 ether, 1), _route(1, 500));
+    }
+
+    function testForkBadRouteReverts() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        vm.expectRevert(ExecutorErrors.TokenMismatch.selector);
+        executor.reactorCallback(
+            _singleOrder(0.01 ether, 1),
+            abi.encode(ExecutorTypes.RoutePlan({tokenIn: WETH, tokenOut: WETH, poolFee: 500, minAmountOut: 1}))
+        );
+    }
+
+    function testForkInsufficientOutputReverts() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        vm.expectRevert(ExecutorErrors.InsufficientOutput.selector);
+        executor.reactorCallback(_singleOrder(0.01 ether, type(uint128).max), _route(1, 500));
+    }
+
+    function testForkSlippageReverts() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        vm.expectRevert();
+        executor.reactorCallback(_singleOrder(0.01 ether, 1), _route(type(uint256).max, 500));
+    }
+
+    function testForkUnsupportedOutputShapeReverts() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        ExecutorTypes.ResolvedOrder[] memory orders = new ExecutorTypes.ResolvedOrder[](1);
+        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](2);
+        outputs[0] = ExecutorTypes.ResolvedOutput({token: USDC, amount: 1, recipient: address(0x1)});
+        outputs[1] = ExecutorTypes.ResolvedOutput({token: WETH, amount: 1, recipient: address(0x2)});
+        orders[0] = ExecutorTypes.ResolvedOrder({
+            info: "",
+            input: ExecutorTypes.ResolvedInput({token: WETH, amount: 0.01 ether, maxAmount: 0.01 ether}),
+            outputs: outputs
+        });
+
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        vm.expectRevert(ExecutorErrors.UnsupportedOutputShape.selector);
+        executor.reactorCallback(orders, _route(1, 500));
+    }
+
+    function testForkProfitSweepBehavior() public {
+        _setUpForkExecutor();
+        _fundExecutorWithWeth(0.01 ether);
+
+        uint256 treasuryBefore = IERC20(USDC).balanceOf(TREASURY);
+        vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
+        executor.reactorCallback(_singleOrder(0.01 ether, 1), _route(1, 500));
+
+        require(IERC20(USDC).balanceOf(TREASURY) > treasuryBefore, "profit not swept");
+    }
+
+    function _setUpForkExecutor() private {
+        string memory forkUrl = vm.envOr("ARB1_RPC_URL", "https://arb1-sequencer.arbitrum.io/rpc");
+        vm.createSelectFork(forkUrl);
+        adapter = new UniV3SwapRouter02Adapter(UNIV3_SWAP_ROUTER_02);
+        executor = new UniswapXDutchV3Executor(UNISWAPX_DUTCH_V3_REACTOR, address(adapter), TREASURY, address(this));
+    }
+
+    function _fundExecutorWithWeth(uint256 amount) private {
+        vm.deal(address(this), amount);
+        IWETH(WETH).deposit{value: amount}();
+        IERC20(WETH).transfer(address(executor), amount);
+    }
+
+    function _singleOrder(uint256 inputAmount, uint256 requiredOutput)
+        private
+        pure
+        returns (ExecutorTypes.ResolvedOrder[] memory orders)
+    {
+        orders = new ExecutorTypes.ResolvedOrder[](1);
+        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](1);
+        outputs[0] = ExecutorTypes.ResolvedOutput({token: USDC, amount: requiredOutput, recipient: address(0xCAFE)});
+        orders[0] = ExecutorTypes.ResolvedOrder({
+            info: "",
+            input: ExecutorTypes.ResolvedInput({token: WETH, amount: inputAmount, maxAmount: inputAmount}),
+            outputs: outputs
+        });
+    }
+
+    function _route(uint256 minOut, uint24 fee) private pure returns (bytes memory) {
+        return abi.encode(ExecutorTypes.RoutePlan({tokenIn: WETH, tokenOut: USDC, poolFee: fee, minAmountOut: minOut}));
+    }
+
+    receive() external payable {}
 }
