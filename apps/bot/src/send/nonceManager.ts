@@ -7,7 +7,7 @@ export type NonceLease = {
   leasedAtMs: number;
 };
 
-export type NonceLedgerEvent = 'LEASED' | 'LANDED' | 'REPLACED' | 'CANCELED' | 'RELEASED';
+export type NonceLedgerEvent = 'LEASED' | 'BROADCAST' | 'LANDED' | 'REPLACED' | 'CANCELED' | 'RELEASED';
 
 export interface NonceLedger {
   readNextNonce(account: `0x${string}`): Promise<bigint | undefined>;
@@ -49,10 +49,12 @@ export class PostgresNonceLedger implements NonceLedger {
 
   async writeNextNonce(account: `0x${string}`, nonce: bigint, event: NonceLedgerEvent, orderId: string): Promise<void> {
     await this.memory.writeNextNonce(account, nonce, event, orderId);
-    await this.sqlWriter(
-      'insert into nonce_ledger(account, next_nonce, event, order_id) values ($1, $2, $3, $4)',
-      [account, nonce.toString(), event, orderId]
-    );
+    await this.sqlWriter('insert into nonce_ledger(account, next_nonce, event, order_id) values ($1, $2, $3, $4)', [
+      account,
+      nonce.toString(),
+      event,
+      orderId
+    ]);
   }
 }
 
@@ -67,6 +69,16 @@ export class NonceManager {
 
   constructor(private readonly config: NonceManagerConfig) {}
 
+  private canLeaseForOrder(inflight: NonceLease | undefined, orderId: string, intent: ReplacementIntent): boolean {
+    if (!inflight) {
+      return true;
+    }
+    if (inflight.orderId === orderId) {
+      return true;
+    }
+    return intent !== 'new';
+  }
+
   async lease(
     account: `0x${string}`,
     orderId: string,
@@ -75,7 +87,7 @@ export class NonceManager {
   ): Promise<NonceLease> {
     const accountKey = account.toLowerCase();
     const inflight = this.inflightByAccount.get(accountKey);
-    if (inflight && inflight.orderId !== orderId) {
+    if (!this.canLeaseForOrder(inflight, orderId, intent)) {
       throw new Error('NONCE_LEASE_IN_FLIGHT');
     }
 
@@ -84,10 +96,15 @@ export class NonceManager {
     if (!replacement.allowed) {
       throw new Error(replacement.reason);
     }
+
     const lease: NonceLease = { account, nonce: nextNonce, orderId, leasedAtMs: nowMs };
     this.inflightByAccount.set(accountKey, lease);
     await this.config.ledger.writeNextNonce(account, nextNonce, 'LEASED', orderId);
     return lease;
+  }
+
+  async markBroadcastAccepted(lease: NonceLease): Promise<void> {
+    await this.config.ledger.writeNextNonce(lease.account, lease.nonce + 1n, 'BROADCAST', lease.orderId);
   }
 
   async markLanded(lease: NonceLease): Promise<void> {
@@ -100,10 +117,9 @@ export class NonceManager {
     this.inflightByAccount.delete(lease.account.toLowerCase());
     const nextNonce = event === 'REPLACED' ? lease.nonce + 1n : lease.nonce;
     await this.config.ledger.writeNextNonce(lease.account, nextNonce, event, lease.orderId);
-    if (event === 'REPLACED') {
-      return;
+    if (event !== 'REPLACED') {
+      this.replacementPolicy.settle(lease.orderId);
     }
-    this.replacementPolicy.settle(lease.orderId);
   }
 
   getReplacementHistory() {

@@ -2,10 +2,12 @@
 pragma solidity ^0.8.24;
 
 import {UniswapXDutchV3Executor} from "../src/UniswapXDutchV3Executor.sol";
+import {UniV3SwapRouter02Adapter} from "../src/adapters/UniV3SwapRouter02Adapter.sol";
 import {IReactorCallback} from "../src/external/uniswapx/IReactorCallback.sol";
 import {ReactorStructs} from "../src/external/uniswapx/ReactorStructs.sol";
 import {ExecutorErrors} from "../src/libraries/ExecutorErrors.sol";
 import {ExecutorTypes} from "../src/libraries/ExecutorTypes.sol";
+import {MockReactorForExecutorFlow} from "./mocks/MockReactorForExecutorFlow.sol";
 
 interface Vm {
     function prank(address msgSender) external;
@@ -52,6 +54,32 @@ contract MockSettlementAdapter {
     ) external returns (uint256) {
         if (amountOut < minAmountOut) return amountOut;
         MockERC20(tokenOut).mint(recipient, amountOut);
+        return amountOut;
+    }
+}
+
+contract MockSwapRouter02 {
+    uint256 public amountOut;
+
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function setAmountOut(uint256 value) external {
+        amountOut = value;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256) {
+        if (amountOut < params.amountOutMinimum) {
+            return amountOut;
+        }
+        MockERC20(params.tokenOut).mint(params.recipient, amountOut);
         return amountOut;
     }
 }
@@ -150,6 +178,47 @@ contract UniswapXDutchV3ExecutorTest {
             ReactorStructs.SignedOrder({order: hex"010203", sig: hex"0405"}), _route(tokenIn, tokenOut, 9e6)
         );
 
+        require(tokenOut.allowance(address(wrapper), address(reactor)) == 10e6, "reactor allowance not set");
+    }
+
+    function testExecuteCallsMockReactorAndExercisesRealCallbackPath() public {
+        MockReactorForExecutorFlow reactor = new MockReactorForExecutorFlow();
+        MockSwapRouter02 router = new MockSwapRouter02();
+        UniV3SwapRouter02Adapter realAdapter = new UniV3SwapRouter02Adapter(address(router));
+        UniswapXDutchV3Executor wrapper =
+            new UniswapXDutchV3Executor(address(reactor), address(realAdapter), TREASURY, address(this));
+
+        tokenIn.mint(address(wrapper), 1e18);
+        router.setAmountOut(12e6);
+
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](1);
+        outputs[0] =
+            ReactorStructs.OutputToken({token: address(tokenOut), amount: 10e6, recipient: address(0xCAFE)});
+        reactor.pushConfiguredResolvedOrder(
+            ReactorStructs.ResolvedOrder({
+                info: ReactorStructs.OrderInfo({
+                    reactor: address(reactor),
+                    swapper: address(0xBEEF),
+                    nonce: 1,
+                    deadline: type(uint256).max,
+                    additionalValidationContract: address(0),
+                    additionalValidationData: ""
+                }),
+                input: ReactorStructs.InputToken({token: address(tokenIn), amount: 1e18, maxAmount: 1e18}),
+                outputs: outputs,
+                sig: hex"0405",
+                hash: keccak256(hex"010203")
+            })
+        );
+
+        ReactorStructs.SignedOrder memory signedOrder = ReactorStructs.SignedOrder({order: hex"010203", sig: hex"0405"});
+        bytes memory callbackData = _route(tokenIn, tokenOut, 9e6);
+        wrapper.execute(signedOrder, callbackData);
+
+        require(reactor.lastCaller() == address(wrapper), "caller mismatch");
+        require(keccak256(reactor.lastOrderBytes()) == keccak256(signedOrder.order), "order mismatch");
+        require(keccak256(reactor.lastSigBytes()) == keccak256(signedOrder.sig), "signature mismatch");
+        require(keccak256(reactor.lastCallbackData()) == keccak256(callbackData), "callback mismatch");
         require(tokenOut.allowance(address(wrapper), address(reactor)) == 10e6, "reactor allowance not set");
     }
 

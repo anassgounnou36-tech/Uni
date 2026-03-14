@@ -2,14 +2,18 @@ import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
 import { resolveAt } from '@uni/protocol';
 import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../scheduler/hotLane.js';
-import type { Univ3QuoteModel } from '../routing/univ3QuoteModel.js';
-import { hasSameOutputTokenShape } from '../routing/univ3QuoteModel.js';
+import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
 import type { ForkSimService } from '../sim/forkSimService.js';
 import type { NormalizedOrder, OrderReasonCode, OrderStore } from '../store/types.js';
+import type { ConditionalEnvelope } from '../send/conditional.js';
+import type { SequencerClient } from '../send/sequencerClient.js';
+import { NonceManager } from '../send/nonceManager.js';
+import type { PreparedExecution } from '../execution/preparedExecution.js';
+import type { ExecutionPlan } from '../execution/types.js';
 
 export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
-  threshold: bigint;
+  thresholdOut: bigint;
   candidateBlocks: readonly bigint[];
   competeWindowBlocks: bigint;
 };
@@ -19,18 +23,24 @@ export type ReplayRecord = {
   scheduledBlock?: bigint;
   decision: 'NO_SEND' | 'WOULD_SEND';
   reason: OrderReasonCode;
-  predictedEdge: bigint;
+  predictedEdgeOut: bigint;
   simResult: 'SIM_OK' | 'SIM_FAIL' | 'NOT_RUN';
+  preparedExecution?: PreparedExecution;
 };
 
 export type ReplayRunnerParams = {
   corpus: readonly NormalizedOrder[];
   store: OrderStore;
   supportPolicy: ReplaySupportPolicy;
-  quoteModel: Univ3QuoteModel;
+  routePlanner: UniV3RoutePlanner;
   simService: ForkSimService;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   shadowMode: boolean;
+  executor: `0x${string}`;
+  conditionalEnvelope: ConditionalEnvelope;
+  sequencerClient: SequencerClient;
+  nonceManager: NonceManager;
+  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
 };
 
 function normalize(address: `0x${string}`): string {
@@ -47,7 +57,7 @@ function isAllowlisted(order: V3DutchOrder, allowlistedPairs: ReplaySupportPolic
   );
 }
 
-function classifySupport(order: V3DutchOrder, quoteModel: Univ3QuoteModel, policy: ReplaySupportPolicy): OrderReasonCode {
+function classifySupport(order: V3DutchOrder, policy: ReplaySupportPolicy): OrderReasonCode {
   if (order.baseOutputs.length === 0) {
     return 'EXOTIC_OUTPUT_SHAPE';
   }
@@ -63,9 +73,6 @@ function classifySupport(order: V3DutchOrder, quoteModel: Univ3QuoteModel, polic
   if (!isAllowlisted(order, policy.allowlistedPairs)) {
     return 'TOKEN_PAIR_NOT_ALLOWLISTED';
   }
-  if (!quoteModel.isRouteable(order.baseInput.token, firstOutput.token)) {
-    return 'NOT_ROUTEABLE';
-  }
   return 'SUPPORTED';
 }
 
@@ -78,14 +85,14 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     params.store.transition(normalized.orderHash, 'DECODED');
     const order = normalized.decodedOrder.order;
 
-    const support = classifySupport(order, params.quoteModel, params.supportPolicy);
+    const support = classifySupport(order, params.supportPolicy);
     if (support !== 'SUPPORTED') {
       params.store.transition(normalized.orderHash, 'UNSUPPORTED', support);
       records.push({
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
         reason: support,
-        predictedEdge: 0n,
+        predictedEdgeOut: 0n,
         simResult: 'NOT_RUN'
       });
       continue;
@@ -96,55 +103,56 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     const schedule = await findFirstProfitableBlock({
       order,
       baseEnv: params.resolveEnv,
-      quoteModel: params.quoteModel,
+      routePlanner: params.routePlanner,
       candidateBlocks: params.supportPolicy.candidateBlocks,
-      threshold: params.supportPolicy.threshold,
+      threshold: params.supportPolicy.thresholdOut,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
     });
 
     if (!schedule) {
-      params.store.transition(normalized.orderHash, 'SIM_FAIL', 'SCHEDULER_NO_EDGE');
+      let noEdgeReason: OrderReasonCode = 'SCHEDULER_NO_EDGE';
+      const probeBlock = params.supportPolicy.candidateBlocks[0];
+      if (probeBlock !== undefined) {
+        const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlock });
+        const probeRoute = await params.routePlanner.planBestRoute({ resolvedOrder: probeResolved });
+        if (!probeRoute.ok && probeRoute.failure.reason === 'NOT_PRICEABLE_GAS') {
+          noEdgeReason = 'NOT_PRICEABLE_GAS';
+        }
+      }
+
+      params.store.transition(normalized.orderHash, 'SIM_FAIL', noEdgeReason);
       records.push({
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
-        reason: 'SCHEDULER_NO_EDGE',
-        predictedEdge: 0n,
+        reason: noEdgeReason,
+        predictedEdgeOut: 0n,
         simResult: 'NOT_RUN'
       });
       continue;
     }
 
     params.store.transition(normalized.orderHash, 'SCHEDULED');
-    const finalResolved = await resolveAt(order, {
-      ...params.resolveEnv,
-      blockNumberish: schedule.scheduledBlock
-    });
-    if (!hasSameOutputTokenShape(finalResolved)) {
-      params.store.transition(normalized.orderHash, 'UNSUPPORTED', 'EXOTIC_OUTPUT_SHAPE');
-      records.push({
-        orderHash: normalized.orderHash,
-        scheduledBlock: schedule.scheduledBlock,
-        decision: 'NO_SEND',
-        reason: 'EXOTIC_OUTPUT_SHAPE',
-        predictedEdge: 0n,
-        simResult: 'NOT_RUN'
-      });
-      continue;
-    }
 
-    const predictedEdge = schedule.evaluations.at(-1)?.netEdge ?? 0n;
+    const predictedEdgeOut = schedule.chosenRoute.netEdgeOut;
     const hotDecision = await runHotLaneStep({
       entry: {
         orderHash: normalized.orderHash,
         scheduledBlock: schedule.scheduledBlock,
         competeWindowEnd: schedule.competeWindowEnd,
-        predictedEdge
+        predictedEdgeOut
       },
       currentBlock: schedule.scheduledBlock,
-      latestResolved: finalResolved,
-      threshold: params.supportPolicy.threshold,
-      quoteRefresher: (resolved) => params.quoteModel.estimateHedgeOutput(resolved) - resolved.outputs.reduce((sum, o) => sum + o.amount, 0n),
+      thresholdOut: params.supportPolicy.thresholdOut,
+      normalizedOrder: normalized,
+      order,
+      routePlanner: params.routePlanner,
+      resolveEnv: params.resolveEnv,
+      conditionalEnvelope: params.conditionalEnvelope,
+      executor: params.executor,
       simService: params.simService,
+      sequencerClient: params.sequencerClient,
+      nonceManager: params.nonceManager,
+      executionPreparer: params.executionPreparer,
       shadowMode: params.shadowMode
     });
 
@@ -156,8 +164,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         scheduledBlock: schedule.scheduledBlock,
         decision: 'WOULD_SEND',
         reason: 'SUPPORTED',
-        predictedEdge,
-        simResult: 'SIM_OK'
+        predictedEdgeOut,
+        simResult: 'SIM_OK',
+        preparedExecution: hotDecision.preparedExecution
       });
       continue;
     }
@@ -169,22 +178,23 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         scheduledBlock: schedule.scheduledBlock,
         decision: 'NO_SEND',
         reason: 'SHADOW_MODE',
-        predictedEdge,
-        simResult: 'SIM_OK'
+        predictedEdgeOut,
+        simResult: 'SIM_OK',
+        preparedExecution: hotDecision.preparedExecution
       });
       continue;
     }
 
-    const failureReason =
-      hotDecision.action === 'DROP' ? hotDecision.simResult?.reason ?? 'NOT_PROFITABLE' : 'NOT_PROFITABLE';
+    const failureReason = hotDecision.action === 'DROP' ? hotDecision.simResult?.reason ?? 'NOT_PROFITABLE' : 'NOT_PROFITABLE';
     params.store.transition(normalized.orderHash, 'SIM_FAIL', failureReason);
     records.push({
       orderHash: normalized.orderHash,
       scheduledBlock: schedule.scheduledBlock,
       decision: 'NO_SEND',
       reason: failureReason,
-      predictedEdge,
-      simResult: 'SIM_FAIL'
+      predictedEdgeOut,
+      simResult: 'SIM_FAIL',
+      preparedExecution: hotDecision.action === 'DROP' ? hotDecision.preparedExecution : undefined
     });
   }
 

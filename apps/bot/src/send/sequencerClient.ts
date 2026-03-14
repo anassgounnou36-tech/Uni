@@ -1,5 +1,6 @@
-import { normalizeConditionalEnvelope, type ConditionalEnvelope } from './conditional.js';
+import { assertTimestampMaxFresh, normalizeConditionalEnvelope, type ConditionalEnvelope } from './conditional.js';
 import { classifySendResult, type JsonRpcErrorShape, type SendResultClassification } from './sendResultClassifier.js';
+import type { PreparedExecution } from '../execution/preparedExecution.js';
 
 type FetchLike = typeof fetch;
 
@@ -14,6 +15,7 @@ export type SequencerClientConfig = {
   fetchImpl?: FetchLike;
   shadowMode?: boolean;
   enableConditionalKnownAccounts?: boolean;
+  getCurrentL2TimestampSec?: () => bigint;
 };
 
 export type SendAttempt = {
@@ -23,16 +25,27 @@ export type SendAttempt = {
   error?: JsonRpcErrorShape;
 };
 
-export type SendEnvelopeRecord = {
-  method: 'eth_sendRawTransaction' | 'eth_sendRawTransactionConditional';
-  rawTransaction: `0x${string}`;
-  conditional?: ConditionalEnvelope;
+export type SendRecord = {
+  orderHash: `0x${string}`;
+  serializedTransaction: `0x${string}`;
+  nonce: bigint;
+  writer: 'sequencer' | 'fallback' | 'shadow';
+  conditionalEnvelope?: ConditionalEnvelope;
+  classification: SendResultClassification | 'shadow_recorded';
+  attemptedAt: number;
 };
 
 export type SequencerClientResult = {
   attempts: SendAttempt[];
   accepted: boolean;
-  envelope: SendEnvelopeRecord;
+  records: SendRecord[];
+};
+
+export type SendInput = {
+  orderHash: `0x${string}`;
+  serializedTransaction: `0x${string}`;
+  nonce: bigint;
+  conditional?: ConditionalEnvelope;
 };
 
 const DEFAULT_FETCH: FetchLike = (...args) => fetch(...args);
@@ -43,72 +56,103 @@ function shouldTryFallback(classification: SendResultClassification): boolean {
 
 export class SequencerClient {
   private readonly fetchImpl: FetchLike;
-  private readonly envelopes: SendEnvelopeRecord[] = [];
+  private readonly records: SendRecord[] = [];
 
   constructor(private readonly config: SequencerClientConfig) {
     this.fetchImpl = config.fetchImpl ?? DEFAULT_FETCH;
   }
 
-  getRecordedEnvelopes(): SendEnvelopeRecord[] {
-    return [...this.envelopes];
+  getSendRecords(): SendRecord[] {
+    return [...this.records];
   }
 
-  async sendRawTransaction(rawTransaction: `0x${string}`): Promise<SequencerClientResult> {
-    return this.sendInternal('eth_sendRawTransaction', rawTransaction);
-  }
+  async send(input: SendInput): Promise<SequencerClientResult> {
+    const normalizedConditional =
+      input.conditional === undefined
+        ? undefined
+        : normalizeConditionalEnvelope(input.conditional, {
+            enableKnownAccounts: this.config.enableConditionalKnownAccounts
+          });
+    if (normalizedConditional && this.config.getCurrentL2TimestampSec) {
+      assertTimestampMaxFresh(normalizedConditional, this.config.getCurrentL2TimestampSec());
+    }
+    const method = normalizedConditional ? 'eth_sendRawTransactionConditional' : 'eth_sendRawTransaction';
 
-  async sendRawTransactionConditional(
-    rawTransaction: `0x${string}`,
-    conditional: ConditionalEnvelope
-  ): Promise<SequencerClientResult> {
-    const normalized = normalizeConditionalEnvelope(conditional, {
-      enableKnownAccounts: this.config.enableConditionalKnownAccounts
-    });
-    return this.sendInternal('eth_sendRawTransactionConditional', rawTransaction, normalized);
-  }
-
-  private async sendInternal(
-    method: 'eth_sendRawTransaction' | 'eth_sendRawTransactionConditional',
-    rawTransaction: `0x${string}`,
-    conditional?: ConditionalEnvelope
-  ): Promise<SequencerClientResult> {
-    const envelope: SendEnvelopeRecord = { method, rawTransaction, conditional };
-    this.envelopes.push(envelope);
     if (this.config.shadowMode) {
+      const record: SendRecord = {
+        orderHash: input.orderHash,
+        serializedTransaction: input.serializedTransaction,
+        nonce: input.nonce,
+        writer: 'shadow',
+        conditionalEnvelope: normalizedConditional,
+        classification: 'shadow_recorded',
+        attemptedAt: Date.now()
+      };
+      this.records.push(record);
       return {
         attempts: [],
         accepted: false,
-        envelope
+        records: [record]
       };
     }
 
-    const sequencer = await this.sendRpc('sequencer', this.config.sequencerUrl, method, rawTransaction, conditional);
-    const attempts: SendAttempt[] = [sequencer];
-    if (sequencer.classification === 'accepted') {
-      return { attempts, accepted: true, envelope };
+    const sequencer = await this.sendRpc(
+      'sequencer',
+      this.config.sequencerUrl,
+      method,
+      input.orderHash,
+      input.serializedTransaction,
+      input.nonce,
+      normalizedConditional
+    );
+    const attempts: SendAttempt[] = [sequencer.attempt];
+    const records: SendRecord[] = [sequencer.record];
+
+    if (sequencer.attempt.classification === 'accepted') {
+      this.records.push(...records);
+      return { attempts, accepted: true, records };
     }
 
-    if (shouldTryFallback(sequencer.classification)) {
-      const fallback = await this.sendRpc('fallback', this.config.fallbackUrl, method, rawTransaction, conditional);
-      attempts.push(fallback);
-      return { attempts, accepted: fallback.classification === 'accepted', envelope };
+    if (shouldTryFallback(sequencer.attempt.classification)) {
+      const fallback = await this.sendRpc(
+        'fallback',
+        this.config.fallbackUrl,
+        method,
+        input.orderHash,
+        input.serializedTransaction,
+        input.nonce,
+        normalizedConditional
+      );
+      attempts.push(fallback.attempt);
+      records.push(fallback.record);
+      this.records.push(...records);
+      return { attempts, accepted: fallback.attempt.classification === 'accepted', records };
     }
 
-    return { attempts, accepted: false, envelope };
+    this.records.push(...records);
+    return { attempts, accepted: false, records };
+  }
+
+  async sendPreparedExecution(prepared: PreparedExecution): Promise<SequencerClientResult> {
+    return this.send({
+      orderHash: prepared.orderHash,
+      serializedTransaction: prepared.serializedTransaction,
+      nonce: prepared.nonce,
+      conditional: prepared.conditionalEnvelope
+    });
   }
 
   private async sendRpc(
     writer: 'sequencer' | 'fallback',
     url: string,
     method: 'eth_sendRawTransaction' | 'eth_sendRawTransactionConditional',
-    rawTransaction: `0x${string}`,
-    conditional?: ConditionalEnvelope
-  ): Promise<SendAttempt> {
+    orderHash: `0x${string}`,
+    serializedTransaction: `0x${string}`,
+    nonce: bigint,
+    conditionalEnvelope?: ConditionalEnvelope
+  ): Promise<{ attempt: SendAttempt; record: SendRecord }> {
     try {
-      const params =
-        method === 'eth_sendRawTransactionConditional'
-          ? [rawTransaction, this.assertConditionalEnvelope(conditional)]
-          : [rawTransaction];
+      const params = method === 'eth_sendRawTransactionConditional' ? [serializedTransaction, this.assertConditionalEnvelope(conditionalEnvelope)] : [serializedTransaction];
       const response = await this.fetchImpl(url, {
         method: 'POST',
         headers: {
@@ -128,18 +172,38 @@ export class SequencerClient {
         error: json.error
       });
       return {
-        writer,
-        classification,
-        txHash: json.result,
-        error: json.error
+        attempt: {
+          writer,
+          classification,
+          txHash: json.result,
+          error: json.error
+        },
+        record: {
+          orderHash,
+          serializedTransaction,
+          nonce,
+          writer,
+          conditionalEnvelope,
+          classification,
+          attemptedAt: Date.now()
+        }
       };
     } catch (transportError) {
+      const classification = classifySendResult({ ok: false, transportError });
       return {
-        writer,
-        classification: classifySendResult({
-          ok: false,
-          transportError
-        })
+        attempt: {
+          writer,
+          classification
+        },
+        record: {
+          orderHash,
+          serializedTransaction,
+          nonce,
+          writer,
+          conditionalEnvelope,
+          classification,
+          attemptedAt: Date.now()
+        }
       };
     }
   }

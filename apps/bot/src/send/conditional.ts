@@ -16,10 +16,34 @@ export type ConditionalEnvelopeOptions = {
   enableKnownAccounts?: boolean;
 };
 
+export type ConditionalBlockBoundsPolicy = {
+  enableConditionalBlockBounds?: boolean;
+  blockNumberMin?: bigint;
+  blockNumberMax?: bigint;
+};
+
+export type TimestampMaxDerivationParams = {
+  currentL2TimestampSec: bigint;
+  scheduledWindowBlocks: bigint;
+  avgBlockTimeSec: bigint;
+  maxStalenessSec: bigint;
+};
+
+export function assertTimestampMaxFresh(envelope: ConditionalEnvelope, currentL2TimestampSec: bigint): void {
+  if (envelope.TimestampMax !== undefined && envelope.TimestampMax < currentL2TimestampSec) {
+    throw new Error(`TimestampMax ${envelope.TimestampMax} is stale (current: ${currentL2TimestampSec})`);
+  }
+}
+
 function assertRange(min: bigint | undefined, max: bigint | undefined, label: string): void {
   if (min !== undefined && max !== undefined && min > max) {
     throw new Error(`${label} min cannot exceed max`);
   }
+}
+
+export function deriveTimestampMax(params: TimestampMaxDerivationParams): bigint {
+  const windowSeconds = params.scheduledWindowBlocks * params.avgBlockTimeSec;
+  return params.currentL2TimestampSec + windowSeconds + params.maxStalenessSec;
 }
 
 export function normalizeConditionalEnvelope(
@@ -39,9 +63,24 @@ export function normalizeConditionalEnvelope(
   return envelope;
 }
 
-export function buildFreshnessGuard(timestampMax: bigint, blockNumberMax?: bigint): ConditionalEnvelope {
+export function buildFreshnessGuard(
+  timestampMax: bigint,
+  blockBoundsPolicy: ConditionalBlockBoundsPolicy = {}
+): ConditionalEnvelope {
+  const includeBlockBounds = blockBoundsPolicy.enableConditionalBlockBounds ?? false;
   return {
     TimestampMax: timestampMax,
-    ...(blockNumberMax !== undefined ? { BlockNumberMax: blockNumberMax } : {})
+    ...(includeBlockBounds && blockBoundsPolicy.blockNumberMin !== undefined
+      ? { BlockNumberMin: blockBoundsPolicy.blockNumberMin }
+      : {}),
+    ...(includeBlockBounds && blockBoundsPolicy.blockNumberMax !== undefined
+      ? { BlockNumberMax: blockBoundsPolicy.blockNumberMax }
+      : {})
   };
+}
+
+export function deriveFreshnessEnvelopeFromSchedule(
+  params: TimestampMaxDerivationParams & ConditionalBlockBoundsPolicy
+): ConditionalEnvelope {
+  return buildFreshnessGuard(deriveTimestampMax(params), params);
 }
