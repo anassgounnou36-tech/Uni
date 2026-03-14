@@ -146,7 +146,7 @@ export class BotRuntime {
     }
 
     for (const orderHash of this.deps.ingress.dequeueForScheduling()) {
-      const record = this.deps.store.get(orderHash);
+      const record = await this.deps.store.get(orderHash);
       if (!record?.normalizedOrder) {
         continue;
       }
@@ -169,7 +169,7 @@ export class BotRuntime {
         continue;
       }
 
-      this.deps.store.transition(orderHash, 'SCHEDULED');
+      await this.deps.store.transition(orderHash, 'SCHEDULED');
       this.hotQueue.push({
         orderHash,
         scheduledBlock: schedule.scheduledBlock,
@@ -199,7 +199,7 @@ export class BotRuntime {
 
     for (let index = 0; index < this.hotQueue.length; ) {
       const queued = this.hotQueue[index]!;
-      const record = this.deps.store.get(queued.orderHash);
+      const record = await this.deps.store.get(queued.orderHash);
       const normalized = record?.normalizedOrder;
       if (!record || !normalized) {
         this.hotQueue.splice(index, 1);

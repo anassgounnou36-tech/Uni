@@ -193,7 +193,7 @@ describe('runtime ingress and orchestration', () => {
         await ingress.ingest({ source: 'POLL', receivedAtMs: 2, payload: apiPayload, orderHashHint: apiPayload.orderHash as `0x${string}` });
       }
 
-      const records = store.list();
+      const records = await store.list();
       expect(records).toHaveLength(1);
       const seen = await journal.byType('ORDER_SEEN');
       expect(seen).toHaveLength(2);

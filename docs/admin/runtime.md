@@ -57,6 +57,8 @@ pnpm bot:start
 - Live/canary boot requires `DATABASE_URL`; startup fails fast with `databaseUrl is required for live/canary mode` when missing.
 - In-memory journal/store are only allowed when `SHADOW_MODE=true` **and** `ALLOW_EPHEMERAL_STATE=true`.
 - If shadow is enabled but ephemeral mode is not explicitly allowed and no `DATABASE_URL` is provided, startup fails fast with `ephemeral order store is not allowed outside shadow dev mode`.
+- Durable mode now requires a real Postgres adapter probe (`SELECT 1`) at boot; startup fails with `failed to create Postgres adapter for durable runtime` when connection/probe fails.
+- In live/canary mode, journal, order store, and nonce ledger must all be durable Postgres-backed components; there is no silent fallback to in-memory implementations.
 
 ## Execution modes
 - **Shadow**: enabled when `SHADOW_MODE=true`; simulation and decisioning run, but no live broadcast.

@@ -76,9 +76,9 @@ export interface OrderStore {
     normalizedOrder: NormalizedOrder | undefined,
     nowMs?: number,
     ingress?: IngressObservation
-  ): UpsertResult;
-  recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): StoredOrderRecord;
-  transition(orderHash: `0x${string}`, nextState: OrderState, reason?: OrderReasonCode, nowMs?: number): StoredOrderRecord;
-  get(orderHash: `0x${string}`): StoredOrderRecord | undefined;
-  list(): StoredOrderRecord[];
+  ): Promise<UpsertResult>;
+  recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): Promise<StoredOrderRecord>;
+  transition(orderHash: `0x${string}`, nextState: OrderState, reason?: OrderReasonCode, nowMs?: number): Promise<StoredOrderRecord>;
+  get(orderHash: `0x${string}`): Promise<StoredOrderRecord | undefined>;
+  list(): Promise<StoredOrderRecord[]>;
 }

@@ -9,12 +9,12 @@ function now(nowMs?: number): number {
 export class InMemoryOrderStore implements OrderStore {
   private readonly records = new Map<`0x${string}`, StoredOrderRecord>();
 
-  upsertDiscovered(
+  async upsertDiscovered(
     rawPayload: unknown,
     normalizedOrder: NormalizedOrder | undefined,
     nowMs?: number,
     ingress?: IngressObservation
-  ): UpsertResult {
+  ): Promise<UpsertResult> {
     if (!normalizedOrder) {
       throw new Error('normalizedOrder is required for dedupe by orderHash');
     }
@@ -44,7 +44,7 @@ export class InMemoryOrderStore implements OrderStore {
     return { created: true, record: discovered };
   }
 
-  recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): StoredOrderRecord {
+  async recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): Promise<StoredOrderRecord> {
     const existing = this.records.get(orderHash);
     if (!existing) {
       throw new Error(`Cannot confirm ingress for unknown order ${orderHash}`);
@@ -59,7 +59,12 @@ export class InMemoryOrderStore implements OrderStore {
     return updated;
   }
 
-  transition(orderHash: `0x${string}`, nextState: StoredOrderRecord['state'], reason?: OrderReasonCode, nowMs?: number): StoredOrderRecord {
+  async transition(
+    orderHash: `0x${string}`,
+    nextState: StoredOrderRecord['state'],
+    reason?: OrderReasonCode,
+    nowMs?: number
+  ): Promise<StoredOrderRecord> {
     const existing = this.records.get(orderHash);
     if (!existing) {
       throw new Error(`Cannot transition unknown order ${orderHash}`);
@@ -79,11 +84,11 @@ export class InMemoryOrderStore implements OrderStore {
     return updated;
   }
 
-  get(orderHash: `0x${string}`): StoredOrderRecord | undefined {
+  async get(orderHash: `0x${string}`): Promise<StoredOrderRecord | undefined> {
     return this.records.get(orderHash);
   }
 
-  list(): StoredOrderRecord[] {
+  async list(): Promise<StoredOrderRecord[]> {
     return [...this.records.values()];
   }
 }

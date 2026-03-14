@@ -16,7 +16,11 @@
     "@uni/routing": "workspace:*",
     "@uni/sim": "workspace:*",
     "@uni/telemetry": "workspace:*",
+    "pg": "^8.13.1",
     "viem": "^2.23.5",
     "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11"
   }
 }

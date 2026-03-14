@@ -1,4 +1,5 @@
 import { ReplacementPolicy, type ReplacementIntent } from './replacementPolicy.js';
+import type { SqlAdapter } from '../db/types.js';
 
 export type NonceLease = {
   account: `0x${string}`;
@@ -13,12 +14,6 @@ export interface NonceLedger {
   readNextNonce(account: `0x${string}`): Promise<bigint | undefined>;
   writeNextNonce(account: `0x${string}`, nonce: bigint, event: NonceLedgerEvent, orderId: string): Promise<void>;
 }
-
-export type NonceSqlWriter = (statement: string, params: readonly unknown[]) => Promise<void>;
-
-const NOOP_NONCE_SQL_WRITER: NonceSqlWriter = async () => {
-  return;
-};
 
 export class InMemoryNonceLedger implements NonceLedger {
   private readonly nextNonces = new Map<string, bigint>();
@@ -39,22 +34,38 @@ export class InMemoryNonceLedger implements NonceLedger {
 }
 
 export class PostgresNonceLedger implements NonceLedger {
-  private readonly memory = new InMemoryNonceLedger();
+  constructor(private readonly sqlAdapter: SqlAdapter) {}
 
-  constructor(private readonly sqlWriter: NonceSqlWriter = NOOP_NONCE_SQL_WRITER) {}
-
-  async readNextNonce(account: `0x${string}`): Promise<bigint | undefined> {
-    return this.memory.readNextNonce(account);
+  async ensureSchema(): Promise<void> {
+    await this.sqlAdapter.query(
+      `create table if not exists nonce_ledger (
+        address text primary key,
+        next_nonce bigint not null,
+        updated_at_ms bigint not null
+      )`
+    );
   }
 
-  async writeNextNonce(account: `0x${string}`, nonce: bigint, event: NonceLedgerEvent, orderId: string): Promise<void> {
-    await this.memory.writeNextNonce(account, nonce, event, orderId);
-    await this.sqlWriter('insert into nonce_ledger(account, next_nonce, event, order_id) values ($1, $2, $3, $4)', [
-      account,
-      nonce.toString(),
-      event,
-      orderId
-    ]);
+  async readNextNonce(account: `0x${string}`): Promise<bigint | undefined> {
+    const result = await this.sqlAdapter.query<{ next_nonce: string | number }>(
+      'select next_nonce from nonce_ledger where lower(address) = lower($1) limit 1',
+      [account]
+    );
+    const row = result.rows[0];
+    if (!row?.next_nonce) {
+      return undefined;
+    }
+    return BigInt(row.next_nonce);
+  }
+
+  async writeNextNonce(account: `0x${string}`, nonce: bigint, _event: NonceLedgerEvent, _orderId: string): Promise<void> {
+    await this.sqlAdapter.query(
+      `insert into nonce_ledger(address, next_nonce, updated_at_ms)
+       values ($1, $2, $3)
+       on conflict (address)
+       do update set next_nonce = excluded.next_nonce, updated_at_ms = excluded.updated_at_ms`,
+      [account, nonce.toString(), Date.now()]
+    );
   }
 }
 

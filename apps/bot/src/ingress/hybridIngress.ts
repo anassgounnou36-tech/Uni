@@ -74,12 +74,12 @@ export class HybridIngressCoordinator {
       return;
     }
 
-    const upserted = this.config.store.upsertDiscovered(payload, normalized, envelope.receivedAtMs, observation);
+    const upserted = await this.config.store.upsertDiscovered(payload, normalized, envelope.receivedAtMs, observation);
     if (!upserted.created) {
-      this.config.store.recordIngressConfirmation(normalized.orderHash, observation);
+      await this.config.store.recordIngressConfirmation(normalized.orderHash, observation);
       this.config.metrics?.increment(`orders_deduped_total{source="${envelope.source}"}`);
     } else {
-      this.config.store.transition(normalized.orderHash, 'DECODED');
+      await this.config.store.transition(normalized.orderHash, 'DECODED');
     }
 
     this.config.metrics?.increment(`orders_seen_total{source="${envelope.source}",validation="ACCEPTED"}`);
@@ -101,7 +101,7 @@ export class HybridIngressCoordinator {
     }
 
     if (normalized.orderType !== 'Dutch_V3') {
-      this.config.store.transition(normalized.orderHash, 'UNSUPPORTED', 'NOT_DUTCH_V3');
+      await this.config.store.transition(normalized.orderHash, 'UNSUPPORTED', 'NOT_DUTCH_V3');
       this.config.metrics?.increment('orders_unsupported_total{reason="NOT_DUTCH_V3"}');
       await this.config.journal.append({
         type: 'ORDER_UNSUPPORTED',
@@ -112,7 +112,7 @@ export class HybridIngressCoordinator {
       return;
     }
 
-    this.config.store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await this.config.store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
     this.config.metrics?.increment('orders_supported_total');
     await this.config.journal.append({
       type: 'ORDER_SUPPORTED',

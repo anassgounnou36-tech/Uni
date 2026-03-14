@@ -8,6 +8,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     await runtime.stop();
+    await built.sqlAdapter?.close();
     process.exit(0);
   };
 

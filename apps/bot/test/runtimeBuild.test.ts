@@ -228,10 +228,10 @@ describe('runtime build composition', () => {
         }
       }
     });
-    store.upsertDiscovered(normalized, normalized);
-    store.transition(normalized.orderHash, 'DECODED');
-    store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
-    store.transition(normalized.orderHash, 'SCHEDULED');
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(normalized.orderHash, 'DECODED');
+    await store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(normalized.orderHash, 'SCHEDULED');
 
     (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push(
       { orderHash: normalized.orderHash, scheduledBlock: 1000n, competeWindowEnd: 1002n, predictedEdgeOut: 10n },

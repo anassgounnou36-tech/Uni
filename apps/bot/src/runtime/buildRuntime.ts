@@ -1,20 +1,22 @@
 import { createPublicClient, createTestClient, createWalletClient, http, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum } from 'viem/chains';
+import { createPostgresAdapter } from '../db/postgres.js';
+import type { SqlAdapter } from '../db/types.js';
 import { prepareExecution } from '../execution/prepareExecution.js';
 import { HybridIngressCoordinator } from '../ingress/hybridIngress.js';
 import { WebhookIngressServer } from '../ingress/webhookServer.js';
 import { OrdersApiClient } from '../intake/ordersApiClient.js';
 import { OrdersPoller } from '../intake/poller.js';
 import { InMemoryDecisionJournal } from '../journal/inMemoryDecisionJournal.js';
-import { PostgresDecisionJournal, type JournalSqlWriter } from '../journal/postgresDecisionJournal.js';
+import { PostgresDecisionJournal } from '../journal/postgresDecisionJournal.js';
 import type { DecisionJournal } from '../journal/types.js';
 import { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
-import { InMemoryNonceLedger, NonceManager, PostgresNonceLedger, type NonceSqlWriter } from '../send/nonceManager.js';
+import { InMemoryNonceLedger, NonceManager, PostgresNonceLedger } from '../send/nonceManager.js';
 import { SequencerClient } from '../send/sequencerClient.js';
 import { ForkSimService } from '../sim/forkSimService.js';
 import { InMemoryOrderStore } from '../store/memory/inMemoryOrderStore.js';
-import { PostgresOrderStore, type SqlWriter } from '../store/postgres/postgresOrderStore.js';
+import { PostgresOrderStore } from '../store/postgres/postgresOrderStore.js';
 import type { OrderStore } from '../store/types.js';
 import { BotMetrics } from '../telemetry/metrics.js';
 import { PrometheusMetricsServer } from '../telemetry/prometheus.js';
@@ -44,9 +46,8 @@ export type BuildRuntimeOverrides = {
   metricsServer?: PrometheusMetricsServer;
   webhookServer?: WebhookIngressServer;
   inflightTracker: InflightTracker;
-  sqlWriter: SqlWriter;
-  journalSqlWriter: JournalSqlWriter;
-  nonceSqlWriter: NonceSqlWriter;
+  sqlAdapter: SqlAdapter;
+  createSqlAdapter: (databaseUrl: string) => Promise<SqlAdapter>;
 };
 
 export type BuildRuntimeResult = {
@@ -65,6 +66,7 @@ export type BuildRuntimeResult = {
   metricsServer?: PrometheusMetricsServer;
   webhookServer?: WebhookIngressServer;
   inflightTracker: InflightTracker;
+  sqlAdapter?: SqlAdapter;
 };
 
 function assertStatePolicy(config: RuntimeConfig): void {
@@ -82,6 +84,18 @@ export async function buildRuntimeFromConfig(
   overrides: Partial<BuildRuntimeOverrides> = {}
 ): Promise<BuildRuntimeResult> {
   assertStatePolicy(config);
+  const inLiveOrCanaryMode = config.shadowMode === false || config.canaryMode === true;
+
+  let sqlAdapter = overrides.sqlAdapter;
+  if (!sqlAdapter && config.databaseUrl) {
+    const createAdapter = overrides.createSqlAdapter ?? createPostgresAdapter;
+    try {
+      sqlAdapter = await createAdapter(config.databaseUrl);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`failed to create Postgres adapter for durable runtime: ${detail}`);
+    }
+  }
 
   const nowMs = overrides.nowMs ?? (() => Date.now());
   const metrics = overrides.metrics ?? new BotMetrics();
@@ -92,27 +106,23 @@ export async function buildRuntimeFromConfig(
       transport: http(config.readRpcUrl)
     });
 
-  const sqlWriter = overrides.sqlWriter;
-  const journalSqlWriter = overrides.journalSqlWriter ?? sqlWriter;
-  const nonceSqlWriter = overrides.nonceSqlWriter ?? sqlWriter;
-
   const orderStore =
     overrides.orderStore ??
-    (config.databaseUrl
-      ? new PostgresOrderStore(sqlWriter ?? (async () => undefined))
+    (sqlAdapter
+      ? new PostgresOrderStore(sqlAdapter)
       : new InMemoryOrderStore());
 
   const decisionJournal =
     overrides.decisionJournal ??
-    (config.databaseUrl
-      ? new PostgresDecisionJournal(journalSqlWriter ?? (async () => undefined))
+    (sqlAdapter
+      ? new PostgresDecisionJournal(sqlAdapter)
       : new InMemoryDecisionJournal());
 
-  if (config.databaseUrl && decisionJournal instanceof PostgresDecisionJournal) {
-    await decisionJournal.ensureSchema();
-  }
-  if (config.databaseUrl && orderStore instanceof PostgresOrderStore) {
+  if (orderStore instanceof PostgresOrderStore) {
     await orderStore.writeSchema();
+  }
+  if (decisionJournal instanceof PostgresDecisionJournal) {
+    await decisionJournal.ensureSchema();
   }
 
   const poller =
@@ -160,12 +170,32 @@ export async function buildRuntimeFromConfig(
       }
     });
 
+  const durableNonceLedger = sqlAdapter ? new PostgresNonceLedger(sqlAdapter) : undefined;
+  if (durableNonceLedger) {
+    await durableNonceLedger.ensureSchema();
+  }
+
   const nonceManager =
     overrides.nonceManager ??
     new NonceManager({
-      ledger: config.databaseUrl ? new PostgresNonceLedger(nonceSqlWriter ?? (async () => undefined)) : new InMemoryNonceLedger(),
+      ledger: durableNonceLedger ?? new InMemoryNonceLedger(),
       chainNonceReader: async (address) => BigInt(await forkPublicClient.getTransactionCount({ address, blockTag: 'pending' }))
     });
+
+  if (inLiveOrCanaryMode) {
+    if (!sqlAdapter) {
+      throw new Error('databaseUrl is required for live/canary mode');
+    }
+    if (!(orderStore instanceof PostgresOrderStore)) {
+      throw new Error('durable order store is required for live/canary mode');
+    }
+    if (!(decisionJournal instanceof PostgresDecisionJournal)) {
+      throw new Error('durable decision journal is required for live/canary mode');
+    }
+    if (!durableNonceLedger && !overrides.nonceManager) {
+      throw new Error('durable nonce ledger is required for live/canary mode');
+    }
+  }
 
   const executionPreparer =
     overrides.executionPreparer ??
@@ -276,6 +306,7 @@ export async function buildRuntimeFromConfig(
     readClient,
     metricsServer,
     webhookServer,
-    inflightTracker
+    inflightTracker,
+    sqlAdapter
   };
 }
