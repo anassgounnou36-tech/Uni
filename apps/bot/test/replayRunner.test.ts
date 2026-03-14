@@ -23,7 +23,8 @@ function loadCorpus(): NormalizedOrder[] {
       orderType: 'Dutch_V3',
       encodedOrder: fixture.encodedOrder,
       signature: fixture.signature,
-      decodedOrder: decoded
+      decodedOrder: decoded,
+      reactor: decoded.order.info.reactor
     }
   ];
 }

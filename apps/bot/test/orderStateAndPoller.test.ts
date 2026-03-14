@@ -5,12 +5,13 @@ import { computeOrderHash, decodeSignedOrder } from '@uni/protocol';
 import { describe, expect, it } from 'vitest';
 import { assertLegalOrderTransition } from '../src/domain/orderState.js';
 import { OrdersApiClient } from '../src/intake/ordersApiClient.js';
+import { normalizeApiOrder } from '../src/intake/ordersApiClient.js';
 import { OrdersPoller } from '../src/intake/poller.js';
 import { InMemoryOrderStore } from '../src/store/memory/inMemoryOrderStore.js';
 
-function makeOrderPayload(orderType: string): Record<string, unknown> {
+function makeOrderPayload(orderType: string, fixtureName = 'live-01.json'): Record<string, unknown> {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
-  const fixture = JSON.parse(fs.readFileSync(path.join(root, 'live-01.json'), 'utf8')) as {
+  const fixture = JSON.parse(fs.readFileSync(path.join(root, fixtureName), 'utf8')) as {
     encodedOrder: `0x${string}`;
     signature: `0x${string}`;
   };
@@ -31,10 +32,7 @@ describe('order state and poller', () => {
 
   it('polls, dedupes by orderHash, and archives unsupported orders with reason code', async () => {
     const supported = makeOrderPayload('Dutch_V3');
-    const unsupported = {
-      ...makeOrderPayload('Limit'),
-      orderHash: '0x9999999999999999999999999999999999999999999999999999999999999999'
-    };
+    const unsupported = makeOrderPayload('Limit', 'live-02.json');
     const fetchImpl: typeof fetch = async () =>
       ({
         ok: true,
@@ -62,5 +60,14 @@ describe('order state and poller', () => {
     expect(records[0]!.transitions.map((transition) => transition.state)).toEqual(['DISCOVERED', 'DECODED']);
     expect(records[1]!.state).toEqual('UNSUPPORTED');
     expect(records[1]!.reason).toEqual('NOT_DUTCH_V3');
+  });
+
+  it('rejects payloads where API orderHash mismatches canonical decoded hash', () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/invalid');
+    const mismatchFixture = JSON.parse(fs.readFileSync(path.join(root, 'order-hash-mismatch.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(normalizeApiOrder(mismatchFixture)).toBeUndefined();
   });
 });

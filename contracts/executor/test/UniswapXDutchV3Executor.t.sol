@@ -2,6 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {UniswapXDutchV3Executor} from "../src/UniswapXDutchV3Executor.sol";
+import {IReactorCallback} from "../src/external/uniswapx/IReactorCallback.sol";
+import {ReactorStructs} from "../src/external/uniswapx/ReactorStructs.sol";
 import {ExecutorErrors} from "../src/libraries/ExecutorErrors.sol";
 import {ExecutorTypes} from "../src/libraries/ExecutorTypes.sol";
 
@@ -56,11 +58,46 @@ contract MockSettlementAdapter {
 
 contract MockReactor {
     bytes public lastOrder;
+    bytes public lastSignature;
     bytes public lastCallbackData;
+    bool public callbackEnabled;
+    address public callbackTokenIn;
+    uint256 public callbackAmountIn;
+    address public callbackTokenOut;
+    uint256 public callbackAmountOut;
 
-    function executeWithCallback(bytes calldata order, bytes calldata callbackData) external {
-        lastOrder = order;
+    function setCallbackPayload(address tokenIn, uint256 amountIn, address tokenOut, uint256 amountOut) external {
+        callbackEnabled = true;
+        callbackTokenIn = tokenIn;
+        callbackAmountIn = amountIn;
+        callbackTokenOut = tokenOut;
+        callbackAmountOut = amountOut;
+    }
+
+    function executeWithCallback(ReactorStructs.SignedOrder calldata order, bytes calldata callbackData) external {
+        lastOrder = order.order;
+        lastSignature = order.sig;
         lastCallbackData = callbackData;
+        if (!callbackEnabled) return;
+
+        ReactorStructs.ResolvedOrder[] memory resolvedOrders = new ReactorStructs.ResolvedOrder[](1);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](1);
+        outputs[0] = ReactorStructs.OutputToken({token: callbackTokenOut, amount: callbackAmountOut, recipient: address(this)});
+        resolvedOrders[0] = ReactorStructs.ResolvedOrder({
+            info: ReactorStructs.OrderInfo({
+                reactor: address(this),
+                swapper: address(0xBEEF),
+                nonce: 1,
+                deadline: type(uint256).max,
+                additionalValidationContract: address(0),
+                additionalValidationData: ""
+            }),
+            input: ReactorStructs.InputToken({token: callbackTokenIn, amount: callbackAmountIn, maxAmount: callbackAmountIn}),
+            outputs: outputs,
+            sig: order.sig,
+            hash: keccak256(order.order)
+        });
+        IReactorCallback(msg.sender).reactorCallback(resolvedOrders, callbackData);
     }
 }
 
@@ -87,17 +124,33 @@ contract UniswapXDutchV3ExecutorTest {
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
     }
 
-    function testExecuteWrapperCallsLockedReactor() public {
+    function testExecuteWrapperForwardsSignedOrderAndCallbackData() public {
         MockReactor reactor = new MockReactor();
         UniswapXDutchV3Executor wrapper =
             new UniswapXDutchV3Executor(address(reactor), address(adapter), TREASURY, address(this));
 
-        bytes memory order = hex"1234";
+        ReactorStructs.SignedOrder memory order = ReactorStructs.SignedOrder({order: hex"1234", sig: hex"5678"});
         bytes memory callbackData = hex"abcd";
         wrapper.execute(order, callbackData);
 
-        require(keccak256(reactor.lastOrder()) == keccak256(order), "order mismatch");
+        require(keccak256(reactor.lastOrder()) == keccak256(order.order), "order mismatch");
+        require(keccak256(reactor.lastSignature()) == keccak256(order.sig), "signature mismatch");
         require(keccak256(reactor.lastCallbackData()) == keccak256(callbackData), "callback mismatch");
+    }
+
+    function testExecuteRoundTripThroughMockReactorAndCallbackSucceeds() public {
+        MockReactor reactor = new MockReactor();
+        UniswapXDutchV3Executor wrapper =
+            new UniswapXDutchV3Executor(address(reactor), address(adapter), TREASURY, address(this));
+        tokenIn.mint(address(wrapper), 1e18);
+        adapter.setAmountOut(12e6);
+        reactor.setCallbackPayload(address(tokenIn), 1e18, address(tokenOut), 10e6);
+
+        wrapper.execute(
+            ReactorStructs.SignedOrder({order: hex"010203", sig: hex"0405"}), _route(tokenIn, tokenOut, 9e6)
+        );
+
+        require(tokenOut.allowance(address(wrapper), address(reactor)) == 10e6, "reactor allowance not set");
     }
 
     function testPausedReverts() public {
@@ -112,8 +165,17 @@ contract UniswapXDutchV3ExecutorTest {
         adapter.setAmountOut(10e6);
 
         vm.prank(REACTOR);
-        vm.expectRevert(ExecutorErrors.TokenMismatch.selector);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenOut, tokenOut, 9e6));
+    }
+
+    function testBadRouteRevertsWhenInputAndOutputTokensAreEqual() public {
+        tokenIn.mint(address(executor), 1e18);
+        adapter.setAmountOut(2e18);
+
+        vm.prank(REACTOR);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
+        executor.reactorCallback(_resolvedOrder(tokenIn, tokenIn, 1e18, 1e18), _route(tokenIn, tokenIn, 1e18));
     }
 
     function testInsufficientOutputReverts() public {
@@ -128,14 +190,16 @@ contract UniswapXDutchV3ExecutorTest {
     function testUnsupportedOutputShapeReverts() public {
         tokenIn.mint(address(executor), 1e18);
         adapter.setAmountOut(20e6);
-        ExecutorTypes.ResolvedOrder[] memory orders = new ExecutorTypes.ResolvedOrder[](1);
-        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](2);
-        outputs[0] = ExecutorTypes.ResolvedOutput({token: address(tokenOut), amount: 10e6, recipient: address(0xA)});
-        outputs[1] = ExecutorTypes.ResolvedOutput({token: address(tokenIn), amount: 2e6, recipient: address(0xB)});
-        orders[0] = ExecutorTypes.ResolvedOrder({
-            info: "",
-            input: ExecutorTypes.ResolvedInput({token: address(tokenIn), amount: 1e18, maxAmount: 1e18}),
-            outputs: outputs
+        ReactorStructs.ResolvedOrder[] memory orders = new ReactorStructs.ResolvedOrder[](1);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](2);
+        outputs[0] = ReactorStructs.OutputToken({token: address(tokenOut), amount: 10e6, recipient: address(0xA)});
+        outputs[1] = ReactorStructs.OutputToken({token: address(tokenIn), amount: 2e6, recipient: address(0xB)});
+        orders[0] = ReactorStructs.ResolvedOrder({
+            info: _orderInfo(),
+            input: ReactorStructs.InputToken({token: address(tokenIn), amount: 1e18, maxAmount: 1e18}),
+            outputs: outputs,
+            sig: "",
+            hash: bytes32(0)
         });
 
         vm.prank(REACTOR);
@@ -144,13 +208,15 @@ contract UniswapXDutchV3ExecutorTest {
     }
 
     function testUnsupportedOrderShapeReverts() public {
-        ExecutorTypes.ResolvedOrder[] memory orders = new ExecutorTypes.ResolvedOrder[](2);
-        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](1);
-        outputs[0] = ExecutorTypes.ResolvedOutput({token: address(tokenOut), amount: 1, recipient: address(0xA)});
-        orders[0] = ExecutorTypes.ResolvedOrder({
-            info: "",
-            input: ExecutorTypes.ResolvedInput({token: address(tokenIn), amount: 1, maxAmount: 1}),
-            outputs: outputs
+        ReactorStructs.ResolvedOrder[] memory orders = new ReactorStructs.ResolvedOrder[](2);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](1);
+        outputs[0] = ReactorStructs.OutputToken({token: address(tokenOut), amount: 1, recipient: address(0xA)});
+        orders[0] = ReactorStructs.ResolvedOrder({
+            info: _orderInfo(),
+            input: ReactorStructs.InputToken({token: address(tokenIn), amount: 1, maxAmount: 1}),
+            outputs: outputs,
+            sig: "",
+            hash: bytes32(0)
         });
         orders[1] = orders[0];
 
@@ -199,17 +265,30 @@ contract UniswapXDutchV3ExecutorTest {
     function _resolvedOrder(MockERC20 inToken, MockERC20 outToken, uint256 inputAmount, uint256 outputAmount)
         private
         pure
-        returns (ExecutorTypes.ResolvedOrder[] memory orders)
+        returns (ReactorStructs.ResolvedOrder[] memory orders)
     {
-        orders = new ExecutorTypes.ResolvedOrder[](1);
-        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](1);
-        outputs[0] = ExecutorTypes.ResolvedOutput({
+        orders = new ReactorStructs.ResolvedOrder[](1);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](1);
+        outputs[0] = ReactorStructs.OutputToken({
             token: address(outToken), amount: outputAmount, recipient: address(0xC0FFEE)
         });
-        orders[0] = ExecutorTypes.ResolvedOrder({
-            info: "",
-            input: ExecutorTypes.ResolvedInput({token: address(inToken), amount: inputAmount, maxAmount: inputAmount}),
-            outputs: outputs
+        orders[0] = ReactorStructs.ResolvedOrder({
+            info: _orderInfo(),
+            input: ReactorStructs.InputToken({token: address(inToken), amount: inputAmount, maxAmount: inputAmount}),
+            outputs: outputs,
+            sig: "",
+            hash: bytes32(0)
+        });
+    }
+
+    function _orderInfo() private pure returns (ReactorStructs.OrderInfo memory) {
+        return ReactorStructs.OrderInfo({
+            reactor: address(0xB274),
+            swapper: address(0xBEEF),
+            nonce: 1,
+            deadline: type(uint256).max,
+            additionalValidationContract: address(0),
+            additionalValidationData: ""
         });
     }
 

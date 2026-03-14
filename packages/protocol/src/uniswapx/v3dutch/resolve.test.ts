@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodeAbiParameters } from 'viem';
+import { decodeFunctionData, encodeAbiParameters } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { describe, expect, it } from 'vitest';
+import { REACTOR_ABI, encodeExecuteWithCallback, toReactorSignedOrder } from '../reactor/abi.js';
 import { applyCosignerOverrides } from './cosigner.js';
 import { decodeSignedOrder } from './decode.js';
 import { DeadlineReachedError, InvalidCosignerInputError, InvalidCosignerOutputError, NoExclusiveOverrideError } from './errors.js';
@@ -101,11 +102,27 @@ function fixturePaths(dir: string): string[] {
 
 function loadSignedFixture(filePath: string): SignedV3DutchOrder {
   const fixture = JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+    orderHash?: `0x${string}`;
     encodedOrder: `0x${string}`;
     signature: `0x${string}`;
+    orderType?: string;
   };
 
   return decodeSignedOrder(fixture.encodedOrder, fixture.signature);
+}
+
+function loadApiFixture(filePath: string): {
+  orderHash: `0x${string}`;
+  encodedOrder: `0x${string}`;
+  signature: `0x${string}`;
+  orderType: string;
+} {
+  return JSON.parse(fs.readFileSync(filePath, 'utf8')) as {
+    orderHash: `0x${string}`;
+    encodedOrder: `0x${string}`;
+    signature: `0x${string}`;
+    orderType: string;
+  };
 }
 
 async function signCosignature(order: V3DutchOrder): Promise<V3DutchOrder> {
@@ -353,12 +370,14 @@ describe('v3dutch parity mirror', () => {
     });
   });
 
-  it('resolves live fixture corpus and synthetic edge fixtures', async () => {
+  it('resolves live fixture corpus with canonical hash reconciliation and synthetic edge fixtures', async () => {
     const liveFixtures = fixturePaths(path.join(FIXTURES_ROOT, 'live'));
     const syntheticFixtures = fixturePaths(path.join(FIXTURES_ROOT, 'synthetic'));
 
     for (const fixturePath of liveFixtures) {
-      const signed = loadSignedFixture(fixturePath);
+      const fixture = loadApiFixture(fixturePath);
+      const signed = decodeSignedOrder(fixture.encodedOrder, fixture.signature);
+      expect(computeOrderHash(signed.order)).toEqual(fixture.orderHash);
       const resolved = await resolveSignedOrder(signed.encodedOrder, signed.signature, {
         blockNumberish: 1_150n,
         timestamp: 1_900_000_000n,
@@ -366,7 +385,7 @@ describe('v3dutch parity mirror', () => {
         chainId: 42161n,
         filler: '0x9999999999999999999999999999999999999999'
       });
-      expect(resolved.hash).toEqual(computeOrderHash(signed.order));
+      expect(resolved.hash).toEqual(fixture.orderHash);
     }
 
     const invalidLengthFixture = loadSignedFixture(
@@ -399,6 +418,19 @@ describe('v3dutch parity mirror', () => {
       supported: false,
       reason: 'OUTPUT_TOKEN_MISMATCH'
     });
+  });
+
+  it('encodes executeWithCallback using exact reactor SignedOrder envelope', () => {
+    const fixture = loadApiFixture(path.join(FIXTURES_ROOT, 'live/live-01.json'));
+    const signedOrder = toReactorSignedOrder(fixture.encodedOrder, fixture.signature);
+    const calldata = encodeExecuteWithCallback(signedOrder, '0x1234');
+    const decoded = decodeFunctionData({
+      abi: REACTOR_ABI,
+      data: calldata
+    });
+
+    expect(decoded.functionName).toEqual('executeWithCallback');
+    expect(decoded.args).toEqual([signedOrder, '0x1234']);
   });
 
   it('snapshots resolved outputs across blockNumberish/basefee combinations', async () => {

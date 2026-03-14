@@ -11,6 +11,7 @@ export type OrderReasonCode =
   | 'NOT_PROFITABLE'
   | 'DECODE_FAILED'
   | 'MISSING_ORDER_HASH'
+  | 'ORDER_HASH_MISMATCH'
   | 'SCHEDULER_NO_EDGE'
   | 'SIM_INVALID_ORDER'
   | 'SIM_EXPIRED'
@@ -30,6 +31,7 @@ export type NormalizedOrder = {
   encodedOrder: `0x${string}`;
   signature: `0x${string}`;
   decodedOrder: SignedV3DutchOrder;
+  reactor: `0x${string}`;
 };
 
 export type StoredTransition = {

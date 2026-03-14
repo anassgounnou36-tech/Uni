@@ -1,4 +1,4 @@
-import { decodeSignedOrder } from '@uni/protocol';
+import { computeOrderHash, decodeSignedOrder } from '@uni/protocol';
 import type { NormalizedOrder } from '../store/types.js';
 
 export type OrdersApiOrderPayload = {
@@ -30,21 +30,33 @@ function toHex(value: string | undefined): `0x${string}` | undefined {
 }
 
 export function normalizeApiOrder(payload: OrdersApiOrderPayload): NormalizedOrder | undefined {
-  const orderHash = toHex(payload.orderHash);
+  const apiOrderHash = toHex(payload.orderHash);
   const encodedOrder = toHex(payload.encodedOrder);
   const signature = toHex(payload.signature ?? '0x');
 
-  if (!orderHash || !encodedOrder || !signature) {
+  if (!apiOrderHash || !encodedOrder || !signature) {
     return undefined;
   }
 
-  const decodedOrder = decodeSignedOrder(encodedOrder, signature);
+  let decodedOrder: ReturnType<typeof decodeSignedOrder>;
+  try {
+    decodedOrder = decodeSignedOrder(encodedOrder, signature);
+  } catch {
+    return undefined;
+  }
+
+  const canonicalOrderHash = computeOrderHash(decodedOrder.order) as `0x${string}`;
+  if (canonicalOrderHash !== apiOrderHash) {
+    return undefined;
+  }
+
   return {
-    orderHash,
+    orderHash: canonicalOrderHash,
     orderType: typeof payload.orderType === 'string' ? payload.orderType : 'Dutch_V3',
     encodedOrder,
     signature,
-    decodedOrder
+    decodedOrder,
+    reactor: decodedOrder.order.info.reactor
   };
 }
 

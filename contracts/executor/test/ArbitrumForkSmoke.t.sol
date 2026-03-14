@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {UniV3SwapRouter02Adapter} from "../src/adapters/UniV3SwapRouter02Adapter.sol";
 import {UniswapXDutchV3Executor} from "../src/UniswapXDutchV3Executor.sol";
+import {ReactorStructs} from "../src/external/uniswapx/ReactorStructs.sol";
 import {ExecutorErrors} from "../src/libraries/ExecutorErrors.sol";
 import {ExecutorTypes} from "../src/libraries/ExecutorTypes.sol";
 
@@ -57,7 +58,7 @@ contract ArbitrumForkSmokeTest {
         require(TIMEBOOST_AUCTION_CONTRACT.code.length > 0, "missing timeboost auction bytecode");
     }
 
-    function testForkEndToEndCallbackSettlement() public {
+    function testForkCallbackPathSettlementViaPrankedReactor() public {
         _setUpForkExecutor();
         _fundExecutorWithWeth(0.01 ether);
 
@@ -93,7 +94,7 @@ contract ArbitrumForkSmokeTest {
         _fundExecutorWithWeth(0.01 ether);
 
         vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
-        vm.expectRevert(ExecutorErrors.TokenMismatch.selector);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
         executor.reactorCallback(
             _singleOrder(0.01 ether, 1),
             abi.encode(ExecutorTypes.RoutePlan({tokenIn: WETH, tokenOut: WETH, poolFee: 500, minAmountOut: 1}))
@@ -122,14 +123,16 @@ contract ArbitrumForkSmokeTest {
         _setUpForkExecutor();
         _fundExecutorWithWeth(0.01 ether);
 
-        ExecutorTypes.ResolvedOrder[] memory orders = new ExecutorTypes.ResolvedOrder[](1);
-        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](2);
-        outputs[0] = ExecutorTypes.ResolvedOutput({token: USDC, amount: 1, recipient: address(0x1)});
-        outputs[1] = ExecutorTypes.ResolvedOutput({token: WETH, amount: 1, recipient: address(0x2)});
-        orders[0] = ExecutorTypes.ResolvedOrder({
-            info: "",
-            input: ExecutorTypes.ResolvedInput({token: WETH, amount: 0.01 ether, maxAmount: 0.01 ether}),
-            outputs: outputs
+        ReactorStructs.ResolvedOrder[] memory orders = new ReactorStructs.ResolvedOrder[](1);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](2);
+        outputs[0] = ReactorStructs.OutputToken({token: USDC, amount: 1, recipient: address(0x1)});
+        outputs[1] = ReactorStructs.OutputToken({token: WETH, amount: 1, recipient: address(0x2)});
+        orders[0] = ReactorStructs.ResolvedOrder({
+            info: _orderInfo(),
+            input: ReactorStructs.InputToken({token: WETH, amount: 0.01 ether, maxAmount: 0.01 ether}),
+            outputs: outputs,
+            sig: "",
+            hash: bytes32(0)
         });
 
         vm.prank(UNISWAPX_DUTCH_V3_REACTOR);
@@ -164,15 +167,28 @@ contract ArbitrumForkSmokeTest {
     function _singleOrder(uint256 inputAmount, uint256 requiredOutput)
         private
         pure
-        returns (ExecutorTypes.ResolvedOrder[] memory orders)
+        returns (ReactorStructs.ResolvedOrder[] memory orders)
     {
-        orders = new ExecutorTypes.ResolvedOrder[](1);
-        ExecutorTypes.ResolvedOutput[] memory outputs = new ExecutorTypes.ResolvedOutput[](1);
-        outputs[0] = ExecutorTypes.ResolvedOutput({token: USDC, amount: requiredOutput, recipient: address(0xCAFE)});
-        orders[0] = ExecutorTypes.ResolvedOrder({
-            info: "",
-            input: ExecutorTypes.ResolvedInput({token: WETH, amount: inputAmount, maxAmount: inputAmount}),
-            outputs: outputs
+        orders = new ReactorStructs.ResolvedOrder[](1);
+        ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](1);
+        outputs[0] = ReactorStructs.OutputToken({token: USDC, amount: requiredOutput, recipient: address(0xCAFE)});
+        orders[0] = ReactorStructs.ResolvedOrder({
+            info: _orderInfo(),
+            input: ReactorStructs.InputToken({token: WETH, amount: inputAmount, maxAmount: inputAmount}),
+            outputs: outputs,
+            sig: "",
+            hash: bytes32(0)
+        });
+    }
+
+    function _orderInfo() private pure returns (ReactorStructs.OrderInfo memory) {
+        return ReactorStructs.OrderInfo({
+            reactor: UNISWAPX_DUTCH_V3_REACTOR,
+            swapper: address(0xF00D),
+            nonce: 1,
+            deadline: type(uint256).max,
+            additionalValidationContract: address(0),
+            additionalValidationData: ""
         });
     }
 
