@@ -15,7 +15,10 @@ import { arbitrum } from 'viem/chains';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import solc from 'solc';
 import { decodeSignedOrder } from '@uni/protocol';
+import { CAMELOT_AMMV3_FACTORY, CAMELOT_AMMV3_QUOTER, UNIV3_FACTORY, UNIV3_QUOTER_V2 } from '../../../packages/config/src/arbitrum.js';
 import { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
+import { RouteBook } from '../src/routing/routeBook.js';
+import { CamelotAmmv3RoutePlanner } from '../src/routing/camelotV3/routePlanner.js';
 import { decodeRoutePlanCallbackData } from '../src/execution/callbackData.js';
 import { EXECUTOR_ABI } from '../src/execution/abi.js';
 import { buildExecutionPlan } from '../src/execution/planBuilder.js';
@@ -34,7 +37,8 @@ type CompiledExecutorArtifacts = {
   adapterCreationCode: (mockRouter: `0x${string}`) => Hex;
   executorCreationCode: (args: {
     reactor: `0x${string}`;
-    adapter: `0x${string}`;
+    uniswapAdapter: `0x${string}`;
+    camelotAdapter: `0x${string}`;
     treasury: `0x${string}`;
     owner: `0x${string}`;
   }) => Hex;
@@ -139,8 +143,8 @@ function loadSigned() {
 function makeRoutePlanner(client: PublicClient): UniV3RoutePlannerType {
   return new UniV3RoutePlanner({
     client,
-    factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
+    factory: UNIV3_FACTORY,
+    quoter: UNIV3_QUOTER_V2
   });
 }
 
@@ -257,7 +261,7 @@ contract MockSwapRouter02ForExecutorFlow {
   compiledArtifacts = {
     adapterCreationCode: (mockRouter) =>
       concatHex([adapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockRouter])]),
-    executorCreationCode: ({ reactor, adapter, treasury, owner }) =>
+    executorCreationCode: ({ reactor, uniswapAdapter, camelotAdapter, treasury, owner }) =>
       concatHex([
         executorBytecode,
         encodeAbiParameters(
@@ -265,9 +269,10 @@ contract MockSwapRouter02ForExecutorFlow {
             { type: 'address' },
             { type: 'address' },
             { type: 'address' },
+            { type: 'address' },
             { type: 'address' }
           ],
-          [reactor, adapter, treasury, owner]
+          [reactor, uniswapAdapter, camelotAdapter, treasury, owner]
         )
       ]),
     mockReactorCreationCode: mockReactorBytecode,
@@ -330,7 +335,8 @@ async function deployRealExecutorStack(clients: { walletClient: WalletClient; pu
     clients.publicClient,
     artifacts.executorCreationCode({
       reactor: mockReactorAddress,
-      adapter: adapterAddress,
+      uniswapAdapter: adapterAddress,
+      camelotAdapter: adapterAddress,
       treasury: TREASURY,
       owner: clients.walletClient.account!.address
     })
@@ -421,43 +427,50 @@ describe('quoting/planning unit accounting', () => {
       hash: '0x1234'
     } as const;
 
-    const planner = {
-      planBestRoute: async () => ({
+    const routeBook = {
+      selectBestRoute: async () => ({
         ok: true,
-        consideredFees: [500],
-        route: {
+        chosenRoute: {
+          venue: 'UNISWAP_V3',
           tokenIn: resolvedOrder.input.token,
           tokenOut: resolvedOrder.outputs[0]!.token,
           amountIn: resolvedOrder.input.amount,
           requiredOutput: 900n,
           quotedAmountOut: 1100n,
-          poolFee: 500,
           slippageBufferOut: 10n,
           gasCostOut: 30n,
           riskBufferOut: 20n,
           profitFloorOut: 5n,
           minAmountOut: 1090n,
+          limitSqrtPriceX96: 0n,
           grossEdgeOut: 200n,
-          netEdgeOut: 135n
-        }
+          netEdgeOut: 135n,
+          quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+        },
+        alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 135n }]
       })
-    } as UniV3RoutePlannerType;
+    } as RouteBook;
 
-    const result = await planner.planBestRoute({ resolvedOrder });
+    const result = await routeBook.selectBestRoute({ resolvedOrder });
     expect(result.ok).toEqual(true);
     if (!result.ok) return;
-    expect(result.route.netEdgeOut).toEqual(
-      result.route.quotedAmountOut -
-        result.route.requiredOutput -
-        result.route.slippageBufferOut -
-        result.route.gasCostOut -
-        result.route.riskBufferOut -
-        result.route.profitFloorOut
+    expect(result.chosenRoute.netEdgeOut).toEqual(
+      result.chosenRoute.quotedAmountOut -
+        result.chosenRoute.requiredOutput -
+        result.chosenRoute.slippageBufferOut -
+        result.chosenRoute.gasCostOut -
+        result.chosenRoute.riskBufferOut -
+        result.chosenRoute.profitFloorOut
     );
-    const slippageFloorOut = result.route.quotedAmountOut - result.route.slippageBufferOut;
+    const slippageFloorOut = result.chosenRoute.quotedAmountOut - result.chosenRoute.slippageBufferOut;
     const profitabilityFloorOut =
-      result.route.requiredOutput + result.route.gasCostOut + result.route.riskBufferOut + result.route.profitFloorOut;
-    expect(result.route.minAmountOut).toEqual(slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut);
+      result.chosenRoute.requiredOutput
+      + result.chosenRoute.gasCostOut
+      + result.chosenRoute.riskBufferOut
+      + result.chosenRoute.profitFloorOut;
+    expect(result.chosenRoute.minAmountOut).toEqual(
+      slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut
+    );
   });
 });
 
@@ -502,34 +515,36 @@ describe('execution plan pipeline integration', () => {
       reactor: decoded.order.info.reactor
     } as const;
 
-    const planner = {
-      planBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
         const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
         return {
           ok: true,
-          consideredFees: [3000],
-          route: {
+          chosenRoute: {
+            venue: 'UNISWAP_V3',
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
             requiredOutput,
             quotedAmountOut: requiredOutput + 500n,
-            poolFee: 3000,
             minAmountOut: requiredOutput,
+            limitSqrtPriceX96: 0n,
             slippageBufferOut: 0n,
             gasCostOut: 0n,
             riskBufferOut: 0n,
             profitFloorOut: 0n,
             grossEdgeOut: 500n,
-            netEdgeOut: 500n
-          }
+            netEdgeOut: 500n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 3000 }
+          },
+          alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 500n }]
         };
       }
     } as never;
 
     const built = await buildExecutionPlan({
       normalizedOrder: normalized,
-      planner,
+      routeBook,
       executor: '0x3333333333333333333333333333333333333333',
       blockNumberish: 1000n,
       resolveEnv: {
@@ -546,7 +561,7 @@ describe('execution plan pipeline integration', () => {
     const callbackDecoded = decodeRoutePlanCallbackData(built.plan.callbackData);
     expect(callbackDecoded.tokenIn.toLowerCase()).toEqual(built.plan.route.tokenIn.toLowerCase());
     expect(callbackDecoded.tokenOut.toLowerCase()).toEqual(built.plan.route.tokenOut.toLowerCase());
-    expect(callbackDecoded.poolFee).toEqual(built.plan.route.poolFee);
+    expect(callbackDecoded.uniPoolFee).toEqual(3000);
 
     const executeDecoded = decodeFunctionData({ abi: EXECUTOR_ABI, data: built.plan.executeCalldata });
     expect(executeDecoded.functionName).toEqual('execute');
@@ -629,27 +644,29 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
       throw new Error('REACTOR_CODE_MISSING');
     }
 
-    const planner = {
-      planBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
         const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
         return {
           ok: true,
-          consideredFees: [500],
-          route: {
+          chosenRoute: {
+            venue: 'UNISWAP_V3',
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
             requiredOutput,
             quotedAmountOut: requiredOutput + 1n,
-            poolFee: 500,
             minAmountOut: 0n,
+            limitSqrtPriceX96: 0n,
             slippageBufferOut: 0n,
             gasCostOut: 0n,
             riskBufferOut: 0n,
             profitFloorOut: 0n,
             grossEdgeOut: 1n,
-            netEdgeOut: 1n
-          }
+            netEdgeOut: 1n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+          },
+          alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 1n }]
         };
       }
     } as never;
@@ -665,7 +682,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
 
     const planResult = await buildExecutionPlan({
       normalizedOrder: normalized,
-      planner,
+      routeBook,
       executor: executorAddress,
       blockNumberish: 1000n,
       resolveEnv: {
@@ -819,27 +836,29 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     const { fixture, decoded } = loadSigned();
     const { executorAddress } = await deployRealExecutorStack(clients);
 
-    const planner = {
-      planBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
         const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
         return {
           ok: true,
-          consideredFees: [500],
-          route: {
+          chosenRoute: {
+            venue: 'UNISWAP_V3',
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
             requiredOutput,
             quotedAmountOut: requiredOutput + 1n,
-            poolFee: 500,
             minAmountOut: requiredOutput,
+            limitSqrtPriceX96: 0n,
             slippageBufferOut: 0n,
             gasCostOut: 0n,
             riskBufferOut: 0n,
             profitFloorOut: 0n,
             grossEdgeOut: 1n,
-            netEdgeOut: 1n
-          }
+            netEdgeOut: 1n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+          },
+          alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 1n }]
         };
       }
     } as never;
@@ -853,7 +872,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         decodedOrder: decoded,
         reactor: decoded.order.info.reactor
       },
-      planner,
+      routeBook,
       executor: executorAddress,
       blockNumberish: 1000n,
       resolveEnv: {
@@ -930,5 +949,186 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     });
 
     expect(routeResult.ok).toEqual(true);
+  });
+
+  it('can read real Camelot AMMv3 single-hop quotes from forked pool state', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client: clients.publicClient,
+      enabled: true,
+      factory: CAMELOT_AMMV3_FACTORY,
+      quoter: CAMELOT_AMMV3_QUOTER,
+      univ3Factory: UNIV3_FACTORY,
+      univ3Quoter: UNIV3_QUOTER_V2
+    });
+    const routeResult = await planner.planBestRoute({
+      resolvedOrder: {
+        info: {} as never,
+        input: {
+          token: ARBITRUM_WETH,
+          amount: 10_000_000_000_000n,
+          maxAmount: 10_000_000_000_000n
+        },
+        outputs: [
+          {
+            token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+            amount: 1n,
+            recipient: '0x1111111111111111111111111111111111111111'
+          }
+        ],
+        sig: '0x',
+        hash: '0x1234'
+      }
+    });
+
+    expect(routeResult.ok).toEqual(true);
+  });
+
+  it('routeBook compares Uni and Camelot deterministically on fork', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const routeBook = new RouteBook({
+      uniswapV3: makeRoutePlanner(clients.publicClient),
+      camelotAmmv3: new CamelotAmmv3RoutePlanner({
+        client: clients.publicClient,
+        enabled: true,
+        factory: CAMELOT_AMMV3_FACTORY,
+        quoter: CAMELOT_AMMV3_QUOTER,
+        univ3Factory: UNIV3_FACTORY,
+        univ3Quoter: UNIV3_QUOTER_V2
+      }),
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        info: {} as never,
+        input: {
+          token: ARBITRUM_WETH,
+          amount: 10_000_000_000_000n,
+          maxAmount: 10_000_000_000_000n
+        },
+        outputs: [
+          {
+            token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+            amount: 1n,
+            recipient: '0x1111111111111111111111111111111111111111'
+          }
+        ],
+        sig: '0x',
+        hash: '0x1234'
+      }
+    });
+
+    expect(selected.ok).toEqual(true);
+    if (selected.ok) {
+      expect(['UNISWAP_V3', 'CAMELOT_AMMV3']).toContain(selected.chosenRoute.venue);
+    }
+  });
+
+  it('builds Camelot venue prepared execution and runs real prepare/sim path', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const { fixture, decoded } = loadSigned();
+    const { mockRouterAddress, mockReactorAddress, executorAddress } = await deployRealExecutorStack(clients);
+
+    const requiredOutput = decoded.order.baseOutputs.reduce((sum, output) => sum + output.startAmount, 0n);
+    await sendContractCall(
+      clients,
+      mockRouterAddress,
+      encodeFunctionData({
+        abi: MOCK_ROUTER_ABI,
+        functionName: 'setAmountOut',
+        args: [requiredOutput + 10n]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'setShouldCallback',
+        args: [true]
+      })
+    );
+
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => ({
+        ok: true,
+        chosenRoute: {
+          venue: 'CAMELOT_AMMV3',
+          tokenIn: resolvedOrder.input.token,
+          tokenOut: resolvedOrder.outputs[0]!.token,
+          amountIn: resolvedOrder.input.amount,
+          requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
+          minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          limitSqrtPriceX96: 0n,
+          slippageBufferOut: 0n,
+          gasCostOut: 0n,
+          riskBufferOut: 0n,
+          profitFloorOut: 0n,
+          grossEdgeOut: 10n,
+          netEdgeOut: 10n,
+          quoteMetadata: { venue: 'CAMELOT_AMMV3', observedFee: 30 }
+        },
+        alternativeRoutes: [{ venue: 'CAMELOT_AMMV3', eligible: true, netEdgeOut: 10n }]
+      })
+    } as RouteBook;
+
+    const planResult = await buildExecutionPlan({
+      normalizedOrder: {
+        orderHash: '0x3efd647626a32590eff1daa3d028ebcbd9553dbe2a144c50980cdcffc60a9c92',
+        orderType: 'Dutch_V3',
+        encodedOrder: fixture.encodedOrder,
+        signature: fixture.signature,
+        decodedOrder: decoded,
+        reactor: mockReactorAddress
+      },
+      routeBook,
+      executor: executorAddress,
+      blockNumberish: 1000n,
+      resolveEnv: {
+        timestamp: 1_900_000_000n,
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n }
+    });
+    expect(planResult.ok).toEqual(true);
+    if (!planResult.ok) {
+      return;
+    }
+
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async (address) => BigInt(await clients.publicClient.getTransactionCount({ address, blockTag: 'pending' }))
+    });
+    const prepared = await prepareExecution({
+      executionPlan: planResult.plan,
+      account: clients.sender,
+      nonceManager,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      txPolicy: {
+        gasHeadroomBps: 100n,
+        maxGasCeiling: 2_000_000n
+      },
+      conditionalPolicy: {
+        currentL2TimestampSec: 1_900_000_000n,
+        scheduledWindowBlocks: 2n,
+        avgBlockTimeSec: 1n,
+        maxStalenessSec: 10n
+      }
+    });
+    const sim = new ForkSimService({ clients });
+    const simResult = await sim.simulatePrepared(prepared);
+    expect(simResult.serializedTransaction).toEqual(prepared.serializedTransaction);
   });
 });

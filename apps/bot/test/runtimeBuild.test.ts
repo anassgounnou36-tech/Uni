@@ -17,6 +17,7 @@ import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
 import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
+import type { RouteBook } from '../src/routing/routeBook.js';
 
 function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
@@ -49,12 +50,39 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxLiveNotionalIn: 10n ** 30n,
     maxLiveInflight: 2,
     minLiveEdgeOut: 1n,
+    enableCamelotAmmv3: false,
 
     enableMetricsServer: false,
     metricsHost: '127.0.0.1',
     metricsPort: 19100,
     ...overrides
   };
+}
+
+function routeBookWithEdge(edgeOut: bigint): RouteBook {
+  return {
+    selectBestRoute: async ({ resolvedOrder }) => ({
+      ok: true,
+      chosenRoute: {
+        venue: 'UNISWAP_V3',
+        tokenIn: resolvedOrder.input.token,
+        tokenOut: resolvedOrder.outputs[0]!.token,
+        amountIn: resolvedOrder.input.amount,
+        requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+        quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + edgeOut,
+        minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+        limitSqrtPriceX96: 0n,
+        slippageBufferOut: 0n,
+        gasCostOut: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n,
+        grossEdgeOut: edgeOut,
+        netEdgeOut: edgeOut,
+        quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+      },
+      alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: edgeOut }]
+    })
+  } as RouteBook;
 }
 
 function makeNormalizedOrder() {
@@ -160,51 +188,11 @@ describe('runtime build composition', () => {
       inflightTracker,
       requireTradingDeps: true,
       schedulerContext: {
-        routePlanner: {
-          planBestRoute: async ({ resolvedOrder }) => ({
-            ok: true,
-            consideredFees: [500],
-            route: {
-              tokenIn: resolvedOrder.input.token,
-              tokenOut: resolvedOrder.outputs[0]!.token,
-              amountIn: resolvedOrder.input.amount,
-              requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
-              quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
-              poolFee: 500,
-              minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
-              slippageBufferOut: 0n,
-              gasCostOut: 0n,
-              riskBufferOut: 0n,
-              profitFloorOut: 0n,
-              grossEdgeOut: 10n,
-              netEdgeOut: 10n
-            }
-          })
-        } as never,
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
       },
       hotLaneContext: {
-        routePlanner: {
-          planBestRoute: async ({ resolvedOrder }) => ({
-            ok: true,
-            consideredFees: [500],
-            route: {
-              tokenIn: resolvedOrder.input.token,
-              tokenOut: resolvedOrder.outputs[0]!.token,
-              amountIn: resolvedOrder.input.amount,
-              requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
-              quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
-              poolFee: 500,
-              minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
-              slippageBufferOut: 0n,
-              gasCostOut: 0n,
-              riskBufferOut: 0n,
-              profitFloorOut: 0n,
-              grossEdgeOut: 10n,
-              netEdgeOut: 10n
-            }
-          })
-        } as never,
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n },
         conditionalEnvelope: { TimestampMax: 1_900_000_100n },
         executor: '0x3333333333333333333333333333333333333333',

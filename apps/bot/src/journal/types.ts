@@ -1,4 +1,5 @@
 import type { IngressSource } from '../ingress/types.js';
+import type { ExecutionOutcomeAttribution, RouteDecisionAttribution } from '../attribution/types.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -36,14 +37,17 @@ export type DecisionJournalEvent =
   | OrderSeenEvent
   | BaseJournalEvent<'ORDER_SUPPORTED', { reason?: string }>
   | BaseJournalEvent<'ORDER_UNSUPPORTED', { reason: string }>
-  | BaseJournalEvent<'ORDER_SCHEDULED', { scheduledBlock: string; competeWindowEnd: string; predictedEdgeOut: string }>
+  | BaseJournalEvent<
+      'ORDER_SCHEDULED',
+      { scheduledBlock: string; competeWindowEnd: string; predictedEdgeOut: string; chosenVenue?: string }
+    >
   | BaseJournalEvent<'ORDER_REPRICED', { reason?: string; edgeOut?: string }>
   | BaseJournalEvent<'ORDER_DROPPED', { reason: string }>
-  | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string }>
+  | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>
   | BaseJournalEvent<'PREPARED', { ok: boolean; nonce?: string; reason?: string }>
-  | BaseJournalEvent<'SIM_RESULT', { ok: boolean; reason: string }>
+  | BaseJournalEvent<'SIM_RESULT', { ok: boolean; reason: string; attribution?: ExecutionOutcomeAttribution }>
   | BaseJournalEvent<'SEND_ATTEMPT', { mode: 'SHADOW' | 'LIVE'; writer: string }>
-  | BaseJournalEvent<'SEND_RESULT', { accepted: boolean; reason?: string; writer?: string }>;
+  | BaseJournalEvent<'SEND_RESULT', { accepted: boolean; reason?: string; writer?: string; attribution?: ExecutionOutcomeAttribution }>;
 
 export interface DecisionJournal {
   append(event: DecisionJournalEvent): Promise<void>;

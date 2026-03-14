@@ -39,6 +39,7 @@ contract MockERC20 {
 
 contract MockSettlementAdapter {
     uint256 public amountOut;
+    uint24 public lastPoolFee;
 
     function setAmountOut(uint256 amountOut_) external {
         amountOut = amountOut_;
@@ -47,11 +48,13 @@ contract MockSettlementAdapter {
     function executeExactInputSingle(
         address,
         address tokenOut,
-        uint24,
+        uint24 poolFee,
         uint256,
         uint256 minAmountOut,
+        uint160,
         address recipient
     ) external returns (uint256) {
+        lastPoolFee = poolFee;
         if (amountOut < minAmountOut) return amountOut;
         MockERC20(tokenOut).mint(recipient, amountOut);
         return amountOut;
@@ -134,7 +137,8 @@ contract UniswapXDutchV3ExecutorTest {
 
     MockERC20 private tokenIn;
     MockERC20 private tokenOut;
-    MockSettlementAdapter private adapter;
+    MockSettlementAdapter private uniAdapter;
+    MockSettlementAdapter private camelotAdapter;
     UniswapXDutchV3Executor private executor;
 
     address private constant REACTOR = address(0xB274d5F4b833b61B340b654d600A864fB604a87c);
@@ -143,8 +147,11 @@ contract UniswapXDutchV3ExecutorTest {
     constructor() {
         tokenIn = new MockERC20();
         tokenOut = new MockERC20();
-        adapter = new MockSettlementAdapter();
-        executor = new UniswapXDutchV3Executor(REACTOR, address(adapter), TREASURY, address(this));
+        uniAdapter = new MockSettlementAdapter();
+        camelotAdapter = new MockSettlementAdapter();
+        executor = new UniswapXDutchV3Executor(
+            REACTOR, address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+        );
     }
 
     function testWrongCallerReverts() public {
@@ -155,7 +162,9 @@ contract UniswapXDutchV3ExecutorTest {
     function testExecuteWrapperForwardsSignedOrderAndCallbackData() public {
         MockReactor reactor = new MockReactor();
         UniswapXDutchV3Executor wrapper =
-            new UniswapXDutchV3Executor(address(reactor), address(adapter), TREASURY, address(this));
+            new UniswapXDutchV3Executor(
+                address(reactor), address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+            );
 
         ReactorStructs.SignedOrder memory order = ReactorStructs.SignedOrder({order: hex"1234", sig: hex"5678"});
         bytes memory callbackData = hex"abcd";
@@ -169,9 +178,11 @@ contract UniswapXDutchV3ExecutorTest {
     function testExecuteRoundTripThroughMockReactorAndCallbackSucceeds() public {
         MockReactor reactor = new MockReactor();
         UniswapXDutchV3Executor wrapper =
-            new UniswapXDutchV3Executor(address(reactor), address(adapter), TREASURY, address(this));
+            new UniswapXDutchV3Executor(
+                address(reactor), address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+            );
         tokenIn.mint(address(wrapper), 1e18);
-        adapter.setAmountOut(12e6);
+        uniAdapter.setAmountOut(12e6);
         reactor.setCallbackPayload(address(tokenIn), 1e18, address(tokenOut), 10e6);
 
         wrapper.execute(
@@ -186,7 +197,9 @@ contract UniswapXDutchV3ExecutorTest {
         MockSwapRouter02 router = new MockSwapRouter02();
         UniV3SwapRouter02Adapter realAdapter = new UniV3SwapRouter02Adapter(address(router));
         UniswapXDutchV3Executor wrapper =
-            new UniswapXDutchV3Executor(address(reactor), address(realAdapter), TREASURY, address(this));
+            new UniswapXDutchV3Executor(
+                address(reactor), address(realAdapter), address(realAdapter), TREASURY, address(this)
+            );
 
         tokenIn.mint(address(wrapper), 1e18);
         router.setAmountOut(12e6);
@@ -231,7 +244,7 @@ contract UniswapXDutchV3ExecutorTest {
 
     function testBadRouteReverts() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(10e6);
+        uniAdapter.setAmountOut(10e6);
 
         vm.prank(REACTOR);
         vm.expectRevert(ExecutorErrors.BadRoute.selector);
@@ -240,16 +253,59 @@ contract UniswapXDutchV3ExecutorTest {
 
     function testBadRouteRevertsWhenInputAndOutputTokensAreEqual() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(2e18);
+        uniAdapter.setAmountOut(2e18);
 
         vm.prank(REACTOR);
         vm.expectRevert(ExecutorErrors.BadRoute.selector);
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenIn, 1e18, 1e18), _route(tokenIn, tokenIn, 1e18));
     }
 
+    function testCamelotVenueRoutePlanRejectedWhenMalformed() public {
+        tokenIn.mint(address(executor), 1e18);
+        camelotAdapter.setAmountOut(2e18);
+
+        vm.prank(REACTOR);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 1e18),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 500,
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 1e18
+                })
+            )
+        );
+    }
+
+    function testExecutorSelectsCamelotAdapterForCamelotVenue() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountOut(1);
+        camelotAdapter.setAmountOut(12e6);
+
+        vm.prank(REACTOR);
+        executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _camelotRoute(tokenIn, tokenOut, 9e6));
+
+        require(tokenOut.allowance(address(executor), REACTOR) == 10e6, "reactor allowance not set");
+    }
+
+    function testExecutorSelectsUniswapAdapterForUniswapVenue() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountOut(12e6);
+        camelotAdapter.setAmountOut(1);
+
+        vm.prank(REACTOR);
+        executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
+
+        require(uniAdapter.lastPoolFee() == 500, "uniswap adapter not used");
+    }
+
     function testInsufficientOutputReverts() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(9e6);
+        uniAdapter.setAmountOut(9e6);
 
         vm.prank(REACTOR);
         vm.expectRevert(ExecutorErrors.SlippageExceeded.selector);
@@ -258,7 +314,7 @@ contract UniswapXDutchV3ExecutorTest {
 
     function testUnsupportedOutputShapeReverts() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(20e6);
+        uniAdapter.setAmountOut(20e6);
         ReactorStructs.ResolvedOrder[] memory orders = new ReactorStructs.ResolvedOrder[](1);
         ReactorStructs.OutputToken[] memory outputs = new ReactorStructs.OutputToken[](2);
         outputs[0] = ReactorStructs.OutputToken({token: address(tokenOut), amount: 10e6, recipient: address(0xA)});
@@ -296,7 +352,7 @@ contract UniswapXDutchV3ExecutorTest {
 
     function testProfitSweptToTreasuryAndReactorApprovalSet() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(20e6);
+        uniAdapter.setAmountOut(20e6);
 
         vm.prank(REACTOR);
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
@@ -311,7 +367,7 @@ contract UniswapXDutchV3ExecutorTest {
         uint256 settled = uint256(outputAmount) + uint256(excessProfit);
 
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(settled);
+        uniAdapter.setAmountOut(settled);
 
         vm.prank(REACTOR);
         executor.reactorCallback(
@@ -325,7 +381,7 @@ contract UniswapXDutchV3ExecutorTest {
 
     function testGasHappyPathCallback() public {
         tokenIn.mint(address(executor), 1e18);
-        adapter.setAmountOut(12e6);
+        uniAdapter.setAmountOut(12e6);
 
         vm.prank(REACTOR);
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
@@ -364,7 +420,25 @@ contract UniswapXDutchV3ExecutorTest {
     function _route(MockERC20 inToken, MockERC20 outToken, uint256 minAmountOut) private pure returns (bytes memory) {
         return abi.encode(
             ExecutorTypes.RoutePlan({
-                tokenIn: address(inToken), tokenOut: address(outToken), poolFee: 500, minAmountOut: minAmountOut
+                venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                tokenIn: address(inToken),
+                tokenOut: address(outToken),
+                uniPoolFee: 500,
+                limitSqrtPriceX96: 0,
+                minAmountOut: minAmountOut
+            })
+        );
+    }
+
+    function _camelotRoute(MockERC20 inToken, MockERC20 outToken, uint256 minAmountOut) private pure returns (bytes memory) {
+        return abi.encode(
+            ExecutorTypes.RoutePlan({
+                venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
+                tokenIn: address(inToken),
+                tokenOut: address(outToken),
+                uniPoolFee: 0,
+                limitSqrtPriceX96: 0,
+                minAmountOut: minAmountOut
             })
         );
     }

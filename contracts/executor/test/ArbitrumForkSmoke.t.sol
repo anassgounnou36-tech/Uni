@@ -97,7 +97,16 @@ contract ArbitrumForkSmokeTest {
         vm.expectRevert(ExecutorErrors.BadRoute.selector);
         executor.reactorCallback(
             _singleOrder(0.01 ether, 1),
-            abi.encode(ExecutorTypes.RoutePlan({tokenIn: WETH, tokenOut: WETH, poolFee: 500, minAmountOut: 1}))
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    tokenIn: WETH,
+                    tokenOut: WETH,
+                    uniPoolFee: 500,
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 1
+                })
+            )
         );
     }
 
@@ -155,7 +164,9 @@ contract ArbitrumForkSmokeTest {
         string memory forkUrl = vm.envOr("ARB1_RPC_URL", "https://arb1-sequencer.arbitrum.io/rpc");
         vm.createSelectFork(forkUrl);
         adapter = new UniV3SwapRouter02Adapter(UNIV3_SWAP_ROUTER_02);
-        executor = new UniswapXDutchV3Executor(UNISWAPX_DUTCH_V3_REACTOR, address(adapter), TREASURY, address(this));
+        executor = new UniswapXDutchV3Executor(
+            UNISWAPX_DUTCH_V3_REACTOR, address(adapter), address(adapter), TREASURY, address(this)
+        );
     }
 
     function _fundExecutorWithWeth(uint256 amount) private {
@@ -193,7 +204,16 @@ contract ArbitrumForkSmokeTest {
     }
 
     function _route(uint256 minOut, uint24 fee) private pure returns (bytes memory) {
-        return abi.encode(ExecutorTypes.RoutePlan({tokenIn: WETH, tokenOut: USDC, poolFee: fee, minAmountOut: minOut}));
+        return abi.encode(
+            ExecutorTypes.RoutePlan({
+                venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                tokenIn: WETH,
+                tokenOut: USDC,
+                uniPoolFee: fee,
+                limitSqrtPriceX96: 0,
+                minAmountOut: minOut
+            })
+        );
     }
 
     receive() external payable {}

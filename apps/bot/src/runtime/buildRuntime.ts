@@ -1,6 +1,7 @@
 import { createPublicClient, createTestClient, createWalletClient, http, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum } from 'viem/chains';
+import { CAMELOT_AMMV3_FACTORY, CAMELOT_AMMV3_QUOTER, UNISWAPX_ORDERS_API, UNIV3_FACTORY, UNIV3_QUOTER_V2 } from '../../../../packages/config/src/arbitrum.js';
 import { createPostgresAdapter } from '../db/postgres.js';
 import type { SqlAdapter } from '../db/types.js';
 import { prepareExecution } from '../execution/prepareExecution.js';
@@ -12,6 +13,8 @@ import { InMemoryDecisionJournal } from '../journal/inMemoryDecisionJournal.js';
 import { PostgresDecisionJournal } from '../journal/postgresDecisionJournal.js';
 import type { DecisionJournal } from '../journal/types.js';
 import { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import { CamelotAmmv3RoutePlanner } from '../routing/camelotV3/routePlanner.js';
+import { RouteBook } from '../routing/routeBook.js';
 import { InMemoryNonceLedger, NonceManager, PostgresNonceLedger } from '../send/nonceManager.js';
 import { SequencerClient } from '../send/sequencerClient.js';
 import { ForkSimService } from '../sim/forkSimService.js';
@@ -25,9 +28,6 @@ import type { RuntimeConfig } from './config.js';
 import { InflightTracker } from './inflightTracker.js';
 
 const DEFAULT_DEV_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as const;
-const UNISWAPX_ORDERS_API = 'https://api.uniswap.org/v2/orders';
-const UNIV3_FACTORY = '0x1F98431c8aD98523631AE4a59f267346ea31F984' as const;
-const UNIV3_QUOTER_V2 = '0x61fFE014bA17989E743c5F6cB21bF9697530B21e' as const;
 
 export type BuildRuntimeOverrides = {
   nowMs: () => number;
@@ -224,10 +224,21 @@ export async function buildRuntimeFromConfig(
   const schedulerContext =
     overrides.schedulerContext ??
     {
-      routePlanner: new UniV3RoutePlanner({
-        client: readClient,
-        factory: UNIV3_FACTORY,
-        quoter: UNIV3_QUOTER_V2
+      routeBook: new RouteBook({
+        uniswapV3: new UniV3RoutePlanner({
+          client: readClient,
+          factory: UNIV3_FACTORY,
+          quoter: UNIV3_QUOTER_V2
+        }),
+        camelotAmmv3: new CamelotAmmv3RoutePlanner({
+          client: readClient,
+          enabled: config.enableCamelotAmmv3,
+          factory: CAMELOT_AMMV3_FACTORY,
+          quoter: CAMELOT_AMMV3_QUOTER,
+          univ3Factory: UNIV3_FACTORY,
+          univ3Quoter: UNIV3_QUOTER_V2
+        }),
+        enableCamelotAmmv3: config.enableCamelotAmmv3
       }),
       resolveEnv: {
         timestamp: BigInt(Math.floor(nowMs() / 1000)),

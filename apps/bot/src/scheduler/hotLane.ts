@@ -3,7 +3,8 @@ import { resolveAt } from '@uni/protocol';
 import { buildExecutionPlan, type BuildExecutionPlanParams } from '../execution/planBuilder.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { ExecutionPlan } from '../execution/types.js';
-import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import type { RouteBook } from '../routing/routeBook.js';
+import type { RouteCandidateSummary } from '../routing/venues.js';
 import type { ForkSimResult, ForkSimService } from '../sim/forkSimService.js';
 import type { SequencerClient, SequencerClientResult } from '../send/sequencerClient.js';
 import { NonceManager } from '../send/nonceManager.js';
@@ -25,6 +26,8 @@ export type HotLaneDecision =
       simResult?: ForkSimResult;
       preparedExecution?: PreparedExecution;
       sendResult?: SequencerClientResult;
+      chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      routeAlternatives?: RouteCandidateSummary[];
     }
   | {
       action: 'NO_SEND';
@@ -32,12 +35,16 @@ export type HotLaneDecision =
       simResult: ForkSimResult;
       preparedExecution: PreparedExecution;
       sendResult?: SequencerClientResult;
+      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      routeAlternatives: RouteCandidateSummary[];
     }
   | {
       action: 'WOULD_SEND';
       simResult: ForkSimResult;
       preparedExecution: PreparedExecution;
       sendResult: SequencerClientResult;
+      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      routeAlternatives: RouteCandidateSummary[];
     };
 
 export type HotLaneStepParams = {
@@ -46,7 +53,7 @@ export type HotLaneStepParams = {
   thresholdOut: bigint;
   normalizedOrder: NormalizedOrder;
   order: V3DutchOrder;
-  routePlanner: UniV3RoutePlanner;
+  routeBook: RouteBook;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   conditionalEnvelope: ConditionalEnvelope;
   executor: `0x${string}`;
@@ -74,14 +81,14 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     ...params.resolveEnv,
     blockNumberish: params.currentBlock
   });
-  const route = await params.routePlanner.planBestRoute({ resolvedOrder: resolved });
-  if (!route.ok || route.route.netEdgeOut < params.thresholdOut) {
+  const route = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
+  if (!route.ok || route.chosenRoute.netEdgeOut < params.thresholdOut) {
     return { action: 'DROP', reason: 'EDGE_DISAPPEARED' };
   }
 
   const planInput = {
     normalizedOrder: params.normalizedOrder,
-    planner: params.routePlanner,
+    routeBook: params.routeBook,
     executor: params.executor,
     blockNumberish: params.currentBlock,
     resolveEnv: params.resolveEnv,
@@ -105,20 +112,49 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
   const simResult = await params.simService.simulatePrepared(preparedExecution);
   if (!simResult.ok) {
     await params.nonceManager.release(preparedExecution.nonceLease, 'RELEASED');
-    return { action: 'DROP', reason: 'SIM_FAIL', simResult, preparedExecution };
+    return {
+      action: 'DROP',
+      reason: 'SIM_FAIL',
+      simResult,
+      preparedExecution,
+      chosenRouteVenue: result.plan.route.venue,
+      routeAlternatives: result.plan.routeAlternatives
+    };
   }
 
   if (params.shadowMode) {
     await params.nonceManager.release(preparedExecution.nonceLease, 'RELEASED');
-    return { action: 'NO_SEND', reason: 'SHADOW_MODE', simResult, preparedExecution };
+    return {
+      action: 'NO_SEND',
+      reason: 'SHADOW_MODE',
+      simResult,
+      preparedExecution,
+      chosenRouteVenue: result.plan.route.venue,
+      routeAlternatives: result.plan.routeAlternatives
+    };
   }
 
   const sendResult = await params.sequencerClient.sendPreparedExecution(preparedExecution);
   if (!sendResult.accepted) {
     await params.nonceManager.release(preparedExecution.nonceLease, 'RELEASED');
-    return { action: 'DROP', reason: 'SEND_REJECTED', simResult, preparedExecution, sendResult };
+    return {
+      action: 'DROP',
+      reason: 'SEND_REJECTED',
+      simResult,
+      preparedExecution,
+      sendResult,
+      chosenRouteVenue: result.plan.route.venue,
+      routeAlternatives: result.plan.routeAlternatives
+    };
   }
 
   await params.nonceManager.markBroadcastAccepted(preparedExecution.nonceLease);
-  return { action: 'WOULD_SEND', simResult, preparedExecution, sendResult };
+  return {
+    action: 'WOULD_SEND',
+    simResult,
+    preparedExecution,
+    sendResult,
+    chosenRouteVenue: result.plan.route.venue,
+    routeAlternatives: result.plan.routeAlternatives
+  };
 }

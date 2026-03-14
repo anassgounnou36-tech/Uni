@@ -36,6 +36,7 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
         uint24 poolFee,
         uint256 amountIn,
         uint256 minAmountOut,
+        uint160 limitSqrtPriceX96,
         address recipient
     ) external returns (uint256 amountOut) {
         _safeApprove(tokenIn, ROUTER, 0);
@@ -49,7 +50,7 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
                     recipient: recipient,
                     amountIn: amountIn,
                     amountOutMinimum: minAmountOut,
-                    sqrtPriceLimitX96: 0
+                    sqrtPriceLimitX96: limitSqrtPriceX96
                 })
             );
     }

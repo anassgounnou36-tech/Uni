@@ -16,7 +16,8 @@ interface IERC20 {
 
 contract UniswapXDutchV3Executor is IReactorCallback {
     address public immutable REACTOR;
-    address public immutable SETTLEMENT_ADAPTER;
+    address public immutable UNISWAP_V3_ADAPTER;
+    address public immutable CAMELOT_AMMV3_ADAPTER;
     address public immutable TREASURY;
 
     address public owner;
@@ -44,15 +45,18 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         _;
     }
 
-    constructor(address reactor_, address settlementAdapter_, address treasury_, address owner_) {
+    constructor(address reactor_, address uniswapV3Adapter_, address camelotAmmv3Adapter_, address treasury_, address owner_)
+    {
         if (
-            reactor_ == address(0) || settlementAdapter_ == address(0) || treasury_ == address(0)
+            reactor_ == address(0) || uniswapV3Adapter_ == address(0) || camelotAmmv3Adapter_ == address(0)
+                || treasury_ == address(0)
                 || owner_ == address(0)
         ) {
             revert ExecutorErrors.ZeroAddress();
         }
         REACTOR = reactor_;
-        SETTLEMENT_ADAPTER = settlementAdapter_;
+        UNISWAP_V3_ADAPTER = uniswapV3Adapter_;
+        CAMELOT_AMMV3_ADAPTER = camelotAmmv3Adapter_;
         TREASURY = treasury_;
         owner = owner_;
     }
@@ -73,11 +77,13 @@ contract UniswapXDutchV3Executor is IReactorCallback {
 
         ReactorStructs.ResolvedOrder calldata order = resolvedOrders[0];
         ExecutorTypes.RoutePlan memory route = abi.decode(callbackData, (ExecutorTypes.RoutePlan));
-        if (route.tokenIn == address(0) || route.tokenOut == address(0) || route.poolFee == 0) {
+        if (route.tokenIn == address(0) || route.tokenOut == address(0)) {
             revert ExecutorErrors.BadRoute();
         }
         if (route.tokenIn == route.tokenOut) revert ExecutorErrors.BadRoute();
         if (order.input.token != route.tokenIn) revert ExecutorErrors.TokenMismatch();
+
+        address settlementAdapter = _resolveSettlementAdapter(route);
 
         uint256 outputCount = order.outputs.length;
         if (outputCount == 0) revert ExecutorErrors.UnsupportedOutputShape();
@@ -91,12 +97,18 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         uint256 amountIn = order.input.amount;
         if (IERC20(route.tokenIn).balanceOf(address(this)) < amountIn) revert ExecutorErrors.InsufficientInput();
 
-        _safeTransfer(route.tokenIn, SETTLEMENT_ADAPTER, amountIn);
+        _safeTransfer(route.tokenIn, settlementAdapter, amountIn);
 
         uint256 minimumOutput = route.minAmountOut > requiredOutput ? route.minAmountOut : requiredOutput;
-        uint256 settledOutput = ISettlementAdapter(SETTLEMENT_ADAPTER)
+        uint256 settledOutput = ISettlementAdapter(settlementAdapter)
             .executeExactInputSingle(
-                route.tokenIn, route.tokenOut, route.poolFee, amountIn, minimumOutput, address(this)
+                route.tokenIn,
+                route.tokenOut,
+                route.uniPoolFee,
+                amountIn,
+                minimumOutput,
+                route.limitSqrtPriceX96,
+                address(this)
             );
         if (settledOutput < minimumOutput) revert ExecutorErrors.SlippageExceeded();
 
@@ -138,5 +150,17 @@ contract UniswapXDutchV3Executor is IReactorCallback {
     function _safeApprove(address token, address spender, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20.approve, (spender, amount)));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) revert ExecutorErrors.TokenApprovalFailed();
+    }
+
+    function _resolveSettlementAdapter(ExecutorTypes.RoutePlan memory route) private view returns (address) {
+        if (route.venue == ExecutorTypes.VENUE_UNISWAP_V3) {
+            if (route.uniPoolFee == 0) revert ExecutorErrors.BadRoute();
+            return UNISWAP_V3_ADAPTER;
+        }
+        if (route.venue == ExecutorTypes.VENUE_CAMELOT_AMMV3) {
+            if (route.uniPoolFee != 0) revert ExecutorErrors.BadRoute();
+            return CAMELOT_AMMV3_ADAPTER;
+        }
+        revert ExecutorErrors.BadRoute();
     }
 }

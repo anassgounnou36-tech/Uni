@@ -1,7 +1,7 @@
 import type { ResolveEnv, ResolvedV3DutchOrder, V3DutchOrder } from '@uni/protocol';
 import { resolveAt } from '@uni/protocol';
-import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
-import type { UniV3RoutePlan } from '../routing/univ3/types.js';
+import type { RouteBook } from '../routing/routeBook.js';
+import type { HedgeRoutePlan } from '../routing/venues.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -14,14 +14,14 @@ export type BlockEvaluation = {
   profitFloorOut: bigint;
   grossEdgeOut: bigint;
   netEdgeOut: bigint;
-  route?: UniV3RoutePlan;
+  route?: HedgeRoutePlan;
 };
 
 export type FirstProfitableSchedule = {
   scheduledBlock: bigint;
   competeWindowStart: bigint;
   competeWindowEnd: bigint;
-  chosenRoute: UniV3RoutePlan;
+  chosenRoute: HedgeRoutePlan;
   evaluations: BlockEvaluation[];
   /**
    * Candidate blocks are resolved from off-chain reactor semantics, while route quotes
@@ -33,7 +33,7 @@ export type FirstProfitableSchedule = {
 export type FirstProfitableBlockParams = {
   order: V3DutchOrder;
   baseEnv: Omit<ResolveEnv, 'blockNumberish'>;
-  routePlanner: UniV3RoutePlanner;
+  routeBook: RouteBook;
   candidateBlocks: readonly bigint[];
   threshold: bigint;
   competeWindowBlocks: bigint;
@@ -52,7 +52,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
       blockNumberish: block
     });
 
-    const routeResult = await params.routePlanner.planBestRoute({ resolvedOrder: resolved });
+    const routeResult = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
     if (!routeResult.ok) {
       evaluations.push({
         block,
@@ -69,7 +69,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
       continue;
     }
 
-    const route = routeResult.route;
+    const route = routeResult.chosenRoute;
     const requiredOutput = route.requiredOutput;
     const quotedAmountOut = route.quotedAmountOut;
     const evaluation: BlockEvaluation = {

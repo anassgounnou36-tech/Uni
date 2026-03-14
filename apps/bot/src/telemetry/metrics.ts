@@ -40,6 +40,18 @@ export class BotMetrics {
     this.counters.set(name, (this.counters.get(name) ?? 0) + value);
   }
 
+  incrementRouteCandidate(venue: string, result: string): void {
+    this.increment(`route_candidate_total{venue="${venue}",result="${result}"}`);
+  }
+
+  incrementRouteChosen(venue: string): void {
+    this.increment(`route_chosen_total{venue="${venue}"}`);
+  }
+
+  incrementRouteRejected(venue: string, reason: string): void {
+    this.increment(`route_rejected_total{venue="${venue}",reason="${reason}"}`);
+  }
+
   observeIngestToSendLatency(ms: number): void {
     this.ingestToSendLatencies.push(ms);
   }

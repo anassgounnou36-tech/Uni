@@ -3,10 +3,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { computeOrderHash, decodeSignedOrder } from '@uni/protocol';
 import { describe, expect, it } from 'vitest';
-import { runReplay } from '../src/replay/replayRunner.js';
+import { runReplay, runReplayRegression } from '../src/replay/replayRunner.js';
 import { InMemoryOrderStore } from '../src/store/memory/inMemoryOrderStore.js';
 import type { NormalizedOrder } from '../src/store/types.js';
-import type { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
+import type { RouteBook } from '../src/routing/routeBook.js';
 import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
 import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
@@ -34,30 +34,32 @@ function loadCorpus(): NormalizedOrder[] {
 describe('replay runner', () => {
   it('is deterministic and produces SIM_OK no-send in shadow mode with prepared execution', async () => {
     const corpus = loadCorpus();
-    const routePlanner = {
-      planBestRoute: async ({ resolvedOrder }) => {
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }) => {
         const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
         return {
           ok: true,
-          consideredFees: [3000],
-          route: {
+          chosenRoute: {
+            venue: 'UNISWAP_V3',
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
             requiredOutput,
             quotedAmountOut: requiredOutput + 100n,
-            poolFee: 3000,
             minAmountOut: requiredOutput,
+            limitSqrtPriceX96: 0n,
             slippageBufferOut: 5n,
             gasCostOut: 10n,
             riskBufferOut: 0n,
             profitFloorOut: 0n,
             grossEdgeOut: 100n,
-            netEdgeOut: 85n
-          }
+            netEdgeOut: 85n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 3000 }
+          },
+          alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 85n }]
         };
       }
-    } as UniV3RoutePlanner;
+    } as RouteBook;
 
     const simService = {
       simulatePrepared: async (prepared) => ({
@@ -107,7 +109,7 @@ describe('replay runner', () => {
         candidateBlocks: [1000n, 1001n, 1002n],
         competeWindowBlocks: 2n
       },
-      routePlanner,
+      routeBook,
       simService,
       resolveEnv: {
         timestamp: 1_900_000_000n,
@@ -175,5 +177,71 @@ describe('replay runner', () => {
       simResult: 'SIM_OK'
     });
     expect(firstRun[0]?.preparedExecution?.serializedTransaction.startsWith('0x')).toEqual(true);
+  });
+
+  it('replayRegressionReportsVenueComparisonCounts', async () => {
+    const corpus = loadCorpus();
+    const baselineRouteBook = {
+      selectBestRoute: async () => ({
+        ok: true,
+        chosenRoute: {
+          venue: 'UNISWAP_V3',
+          tokenIn: corpus[0]!.decodedOrder.order.baseInput.token,
+          tokenOut: corpus[0]!.decodedOrder.order.baseOutputs[0]!.token,
+          amountIn: 1n,
+          requiredOutput: 1n,
+          quotedAmountOut: 2n,
+          minAmountOut: 1n,
+          limitSqrtPriceX96: 0n,
+          grossEdgeOut: 1n,
+          slippageBufferOut: 0n,
+          gasCostOut: 0n,
+          riskBufferOut: 0n,
+          profitFloorOut: 0n,
+          netEdgeOut: 1n,
+          quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+        },
+        alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 1n }]
+      })
+    } as RouteBook;
+
+    const candidateRouteBook = {
+      selectBestRoute: async () => ({
+        ok: true,
+        chosenRoute: {
+          venue: 'CAMELOT_AMMV3',
+          tokenIn: corpus[0]!.decodedOrder.order.baseInput.token,
+          tokenOut: corpus[0]!.decodedOrder.order.baseOutputs[0]!.token,
+          amountIn: 1n,
+          requiredOutput: 1n,
+          quotedAmountOut: 3n,
+          minAmountOut: 1n,
+          limitSqrtPriceX96: 0n,
+          grossEdgeOut: 2n,
+          slippageBufferOut: 0n,
+          gasCostOut: 0n,
+          riskBufferOut: 0n,
+          profitFloorOut: 0n,
+          netEdgeOut: 2n,
+          quoteMetadata: { venue: 'CAMELOT_AMMV3', observedFee: 30 }
+        },
+        alternativeRoutes: [
+          { venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 1n },
+          { venue: 'CAMELOT_AMMV3', eligible: true, netEdgeOut: 2n }
+        ]
+      })
+    } as RouteBook;
+
+    const summary = await runReplayRegression({
+      corpus,
+      resolveEnv: { timestamp: 1_900_000_000n, basefee: 100_000_000n, chainId: 42161n },
+      candidateBlocks: [1000n],
+      baselineRouteBook,
+      candidateRouteBook
+    });
+
+    expect(summary.ordersConsidered).toBeGreaterThan(0);
+    expect(summary.chosenVenueCounts.CAMELOT_AMMV3).toBeGreaterThan(0);
+    expect(summary.camelotStrictImprovementCount).toBeGreaterThan(0);
   });
 });

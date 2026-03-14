@@ -2,7 +2,7 @@ import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
 import { resolveAt } from '@uni/protocol';
 import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../scheduler/hotLane.js';
-import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import type { RouteBook } from '../routing/routeBook.js';
 import type { ForkSimService } from '../sim/forkSimService.js';
 import type { NormalizedOrder, OrderReasonCode, OrderStore } from '../store/types.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
@@ -10,6 +10,7 @@ import type { SequencerClient } from '../send/sequencerClient.js';
 import { NonceManager } from '../send/nonceManager.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { ExecutionPlan } from '../execution/types.js';
+import type { RouteCandidateSummary } from '../routing/venues.js';
 
 export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
@@ -26,13 +27,15 @@ export type ReplayRecord = {
   predictedEdgeOut: bigint;
   simResult: 'SIM_OK' | 'SIM_FAIL' | 'NOT_RUN';
   preparedExecution?: PreparedExecution;
+  chosenVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+  rejectedVenueSummaries?: RouteCandidateSummary[];
 };
 
 export type ReplayRunnerParams = {
   corpus: readonly NormalizedOrder[];
   store: OrderStore;
   supportPolicy: ReplaySupportPolicy;
-  routePlanner: UniV3RoutePlanner;
+  routeBook: RouteBook;
   simService: ForkSimService;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   shadowMode: boolean;
@@ -41,6 +44,16 @@ export type ReplayRunnerParams = {
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
   executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+};
+
+export type ReplayRegressionSummary = {
+  ordersConsidered: number;
+  routeableUniOnly: number;
+  routeableCamelotOnly: number;
+  routeableBoth: number;
+  chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3', number>;
+  averageBestRouteNetEdgeOut: bigint;
+  camelotStrictImprovementCount: number;
 };
 
 function normalize(address: `0x${string}`): string {
@@ -103,7 +116,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     const schedule = await findFirstProfitableBlock({
       order,
       baseEnv: params.resolveEnv,
-      routePlanner: params.routePlanner,
+      routeBook: params.routeBook,
       candidateBlocks: params.supportPolicy.candidateBlocks,
       threshold: params.supportPolicy.thresholdOut,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
@@ -114,8 +127,13 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       const probeBlock = params.supportPolicy.candidateBlocks[0];
       if (probeBlock !== undefined) {
         const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlock });
-        const probeRoute = await params.routePlanner.planBestRoute({ resolvedOrder: probeResolved });
-        if (!probeRoute.ok && probeRoute.failure.reason === 'NOT_PRICEABLE_GAS') {
+        const probeRoute = await params.routeBook.selectBestRoute({ resolvedOrder: probeResolved });
+        if (
+          !probeRoute.ok
+          && probeRoute.alternativeRoutes.some(
+            (summary) => summary.reason === 'NOT_PRICEABLE_GAS' || summary.reason === 'CAMELOT_GAS_NOT_PRICEABLE'
+          )
+        ) {
           noEdgeReason = 'NOT_PRICEABLE_GAS';
         }
       }
@@ -145,7 +163,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       thresholdOut: params.supportPolicy.thresholdOut,
       normalizedOrder: normalized,
       order,
-      routePlanner: params.routePlanner,
+      routeBook: params.routeBook,
       resolveEnv: params.resolveEnv,
       conditionalEnvelope: params.conditionalEnvelope,
       executor: params.executor,
@@ -166,7 +184,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         reason: 'SUPPORTED',
         predictedEdgeOut,
         simResult: 'SIM_OK',
-        preparedExecution: hotDecision.preparedExecution
+        preparedExecution: hotDecision.preparedExecution,
+        chosenVenue: hotDecision.chosenRouteVenue,
+        rejectedVenueSummaries: hotDecision.routeAlternatives
       });
       continue;
     }
@@ -180,7 +200,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         reason: 'SHADOW_MODE',
         predictedEdgeOut,
         simResult: 'SIM_OK',
-        preparedExecution: hotDecision.preparedExecution
+        preparedExecution: hotDecision.preparedExecution,
+        chosenVenue: hotDecision.chosenRouteVenue,
+        rejectedVenueSummaries: hotDecision.routeAlternatives
       });
       continue;
     }
@@ -194,9 +216,80 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       reason: failureReason,
       predictedEdgeOut,
       simResult: 'SIM_FAIL',
-      preparedExecution: hotDecision.action === 'DROP' ? hotDecision.preparedExecution : undefined
+      preparedExecution: hotDecision.action === 'DROP' ? hotDecision.preparedExecution : undefined,
+      chosenVenue: hotDecision.action === 'DROP' ? hotDecision.chosenRouteVenue : undefined,
+      rejectedVenueSummaries: hotDecision.action === 'DROP' ? hotDecision.routeAlternatives : undefined
     });
   }
 
   return records;
+}
+
+export async function runReplayRegression(params: {
+  corpus: readonly NormalizedOrder[];
+  resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  candidateBlocks: readonly bigint[];
+  baselineRouteBook: RouteBook;
+  candidateRouteBook: RouteBook;
+}): Promise<ReplayRegressionSummary> {
+  let ordersConsidered = 0;
+  let routeableUniOnly = 0;
+  let routeableCamelotOnly = 0;
+  let routeableBoth = 0;
+  const chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3', number> = {
+    UNISWAP_V3: 0,
+    CAMELOT_AMMV3: 0
+  };
+  let aggregateBestRouteNetEdgeOut = 0n;
+  let aggregateBestRouteCount = 0n;
+  let camelotStrictImprovementCount = 0;
+
+  for (const order of params.corpus) {
+    const block = params.candidateBlocks[0];
+    if (block === undefined) {
+      break;
+    }
+    const resolved = await resolveAt(order.decodedOrder.order, { ...params.resolveEnv, blockNumberish: block });
+    const baseline = await params.baselineRouteBook.selectBestRoute({ resolvedOrder: resolved });
+    const candidate = await params.candidateRouteBook.selectBestRoute({ resolvedOrder: resolved });
+    ordersConsidered += 1;
+
+    const baselineHasUni = baseline.alternativeRoutes.some((summary) => summary.venue === 'UNISWAP_V3' && summary.eligible);
+    const candidateHasCamelot = candidate.alternativeRoutes.some(
+      (summary) => summary.venue === 'CAMELOT_AMMV3' && summary.eligible
+    );
+    if (baselineHasUni && !candidateHasCamelot) {
+      routeableUniOnly += 1;
+    } else if (!baselineHasUni && candidateHasCamelot) {
+      routeableCamelotOnly += 1;
+    } else if (baselineHasUni && candidateHasCamelot) {
+      routeableBoth += 1;
+    }
+
+    if (candidate.ok) {
+      chosenVenueCounts[candidate.chosenRoute.venue] += 1;
+      aggregateBestRouteNetEdgeOut += candidate.chosenRoute.netEdgeOut;
+      aggregateBestRouteCount += 1n;
+    }
+
+    if (
+      baseline.ok
+      && candidate.ok
+      && candidate.chosenRoute.venue === 'CAMELOT_AMMV3'
+      && candidate.chosenRoute.netEdgeOut > baseline.chosenRoute.netEdgeOut
+    ) {
+      camelotStrictImprovementCount += 1;
+    }
+  }
+
+  return {
+    ordersConsidered,
+    routeableUniOnly,
+    routeableCamelotOnly,
+    routeableBoth,
+    chosenVenueCounts,
+    averageBestRouteNetEdgeOut:
+      aggregateBestRouteCount === 0n ? 0n : aggregateBestRouteNetEdgeOut / aggregateBestRouteCount,
+    camelotStrictImprovementCount
+  };
 }

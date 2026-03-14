@@ -24,6 +24,7 @@ const SAMPLE_PLAN: ExecutionPlan = {
   normalizedOrder: {} as never,
   resolvedOrder: {} as never,
   route: {} as never,
+  routeAlternatives: [],
   callbackData: '0x',
   executeCalldata: '0x1234',
   txRequestDraft: {
