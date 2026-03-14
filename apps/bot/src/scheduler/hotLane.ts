@@ -31,7 +31,7 @@ export type HotLaneDecision =
       reason: 'SHADOW_MODE';
       simResult: ForkSimResult;
       preparedExecution: PreparedExecution;
-      sendResult: SequencerClientResult;
+      sendResult?: SequencerClientResult;
     }
   | {
       action: 'WOULD_SEND';
@@ -108,12 +108,12 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     return { action: 'DROP', reason: 'SIM_FAIL', simResult, preparedExecution };
   }
 
-  const sendResult = await params.sequencerClient.sendPreparedExecution(preparedExecution);
   if (params.shadowMode) {
     await params.nonceManager.release(preparedExecution.nonceLease, 'RELEASED');
-    return { action: 'NO_SEND', reason: 'SHADOW_MODE', simResult, preparedExecution, sendResult };
+    return { action: 'NO_SEND', reason: 'SHADOW_MODE', simResult, preparedExecution };
   }
 
+  const sendResult = await params.sequencerClient.sendPreparedExecution(preparedExecution);
   if (!sendResult.accepted) {
     await params.nonceManager.release(preparedExecution.nonceLease, 'RELEASED');
     return { action: 'DROP', reason: 'SEND_REJECTED', simResult, preparedExecution, sendResult };

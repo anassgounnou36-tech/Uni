@@ -5,6 +5,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   concatHex,
   decodeFunctionData,
+  encodeFunctionData,
   encodeAbiParameters,
   type Hex,
   type PublicClient,
@@ -27,11 +28,10 @@ import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
 import { convertGasWeiToTokenOut, ARBITRUM_WETH } from '../src/routing/univ3/gasValue.js';
 import type { UniV3RoutePlanner as UniV3RoutePlannerType } from '../src/routing/univ3/routePlanner.js';
 
-const UNIV3_SWAP_ROUTER_02 = '0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45' as const;
 const TREASURY = '0x1234560000000000000000000000000000000000' as const;
 
 type CompiledExecutorArtifacts = {
-  adapterCreationCode: Hex;
+  adapterCreationCode: (mockRouter: `0x${string}`) => Hex;
   executorCreationCode: (args: {
     reactor: `0x${string}`;
     adapter: `0x${string}`;
@@ -39,9 +39,90 @@ type CompiledExecutorArtifacts = {
     owner: `0x${string}`;
   }) => Hex;
   mockReactorCreationCode: Hex;
+  mockRouterCreationCode: Hex;
 };
 
 let compiledArtifacts: CompiledExecutorArtifacts | undefined;
+
+const MOCK_REACTOR_ABI = [
+  {
+    type: 'function',
+    name: 'setShouldCallback',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'value', type: 'bool' }],
+    outputs: []
+  },
+  {
+    type: 'function',
+    name: 'clearConfiguredResolvedOrders',
+    stateMutability: 'nonpayable',
+    inputs: [],
+    outputs: []
+  },
+  {
+    type: 'function',
+    name: 'pushConfiguredResolvedOrder',
+    stateMutability: 'nonpayable',
+    inputs: [
+      {
+        name: 'order',
+        type: 'tuple',
+        components: [
+          {
+            name: 'info',
+            type: 'tuple',
+            components: [
+              { name: 'reactor', type: 'address' },
+              { name: 'swapper', type: 'address' },
+              { name: 'nonce', type: 'uint256' },
+              { name: 'deadline', type: 'uint256' },
+              { name: 'additionalValidationContract', type: 'address' },
+              { name: 'additionalValidationData', type: 'bytes' }
+            ]
+          },
+          {
+            name: 'input',
+            type: 'tuple',
+            components: [
+              { name: 'token', type: 'address' },
+              { name: 'amount', type: 'uint256' },
+              { name: 'maxAmount', type: 'uint256' }
+            ]
+          },
+          {
+            name: 'outputs',
+            type: 'tuple[]',
+            components: [
+              { name: 'token', type: 'address' },
+              { name: 'amount', type: 'uint256' },
+              { name: 'recipient', type: 'address' }
+            ]
+          },
+          { name: 'sig', type: 'bytes' },
+          { name: 'hash', type: 'bytes32' }
+        ]
+      }
+    ],
+    outputs: []
+  },
+  {
+    type: 'function',
+    name: 'lastCaller',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }]
+  }
+] as const;
+
+const MOCK_ROUTER_ABI = [
+  {
+    type: 'function',
+    name: 'setAmountOut',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'value', type: 'uint256' }],
+    outputs: []
+  }
+] as const;
 
 function loadSigned() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
@@ -89,8 +170,52 @@ function compileExecutorArtifacts(): CompiledExecutorArtifacts {
 
   const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../contracts/executor/src');
   const sources = collectSoliditySources(srcRoot);
-  sources['MockReactor.sol'] = {
-    content: `// SPDX-License-Identifier: MIT\npragma solidity ^0.8.24;\ncontract MockReactor { fallback() external payable {} }`
+  sources['MockReactorForExecutorFlow.sol'] = {
+    content: fs
+      .readFileSync(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          '../../../contracts/executor/test/mocks/MockReactorForExecutorFlow.sol'
+        ),
+        'utf8'
+      )
+      .replaceAll('../../src/', '')
+  };
+  sources['MockSwapRouter02ForExecutorFlow.sol'] = {
+    content: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IMintableToken {
+  function mint(address to, uint256 amount) external;
+}
+
+contract MockSwapRouter02ForExecutorFlow {
+  uint256 public amountOut;
+
+  struct ExactInputSingleParams {
+    address tokenIn;
+    address tokenOut;
+    uint24 fee;
+    address recipient;
+    uint256 amountIn;
+    uint256 amountOutMinimum;
+    uint160 sqrtPriceLimitX96;
+  }
+
+  function setAmountOut(uint256 value) external {
+    amountOut = value;
+  }
+
+  function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256) {
+    if (amountOut < params.amountOutMinimum) {
+      return amountOut;
+    }
+    if (amountOut > 0) {
+      IMintableToken(params.tokenOut).mint(params.recipient, amountOut);
+    }
+    return amountOut;
+  }
+}`
   };
 
   const input = {
@@ -126,13 +251,12 @@ function compileExecutorArtifacts(): CompiledExecutorArtifacts {
 
   const adapterBytecode = getBytecode('adapters/UniV3SwapRouter02Adapter.sol', 'UniV3SwapRouter02Adapter');
   const executorBytecode = getBytecode('UniswapXDutchV3Executor.sol', 'UniswapXDutchV3Executor');
-  const mockReactorBytecode = getBytecode('MockReactor.sol', 'MockReactor');
+  const mockReactorBytecode = getBytecode('MockReactorForExecutorFlow.sol', 'MockReactorForExecutorFlow');
+  const mockRouterBytecode = getBytecode('MockSwapRouter02ForExecutorFlow.sol', 'MockSwapRouter02ForExecutorFlow');
 
   compiledArtifacts = {
-    adapterCreationCode: concatHex([
-      adapterBytecode,
-      encodeAbiParameters([{ type: 'address' }], [UNIV3_SWAP_ROUTER_02])
-    ]),
+    adapterCreationCode: (mockRouter) =>
+      concatHex([adapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockRouter])]),
     executorCreationCode: ({ reactor, adapter, treasury, owner }) =>
       concatHex([
         executorBytecode,
@@ -146,7 +270,8 @@ function compileExecutorArtifacts(): CompiledExecutorArtifacts {
           [reactor, adapter, treasury, owner]
         )
       ]),
-    mockReactorCreationCode: mockReactorBytecode
+    mockReactorCreationCode: mockReactorBytecode,
+    mockRouterCreationCode: mockRouterBytecode
   };
 
   return compiledArtifacts;
@@ -169,14 +294,37 @@ async function deployCreationCode(
   return receipt.contractAddress;
 }
 
+async function sendContractCall(
+  clients: { walletClient: WalletClient; publicClient: PublicClient },
+  to: `0x${string}`,
+  data: `0x${string}`
+) {
+  const txHash = await clients.walletClient.sendTransaction({
+    account: clients.walletClient.account!,
+    to,
+    data,
+    chain: arbitrum
+  });
+  await clients.publicClient.waitForTransactionReceipt({ hash: txHash });
+}
+
 async function deployRealExecutorStack(clients: { walletClient: WalletClient; publicClient: PublicClient }) {
   const artifacts = compileExecutorArtifacts();
+  const mockRouterAddress = await deployCreationCode(
+    clients.walletClient,
+    clients.publicClient,
+    artifacts.mockRouterCreationCode
+  );
   const mockReactorAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
     artifacts.mockReactorCreationCode
   );
-  const adapterAddress = await deployCreationCode(clients.walletClient, clients.publicClient, artifacts.adapterCreationCode);
+  const adapterAddress = await deployCreationCode(
+    clients.walletClient,
+    clients.publicClient,
+    artifacts.adapterCreationCode(mockRouterAddress)
+  );
   const executorAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
@@ -188,7 +336,7 @@ async function deployRealExecutorStack(clients: { walletClient: WalletClient; pu
     })
   );
 
-  return { mockReactorAddress, adapterAddress, executorAddress };
+  return { mockRouterAddress, mockReactorAddress, adapterAddress, executorAddress };
 }
 
 describe('quoting/planning unit accounting', () => {
@@ -459,14 +607,14 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     anvil?.stdin.end();
   });
 
-  it('uses same prepared execution for simulate and send against real executor on fork', async () => {
+  it('usesSamePreparedExecutionAgainstRealExecutorAndReactorCompatibleMock', async () => {
     const clients = createForkClients({
       rpcUrl,
       privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
     });
     const { fixture, decoded } = loadSigned();
 
-    const { adapterAddress, executorAddress } = await deployRealExecutorStack(clients);
+    const { mockRouterAddress, mockReactorAddress, adapterAddress, executorAddress } = await deployRealExecutorStack(clients);
 
     const adapterCode = await clients.publicClient.getCode({ address: adapterAddress });
     if (!adapterCode || adapterCode === '0x') {
@@ -475,6 +623,10 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     const executorCode = await clients.publicClient.getCode({ address: executorAddress });
     if (!executorCode || executorCode === '0x') {
       throw new Error('EXECUTOR_CODE_MISSING');
+    }
+    const reactorCode = await clients.publicClient.getCode({ address: mockReactorAddress });
+    if (!reactorCode || reactorCode === '0x') {
+      throw new Error('REACTOR_CODE_MISSING');
     }
 
     const planner = {
@@ -490,7 +642,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
             requiredOutput,
             quotedAmountOut: requiredOutput + 1n,
             poolFee: 500,
-            minAmountOut: requiredOutput,
+            minAmountOut: 0n,
             slippageBufferOut: 0n,
             gasCostOut: 0n,
             riskBufferOut: 0n,
@@ -526,6 +678,68 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     expect(planResult.ok).toEqual(true);
     if (!planResult.ok) return;
 
+    await sendContractCall(
+      clients,
+      mockRouterAddress,
+      encodeFunctionData({
+        abi: MOCK_ROUTER_ABI,
+        functionName: 'setAmountOut',
+        args: [0n]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'clearConfiguredResolvedOrders',
+        args: []
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'setShouldCallback',
+        args: [true]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'pushConfiguredResolvedOrder',
+        args: [
+          {
+            info: {
+              reactor: mockReactorAddress,
+              swapper: clients.sender,
+              nonce: 1n,
+              deadline: 2n ** 255n,
+              additionalValidationContract: '0x0000000000000000000000000000000000000000',
+              additionalValidationData: '0x'
+            },
+            input: {
+              token: planResult.plan.route.tokenIn,
+              amount: 0n,
+              maxAmount: 0n
+            },
+            outputs: [
+              {
+                token: planResult.plan.route.tokenOut,
+                amount: 0n,
+                recipient: clients.sender
+              }
+            ],
+            sig: '0x',
+            hash: '0x0000000000000000000000000000000000000000000000000000000000000000'
+          }
+        ]
+      })
+    );
+
     const nonceManager = new NonceManager({
       ledger: new InMemoryNonceLedger(),
       chainNonceReader: async (account) =>
@@ -560,11 +774,18 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     expect(prepared.conditionalEnvelope.TimestampMax).toBeDefined();
     expect(prepared.conditionalEnvelope.BlockNumberMax).toBeUndefined();
 
-    const sim = new ForkSimService({ clients });
+    const sim = new ForkSimService({ clients, cleanupSnapshot: false });
     const simResult = await sim.simulatePrepared(prepared);
     expect(simResult.serializedTransaction).toEqual(prepared.serializedTransaction);
     expect(simResult.txRequest.to.toLowerCase()).toEqual(executorAddress.toLowerCase());
     expect(simResult.receipt).toBeDefined();
+    expect(simResult.ok).toEqual(true);
+    const lastCaller = await clients.publicClient.readContract({
+      address: mockReactorAddress,
+      abi: MOCK_REACTOR_ABI,
+      functionName: 'lastCaller'
+    });
+    expect(String(lastCaller).toLowerCase()).toEqual(executorAddress.toLowerCase());
 
     let sendSerialized: `0x${string}` | undefined;
     const sequencerClient = new SequencerClient({

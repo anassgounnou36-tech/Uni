@@ -187,4 +187,110 @@ describe('scheduler + prepared-execution gate', () => {
     expect(seen).toHaveLength(2);
     expect(seen[0]!.replace('sim:', '')).toEqual(seen[1]!.replace('send:', ''));
   });
+
+  it('does not call sendPreparedExecution when shadowMode is true', async () => {
+    const signed = loadSigned();
+    const routePlanner = makeRoutePlanner(50n);
+    const orderHash = computeOrderHash(signed.order) as `0x${string}`;
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async () => 7n
+    });
+
+    let sendCalls = 0;
+    const simService = {
+      simulatePrepared: async (prepared: PreparedExecution) => ({
+        ok: true,
+        reason: 'SUPPORTED',
+        preparedExecution: prepared,
+        txRequest: prepared.txRequest,
+        serializedTransaction: prepared.serializedTransaction,
+        gasUsed: 21_000n,
+        receipt: {
+          status: 'success',
+          transactionHash: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          gasUsed: 21_000n
+        }
+      })
+    } as ForkSimService;
+
+    const sequencerClient = {
+      sendPreparedExecution: async () => {
+        sendCalls += 1;
+        return {
+          accepted: false,
+          attempts: [],
+          records: []
+        };
+      }
+    } as SequencerClient;
+
+    const decision = await runHotLaneStep({
+      entry: {
+        orderHash,
+        scheduledBlock: 1000n,
+        competeWindowEnd: 1002n,
+        predictedEdgeOut: 50n
+      },
+      currentBlock: 1000n,
+      thresholdOut: 1n,
+      normalizedOrder: {
+        orderHash,
+        orderType: 'Dutch_V3',
+        encodedOrder: signed.encodedOrder,
+        signature: signed.signature,
+        decodedOrder: signed,
+        reactor: signed.order.info.reactor
+      },
+      order: signed.order,
+      routePlanner,
+      resolveEnv: {
+        timestamp: 1_900_000_000n,
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+      executor: '0x3333333333333333333333333333333333333333',
+      simService,
+      sequencerClient,
+      nonceManager,
+      executionPreparer: async ({ executionPlan }) => {
+        const lease = await nonceManager.lease(
+          '0x2222222222222222222222222222222222222222',
+          executionPlan.orderHash
+        );
+        return {
+          orderHash: executionPlan.orderHash,
+          executionPlan,
+          txRequest: {
+            from: '0x2222222222222222222222222222222222222222',
+            to: executionPlan.executor,
+            data: executionPlan.executeCalldata,
+            value: 0n,
+            nonce: lease.nonce,
+            gas: 21_000n,
+            chainId: 42161n,
+            maxFeePerGas: 1n,
+            maxPriorityFeePerGas: 1n,
+            type: 'eip1559'
+          },
+          serializedTransaction:
+            '0x02f86c8201a9843b9aca00847735940082520894333333333333333333333333333333333333333380c001a0f1cb8962f55b4a7f7d8bd4409c9876f4bbef01a9fa6cb1f5e49f84b80d8dc945a0609d4c43fd4bbca60f1d469be9396a96f664f645dd5bb58b2f9b2585fa1313cf',
+          conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+          sender: '0x2222222222222222222222222222222222222222',
+          nonce: lease.nonce,
+          gas: 21_000n,
+          maxFeePerGas: 1n,
+          maxPriorityFeePerGas: 1n,
+          nonceLease: lease
+        };
+      },
+      shadowMode: true
+    });
+
+    expect(sendCalls).toEqual(0);
+    expect(decision.action).toEqual('NO_SEND');
+    expect(decision.reason).toEqual('SHADOW_MODE');
+    expect(decision.preparedExecution.serializedTransaction.startsWith('0x')).toEqual(true);
+  });
 });
