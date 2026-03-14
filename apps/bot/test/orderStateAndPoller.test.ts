@@ -7,7 +7,6 @@ import { assertLegalOrderTransition } from '../src/domain/orderState.js';
 import { OrdersApiClient } from '../src/intake/ordersApiClient.js';
 import { normalizeApiOrder } from '../src/intake/ordersApiClient.js';
 import { OrdersPoller } from '../src/intake/poller.js';
-import { InMemoryOrderStore } from '../src/store/memory/inMemoryOrderStore.js';
 
 function makeOrderPayload(orderType: string, fixtureName = 'live-01.json'): Record<string, unknown> {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
@@ -30,13 +29,12 @@ describe('order state and poller', () => {
     expect(() => assertLegalOrderTransition('DISCOVERED', 'LANDED')).toThrow('Illegal order transition');
   });
 
-  it('polls, dedupes by orderHash, and archives unsupported orders with reason code', async () => {
+  it('pollOnce returns fetched API payloads for coordinator ingestion', async () => {
     const supported = makeOrderPayload('Dutch_V3');
-    const unsupported = makeOrderPayload('Limit', 'live-02.json');
     const fetchImpl: typeof fetch = async () =>
       ({
         ok: true,
-        json: async () => [supported, supported, unsupported]
+        json: async () => [supported, supported]
       } as Response);
 
     const client = new OrdersApiClient({
@@ -44,22 +42,14 @@ describe('order state and poller', () => {
       chainId: 42161,
       fetchImpl
     });
-    const store = new InMemoryOrderStore();
-    const poller = new OrdersPoller(client, store);
+    const poller = new OrdersPoller(client);
 
     const result = await poller.pollOnce();
 
     expect(result).toEqual({
-      discovered: 2,
-      deduped: 1,
-      unsupported: 1
+      fetched: 2,
+      payloads: [supported, supported]
     });
-
-    const records = store.list().sort((a, b) => a.orderHash.localeCompare(b.orderHash));
-    expect(records[0]!.state).toEqual('DECODED');
-    expect(records[0]!.transitions.map((transition) => transition.state)).toEqual(['DISCOVERED', 'DECODED']);
-    expect(records[1]!.state).toEqual('UNSUPPORTED');
-    expect(records[1]!.reason).toEqual('NOT_DUTCH_V3');
   });
 
   it('rejects payloads where API orderHash mismatches canonical decoded hash', () => {

@@ -11,7 +11,8 @@
     "format": "prettier --check .",
     "typecheck": "pnpm -r --filter \"@uni/*\" run typecheck",
     "test": "vitest run",
-    "build": "pnpm -r --filter \"@uni/*\" run build"
+    "build": "pnpm -r --filter \"@uni/*\" run build",
+    "bot:start": "pnpm --filter @uni/bot start"
   },
   "devDependencies": {
     "@eslint/js": "^9.22.0",

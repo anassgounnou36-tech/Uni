@@ -1,5 +1,6 @@
 import type { SignedV3DutchOrder } from '@uni/protocol';
 import type { OrderState } from '../domain/orderState.js';
+import type { IngressSource } from '../ingress/types.js';
 
 export type OrderReasonCode =
   | 'SUPPORTED'
@@ -48,6 +49,11 @@ export type StoredOrderRecord = {
   state: OrderState;
   reason?: OrderReasonCode;
   transitions: StoredTransition[];
+  firstSeenAtMs: number;
+  firstSeenSource: IngressSource;
+  firstCreatedAtMs?: number;
+  firstRemoteIp?: string;
+  confirmedBySources: IngressSource[];
   createdAt: number;
   updatedAt: number;
 };
@@ -57,8 +63,21 @@ export type UpsertResult = {
   record: StoredOrderRecord;
 };
 
+export type IngressObservation = {
+  source: IngressSource;
+  receivedAtMs: number;
+  createdAtMs?: number;
+  remoteIp?: string;
+};
+
 export interface OrderStore {
-  upsertDiscovered(rawPayload: unknown, normalizedOrder: NormalizedOrder | undefined, nowMs?: number): UpsertResult;
+  upsertDiscovered(
+    rawPayload: unknown,
+    normalizedOrder: NormalizedOrder | undefined,
+    nowMs?: number,
+    ingress?: IngressObservation
+  ): UpsertResult;
+  recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): StoredOrderRecord;
   transition(orderHash: `0x${string}`, nextState: OrderState, reason?: OrderReasonCode, nowMs?: number): StoredOrderRecord;
   get(orderHash: `0x${string}`): StoredOrderRecord | undefined;
   list(): StoredOrderRecord[];
