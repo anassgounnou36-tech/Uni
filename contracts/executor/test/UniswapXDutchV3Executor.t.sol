@@ -169,6 +169,15 @@ contract UniswapXDutchV3ExecutorTest {
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenOut, tokenOut, 9e6));
     }
 
+    function testBadRouteRevertsWhenInputAndOutputTokensAreEqual() public {
+        tokenIn.mint(address(executor), 1e18);
+        adapter.setAmountOut(2e18);
+
+        vm.prank(REACTOR);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
+        executor.reactorCallback(_resolvedOrder(tokenIn, tokenIn, 1e18, 1e18), _route(tokenIn, tokenIn, 1e18));
+    }
+
     function testInsufficientOutputReverts() public {
         tokenIn.mint(address(executor), 1e18);
         adapter.setAmountOut(9e6);
