@@ -80,10 +80,16 @@ export class CamelotAmmv3Quoter {
         args: [params.tokenIn, params.tokenOut, params.amountIn, 0n]
       });
       if (Array.isArray(quoteResult)) {
-        quotedAmountOut = quoteResult[0] as bigint;
+        if (typeof quoteResult[0] !== 'bigint') {
+          return { ok: false, reason: 'CAMELOT_QUOTE_FAILED', details: 'unexpected Camelot quote shape' };
+        }
+        quotedAmountOut = quoteResult[0];
         observedFee = quoteResult[1] === undefined ? undefined : Number(quoteResult[1]);
       } else {
-        quotedAmountOut = quoteResult as bigint;
+        if (typeof quoteResult !== 'bigint') {
+          return { ok: false, reason: 'CAMELOT_QUOTE_FAILED', details: 'unexpected Camelot quote scalar result' };
+        }
+        quotedAmountOut = quoteResult;
       }
     } catch (error) {
       return {
