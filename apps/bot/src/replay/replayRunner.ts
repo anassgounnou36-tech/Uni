@@ -1,11 +1,10 @@
 import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
-import { resolveAt } from '@uni/protocol';
 import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../scheduler/hotLane.js';
-import type { Univ3QuoteModel } from '../routing/univ3QuoteModel.js';
-import { hasSameOutputTokenShape } from '../routing/univ3QuoteModel.js';
+import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
 import type { ForkSimService } from '../sim/forkSimService.js';
 import type { NormalizedOrder, OrderReasonCode, OrderStore } from '../store/types.js';
+import type { ConditionalEnvelope } from '../send/conditional.js';
 
 export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
@@ -27,10 +26,12 @@ export type ReplayRunnerParams = {
   corpus: readonly NormalizedOrder[];
   store: OrderStore;
   supportPolicy: ReplaySupportPolicy;
-  quoteModel: Univ3QuoteModel;
+  routePlanner: UniV3RoutePlanner;
   simService: ForkSimService;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   shadowMode: boolean;
+  executor: `0x${string}`;
+  conditionalEnvelope: ConditionalEnvelope;
 };
 
 function normalize(address: `0x${string}`): string {
@@ -47,7 +48,7 @@ function isAllowlisted(order: V3DutchOrder, allowlistedPairs: ReplaySupportPolic
   );
 }
 
-function classifySupport(order: V3DutchOrder, quoteModel: Univ3QuoteModel, policy: ReplaySupportPolicy): OrderReasonCode {
+function classifySupport(order: V3DutchOrder, policy: ReplaySupportPolicy): OrderReasonCode {
   if (order.baseOutputs.length === 0) {
     return 'EXOTIC_OUTPUT_SHAPE';
   }
@@ -63,9 +64,6 @@ function classifySupport(order: V3DutchOrder, quoteModel: Univ3QuoteModel, polic
   if (!isAllowlisted(order, policy.allowlistedPairs)) {
     return 'TOKEN_PAIR_NOT_ALLOWLISTED';
   }
-  if (!quoteModel.isRouteable(order.baseInput.token, firstOutput.token)) {
-    return 'NOT_ROUTEABLE';
-  }
   return 'SUPPORTED';
 }
 
@@ -78,7 +76,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     params.store.transition(normalized.orderHash, 'DECODED');
     const order = normalized.decodedOrder.order;
 
-    const support = classifySupport(order, params.quoteModel, params.supportPolicy);
+    const support = classifySupport(order, params.supportPolicy);
     if (support !== 'SUPPORTED') {
       params.store.transition(normalized.orderHash, 'UNSUPPORTED', support);
       records.push({
@@ -96,7 +94,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     const schedule = await findFirstProfitableBlock({
       order,
       baseEnv: params.resolveEnv,
-      quoteModel: params.quoteModel,
+      routePlanner: params.routePlanner,
       candidateBlocks: params.supportPolicy.candidateBlocks,
       threshold: params.supportPolicy.threshold,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
@@ -115,24 +113,8 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     }
 
     params.store.transition(normalized.orderHash, 'SCHEDULED');
-    const finalResolved = await resolveAt(order, {
-      ...params.resolveEnv,
-      blockNumberish: schedule.scheduledBlock
-    });
-    if (!hasSameOutputTokenShape(finalResolved)) {
-      params.store.transition(normalized.orderHash, 'UNSUPPORTED', 'EXOTIC_OUTPUT_SHAPE');
-      records.push({
-        orderHash: normalized.orderHash,
-        scheduledBlock: schedule.scheduledBlock,
-        decision: 'NO_SEND',
-        reason: 'EXOTIC_OUTPUT_SHAPE',
-        predictedEdge: 0n,
-        simResult: 'NOT_RUN'
-      });
-      continue;
-    }
 
-    const predictedEdge = schedule.evaluations.at(-1)?.netEdge ?? 0n;
+    const predictedEdge = schedule.chosenRoute.netEdge;
     const hotDecision = await runHotLaneStep({
       entry: {
         orderHash: normalized.orderHash,
@@ -141,9 +123,13 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         predictedEdge
       },
       currentBlock: schedule.scheduledBlock,
-      latestResolved: finalResolved,
       threshold: params.supportPolicy.threshold,
-      quoteRefresher: (resolved) => params.quoteModel.estimateHedgeOutput(resolved) - resolved.outputs.reduce((sum, o) => sum + o.amount, 0n),
+      normalizedOrder: normalized,
+      order,
+      routePlanner: params.routePlanner,
+      resolveEnv: params.resolveEnv,
+      conditionalEnvelope: params.conditionalEnvelope,
+      executor: params.executor,
       simService: params.simService,
       shadowMode: params.shadowMode
     });
@@ -175,8 +161,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       continue;
     }
 
-    const failureReason =
-      hotDecision.action === 'DROP' ? hotDecision.simResult?.reason ?? 'NOT_PROFITABLE' : 'NOT_PROFITABLE';
+    const failureReason = hotDecision.action === 'DROP' ? hotDecision.simResult?.reason ?? 'NOT_PROFITABLE' : 'NOT_PROFITABLE';
     params.store.transition(normalized.orderHash, 'SIM_FAIL', failureReason);
     records.push({
       orderHash: normalized.orderHash,

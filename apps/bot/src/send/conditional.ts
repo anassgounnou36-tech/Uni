@@ -16,10 +16,28 @@ export type ConditionalEnvelopeOptions = {
   enableKnownAccounts?: boolean;
 };
 
+export type TimestampMaxDerivationParams = {
+  currentL2TimestampSec: bigint;
+  scheduledWindowBlocks: bigint;
+  avgBlockTimeSec: bigint;
+  maxStalenessSec: bigint;
+};
+
+export function assertTimestampMaxFresh(envelope: ConditionalEnvelope, currentL2TimestampSec: bigint): void {
+  if (envelope.TimestampMax !== undefined && envelope.TimestampMax < currentL2TimestampSec) {
+    throw new Error(`TimestampMax ${envelope.TimestampMax} is stale (current: ${currentL2TimestampSec})`);
+  }
+}
+
 function assertRange(min: bigint | undefined, max: bigint | undefined, label: string): void {
   if (min !== undefined && max !== undefined && min > max) {
     throw new Error(`${label} min cannot exceed max`);
   }
+}
+
+export function deriveTimestampMax(params: TimestampMaxDerivationParams): bigint {
+  const windowSeconds = params.scheduledWindowBlocks * params.avgBlockTimeSec;
+  return params.currentL2TimestampSec + windowSeconds + params.maxStalenessSec;
 }
 
 export function normalizeConditionalEnvelope(

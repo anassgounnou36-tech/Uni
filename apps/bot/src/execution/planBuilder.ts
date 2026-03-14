@@ -1,0 +1,91 @@
+import type { ResolveEnv } from '@uni/protocol';
+import { encodeFunctionData, type Address } from 'viem';
+import { resolveAt } from '@uni/protocol';
+import { EXECUTOR_ABI } from './abi.js';
+import { encodeRoutePlanCallbackData } from './callbackData.js';
+import type { BuildExecutionPlanResult, ExecutionPlan } from './types.js';
+import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import type { ConditionalEnvelope } from '../send/conditional.js';
+import type { NormalizedOrder } from '../store/types.js';
+import { hasSameOutputTokenShape } from '../routing/univ3QuoteModel.js';
+
+const ARBITRUM_ONE_CHAIN_ID = 42161n;
+
+export type BuildExecutionPlanParams = {
+  normalizedOrder: NormalizedOrder;
+  planner: UniV3RoutePlanner;
+  executor: Address;
+  blockNumberish: bigint;
+  resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  conditionalEnvelope: ConditionalEnvelope;
+};
+
+function totalRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
+  return outputs.reduce((sum, output) => sum + output.amount, 0n);
+}
+
+export async function buildExecutionPlan(params: BuildExecutionPlanParams): Promise<BuildExecutionPlanResult> {
+  const signedOrder = params.normalizedOrder.decodedOrder;
+  const resolvedOrder = await resolveAt(
+    signedOrder.order,
+    {
+      ...params.resolveEnv,
+      blockNumberish: params.blockNumberish
+    },
+    signedOrder.signature
+  );
+
+  if (!hasSameOutputTokenShape(resolvedOrder)) {
+    return { ok: false, reason: 'UNSUPPORTED_SHAPE', details: 'resolved output shape is not same-token' };
+  }
+
+  const routeResult = await params.planner.planBestRoute({ resolvedOrder });
+  if (!routeResult.ok) {
+    return {
+      ok: false,
+      reason: routeResult.failure.reason === 'NOT_PROFITABLE' ? 'NOT_PROFITABLE' : 'NOT_ROUTEABLE',
+      details: routeResult.failure.details
+    };
+  }
+
+  const callbackData = encodeRoutePlanCallbackData(routeResult.route);
+  const executeCalldata = encodeFunctionData({
+    abi: EXECUTOR_ABI,
+    functionName: 'execute',
+    args: [
+      {
+        order: params.normalizedOrder.encodedOrder,
+        sig: params.normalizedOrder.signature
+      },
+      callbackData
+    ]
+  });
+
+  const plan: ExecutionPlan = {
+    orderHash: params.normalizedOrder.orderHash,
+    reactor: params.normalizedOrder.reactor,
+    executor: params.executor,
+    signedOrder: {
+      order: params.normalizedOrder.encodedOrder,
+      sig: params.normalizedOrder.signature
+    },
+    normalizedOrder: params.normalizedOrder,
+    resolvedOrder,
+    route: routeResult.route,
+    callbackData,
+    executeCalldata,
+    txRequestDraft: {
+      chainId: params.resolveEnv.chainId ?? ARBITRUM_ONE_CHAIN_ID,
+      to: params.executor,
+      data: executeCalldata,
+      value: 0n
+    },
+    conditionalEnvelope: params.conditionalEnvelope,
+    expectedRequiredOutput: totalRequiredOutput(resolvedOrder.outputs),
+    predictedNetEdge: routeResult.route.netEdge,
+    selectedBlock: params.blockNumberish,
+    resolveEnv: params.resolveEnv
+  };
+
+  return { ok: true, plan };
+}

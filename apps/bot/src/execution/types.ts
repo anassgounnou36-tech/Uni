@@ -1,0 +1,35 @@
+import type { Hex } from 'viem';
+import type { ResolveEnv, ResolvedV3DutchOrder } from '@uni/protocol';
+import type { NormalizedOrder } from '../store/types.js';
+import type { UniV3RoutePlan } from '../routing/univ3/types.js';
+import type { ConditionalEnvelope } from '../send/conditional.js';
+
+export type ExecutionPlan = {
+  orderHash: `0x${string}`;
+  reactor: `0x${string}`;
+  executor: `0x${string}`;
+  signedOrder: {
+    order: Hex;
+    sig: Hex;
+  };
+  normalizedOrder: NormalizedOrder;
+  resolvedOrder: ResolvedV3DutchOrder;
+  route: UniV3RoutePlan;
+  callbackData: Hex;
+  executeCalldata: Hex;
+  txRequestDraft: {
+    chainId: bigint;
+    to: `0x${string}`;
+    data: Hex;
+    value: bigint;
+  };
+  conditionalEnvelope: ConditionalEnvelope;
+  expectedRequiredOutput: bigint;
+  predictedNetEdge: bigint;
+  selectedBlock: bigint;
+  resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+};
+
+export type BuildExecutionPlanResult =
+  | { ok: true; plan: ExecutionPlan }
+  | { ok: false; reason: 'NOT_ROUTEABLE' | 'UNSUPPORTED_SHAPE' | 'NOT_PROFITABLE'; details?: string };

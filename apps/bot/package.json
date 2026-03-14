@@ -14,6 +14,7 @@
     "@uni/protocol": "workspace:*",
     "@uni/routing": "workspace:*",
     "@uni/sim": "workspace:*",
-    "@uni/telemetry": "workspace:*"
+    "@uni/telemetry": "workspace:*",
+    "viem": "^2.23.5"
   }
 }
