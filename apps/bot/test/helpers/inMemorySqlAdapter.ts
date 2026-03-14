@@ -122,7 +122,9 @@ export function createInMemorySqlAdapter(state: SharedState = createSharedSqlSta
         return { rows: (row ? [{ next_nonce: row.next_nonce }] : []) as T[] };
       }
 
-      throw new Error(`Unsupported SQL in test adapter: ${sql}`);
+      const compact = sql.trim().replace(/\s+/g, ' ');
+      const snippet = compact.length > 120 ? `${compact.slice(0, 120)}…` : compact;
+      throw new Error(`Unsupported SQL in test adapter: ${snippet}`);
     },
     async close(): Promise<void> {
       return;

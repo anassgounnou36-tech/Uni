@@ -93,6 +93,9 @@ export async function buildRuntimeFromConfig(
       sqlAdapter = await createAdapter(config.databaseUrl);
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
+      if (detail.includes('failed to create Postgres adapter for durable runtime')) {
+        throw error;
+      }
       throw new Error(`failed to create Postgres adapter for durable runtime: ${detail}`);
     }
   }
