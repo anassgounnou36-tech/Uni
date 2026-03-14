@@ -24,12 +24,12 @@ export type ExecutionPlan = {
     value: bigint;
   };
   conditionalEnvelope: ConditionalEnvelope;
-  expectedRequiredOutput: bigint;
-  predictedNetEdge: bigint;
+  requiredOutputOut: bigint;
+  predictedNetEdgeOut: bigint;
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
 };
 
 export type BuildExecutionPlanResult =
   | { ok: true; plan: ExecutionPlan }
-  | { ok: false; reason: 'NOT_ROUTEABLE' | 'UNSUPPORTED_SHAPE' | 'NOT_PROFITABLE'; details?: string };
+  | { ok: false; reason: 'NOT_ROUTEABLE' | 'NOT_PRICEABLE_GAS' | 'UNSUPPORTED_SHAPE' | 'NOT_PROFITABLE'; details?: string };

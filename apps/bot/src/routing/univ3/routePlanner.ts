@@ -1,6 +1,7 @@
 import type { Address } from 'viem';
 import { discoverPool } from './poolDiscovery.js';
 import { quoteExactInputSingle } from './quoter.js';
+import { convertGasWeiToTokenOut } from './gasValue.js';
 import type {
   RoutePlannerInput,
   RoutePlanningPolicy,
@@ -26,7 +27,8 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
     slippageBufferBps: policy?.slippageBufferBps ?? 50n,
     gasEstimateWei: policy?.gasEstimateWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
-    riskBufferWei: policy?.riskBufferWei ?? 0n
+    riskBufferOut: policy?.riskBufferOut ?? 0n,
+    profitFloorOut: policy?.profitFloorOut ?? 0n
   };
 }
 
@@ -52,6 +54,8 @@ export class UniV3RoutePlanner {
     const requiredOutput = sumRequiredOutput(resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>);
     const candidates: UniV3RoutePlan[] = [];
     const consideredFees: UniV3FeeTier[] = [];
+    let quoteFailures = 0;
+    let profitabilityRejects = 0;
 
     for (const feeTier of policy.feeTiers) {
       consideredFees.push(feeTier);
@@ -63,16 +67,37 @@ export class UniV3RoutePlanner {
       try {
         const quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
         const quotedAmountOut = quote.amountOut;
-        const bpsToKeep = 10_000n - policy.slippageBufferBps;
-        const slippageFloor = applyBpsFloor(quotedAmountOut, bpsToKeep);
-        const riskBufferWei = policy.riskBufferWei + (quotedAmountOut * policy.riskBufferBps) / 10_000n;
-        const minAmountOut = slippageFloor - riskBufferWei;
-        if (minAmountOut < requiredOutput) {
+        const slippageBufferOut = quotedAmountOut - applyBpsFloor(quotedAmountOut, 10_000n - policy.slippageBufferBps);
+        const gasWei = policy.gasEstimateWei > 0n ? policy.gasEstimateWei : quote.gasEstimate;
+        const gasConversion = await convertGasWeiToTokenOut({
+          client: this.context.client,
+          factory: this.context.factory,
+          quoter: this.context.quoter,
+          tokenOut,
+          gasWei,
+          supportedFeeTiers: policy.feeTiers
+        });
+        if (!gasConversion.ok) {
+          return {
+            ok: false,
+            failure: { reason: 'NOT_PRICEABLE_GAS' },
+            consideredFees
+          };
+        }
+        const gasCostOut = gasConversion.gasCostOut;
+        const riskBufferOut = policy.riskBufferOut + (quotedAmountOut * policy.riskBufferBps) / 10_000n;
+        const profitFloorOut = policy.profitFloorOut;
+        const grossEdgeOut = quotedAmountOut - requiredOutput;
+        const slippageFloorOut = quotedAmountOut - slippageBufferOut;
+        const profitabilityFloorOut = requiredOutput + gasCostOut + riskBufferOut + profitFloorOut;
+        const minAmountOut = slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut;
+        const netEdgeOut = quotedAmountOut - requiredOutput - slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
+
+        if (quotedAmountOut < minAmountOut || netEdgeOut <= 0n) {
+          profitabilityRejects += 1;
           continue;
         }
-        const grossEdge = quotedAmountOut - requiredOutput;
-        const gasCostWei = policy.gasEstimateWei > 0n ? policy.gasEstimateWei : quote.gasEstimate;
-        const netEdge = grossEdge - gasCostWei - riskBufferWei;
+
         candidates.push({
           tokenIn,
           tokenOut,
@@ -81,13 +106,17 @@ export class UniV3RoutePlanner {
           quotedAmountOut,
           poolFee: feeTier,
           minAmountOut,
-          grossEdge,
-          gasCostWei,
-          riskBufferWei,
-          netEdge
+          slippageBufferOut,
+          gasCostOut,
+          riskBufferOut,
+          profitFloorOut,
+          grossEdgeOut,
+          netEdgeOut
         });
       } catch (error) {
         // Per-fee quote failures are tolerated so other fee tiers can still produce a route.
+        // We still track failure count and surface it when no candidate route is produced.
+        quoteFailures += 1;
         void error;
       }
     }
@@ -97,15 +126,15 @@ export class UniV3RoutePlanner {
         ok: false,
         failure: {
           reason: 'NOT_ROUTEABLE',
-          details: 'no fee tier produced a valid minAmountOut >= requiredOutput'
+          details: `no fee tier produced a valid route (quote failures=${quoteFailures}, profitabilityRejects=${profitabilityRejects})`
         },
         consideredFees
       };
     }
 
-    const sorted = [...candidates].sort((a, b) => (a.netEdge > b.netEdge ? -1 : a.netEdge < b.netEdge ? 1 : 0));
+    const sorted = [...candidates].sort((a, b) => (a.netEdgeOut > b.netEdgeOut ? -1 : a.netEdgeOut < b.netEdgeOut ? 1 : 0));
     const best = sorted[0]!;
-    if (best.netEdge <= 0n) {
+    if (best.netEdgeOut <= 0n) {
       return { ok: false, failure: { reason: 'NOT_PROFITABLE' }, consideredFees };
     }
 

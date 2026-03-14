@@ -63,3 +63,9 @@ export function buildFreshnessGuard(timestampMax: bigint, blockNumberMax?: bigin
     ...(blockNumberMax !== undefined ? { BlockNumberMax: blockNumberMax } : {})
   };
 }
+
+export function deriveFreshnessEnvelopeFromSchedule(
+  params: TimestampMaxDerivationParams & { blockNumberMax?: bigint }
+): ConditionalEnvelope {
+  return buildFreshnessGuard(deriveTimestampMax(params), params.blockNumberMax);
+}

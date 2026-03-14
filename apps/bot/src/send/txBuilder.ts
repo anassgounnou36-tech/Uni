@@ -17,9 +17,11 @@ function applyGasHeadroom(baseGas: bigint, headroomBps: bigint): bigint {
 }
 
 function nonceToNumber(nonce: bigint): number {
+  // viem prepareTransactionRequest currently expects nonce as number.
+  // We guard conversion to prevent precision loss outside safe integer range.
   const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
   if (nonce > maxSafe) {
-    throw new Error('nonce exceeds MAX_SAFE_INTEGER for transaction preparation');
+    throw new Error(`nonce ${nonce} exceeds MAX_SAFE_INTEGER for transaction preparation`);
   }
   return Number(nonce);
 }

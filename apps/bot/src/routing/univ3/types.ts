@@ -8,25 +8,28 @@ export type RoutePlanningPolicy = {
   slippageBufferBps?: bigint;
   gasEstimateWei?: bigint;
   riskBufferBps?: bigint;
-  riskBufferWei?: bigint;
+  riskBufferOut?: bigint;
+  profitFloorOut?: bigint;
 };
 
 export type UniV3RoutePlan = {
   tokenIn: Address;
   tokenOut: Address;
   amountIn: bigint;
-  requiredOutput: bigint;
-  quotedAmountOut: bigint;
+  requiredOutput: bigint; // output-token units
+  quotedAmountOut: bigint; // output-token units
   poolFee: UniV3FeeTier;
-  minAmountOut: bigint;
-  grossEdge: bigint;
-  gasCostWei: bigint;
-  riskBufferWei: bigint;
-  netEdge: bigint;
+  minAmountOut: bigint; // output-token units
+  slippageBufferOut: bigint; // output-token units
+  gasCostOut: bigint; // output-token units
+  riskBufferOut: bigint; // output-token units
+  profitFloorOut: bigint; // output-token units
+  grossEdgeOut: bigint; // output-token units
+  netEdgeOut: bigint; // output-token units
 };
 
 export type RoutePlanningFailure = {
-  reason: 'NOT_ROUTEABLE' | 'NO_POOL' | 'POOL_DEAD' | 'QUOTE_FAILED' | 'NOT_PROFITABLE';
+  reason: 'NOT_ROUTEABLE' | 'NO_POOL' | 'POOL_DEAD' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'NOT_PRICEABLE_GAS';
   details?: string;
 };
 

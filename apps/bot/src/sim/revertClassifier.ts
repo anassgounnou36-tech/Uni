@@ -9,7 +9,7 @@ type ClassificationSignal = {
 };
 
 const CLASSIFICATION_PATTERNS: Array<{ code: OrderReasonCode; pattern: RegExp }> = [
-  { code: 'SIM_INVALID_ORDER', pattern: /invalid|malformed|bad order|validation/i },
+  { code: 'SIM_INVALID_ORDER', pattern: /(invalid order|malformed order|bad order|order validation failed)/i },
   { code: 'SIM_EXPIRED', pattern: /expired|deadline|stale|timestamp/i },
   { code: 'SIM_UNSUPPORTED_SHAPE', pattern: /unsupported shape|mismatch|token mismatch/i },
   { code: 'SIM_NO_ROUTE', pattern: /no route|pool not found|routeable/i },

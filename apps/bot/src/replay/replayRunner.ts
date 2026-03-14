@@ -1,14 +1,19 @@
 import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
+import { resolveAt } from '@uni/protocol';
 import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../scheduler/hotLane.js';
 import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
 import type { ForkSimService } from '../sim/forkSimService.js';
 import type { NormalizedOrder, OrderReasonCode, OrderStore } from '../store/types.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
+import type { SequencerClient } from '../send/sequencerClient.js';
+import { NonceManager } from '../send/nonceManager.js';
+import type { PreparedExecution } from '../execution/preparedExecution.js';
+import type { ExecutionPlan } from '../execution/types.js';
 
 export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
-  threshold: bigint;
+  thresholdOut: bigint;
   candidateBlocks: readonly bigint[];
   competeWindowBlocks: bigint;
 };
@@ -18,8 +23,9 @@ export type ReplayRecord = {
   scheduledBlock?: bigint;
   decision: 'NO_SEND' | 'WOULD_SEND';
   reason: OrderReasonCode;
-  predictedEdge: bigint;
+  predictedEdgeOut: bigint;
   simResult: 'SIM_OK' | 'SIM_FAIL' | 'NOT_RUN';
+  preparedExecution?: PreparedExecution;
 };
 
 export type ReplayRunnerParams = {
@@ -32,6 +38,9 @@ export type ReplayRunnerParams = {
   shadowMode: boolean;
   executor: `0x${string}`;
   conditionalEnvelope: ConditionalEnvelope;
+  sequencerClient: SequencerClient;
+  nonceManager: NonceManager;
+  executionPreparer: (input: { blockNumberMax?: bigint; executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
 };
 
 function normalize(address: `0x${string}`): string {
@@ -83,7 +92,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
         reason: support,
-        predictedEdge: 0n,
+        predictedEdgeOut: 0n,
         simResult: 'NOT_RUN'
       });
       continue;
@@ -96,17 +105,27 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       baseEnv: params.resolveEnv,
       routePlanner: params.routePlanner,
       candidateBlocks: params.supportPolicy.candidateBlocks,
-      threshold: params.supportPolicy.threshold,
+      threshold: params.supportPolicy.thresholdOut,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
     });
 
     if (!schedule) {
-      params.store.transition(normalized.orderHash, 'SIM_FAIL', 'SCHEDULER_NO_EDGE');
+      let noEdgeReason: OrderReasonCode = 'SCHEDULER_NO_EDGE';
+      const probeBlock = params.supportPolicy.candidateBlocks[0];
+      if (probeBlock !== undefined) {
+        const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlock });
+        const probeRoute = await params.routePlanner.planBestRoute({ resolvedOrder: probeResolved });
+        if (!probeRoute.ok && probeRoute.failure.reason === 'NOT_PRICEABLE_GAS') {
+          noEdgeReason = 'NOT_PRICEABLE_GAS';
+        }
+      }
+
+      params.store.transition(normalized.orderHash, 'SIM_FAIL', noEdgeReason);
       records.push({
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
-        reason: 'SCHEDULER_NO_EDGE',
-        predictedEdge: 0n,
+        reason: noEdgeReason,
+        predictedEdgeOut: 0n,
         simResult: 'NOT_RUN'
       });
       continue;
@@ -114,16 +133,16 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
 
     params.store.transition(normalized.orderHash, 'SCHEDULED');
 
-    const predictedEdge = schedule.chosenRoute.netEdge;
+    const predictedEdgeOut = schedule.chosenRoute.netEdgeOut;
     const hotDecision = await runHotLaneStep({
       entry: {
         orderHash: normalized.orderHash,
         scheduledBlock: schedule.scheduledBlock,
         competeWindowEnd: schedule.competeWindowEnd,
-        predictedEdge
+        predictedEdgeOut
       },
       currentBlock: schedule.scheduledBlock,
-      threshold: params.supportPolicy.threshold,
+      thresholdOut: params.supportPolicy.thresholdOut,
       normalizedOrder: normalized,
       order,
       routePlanner: params.routePlanner,
@@ -131,6 +150,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       conditionalEnvelope: params.conditionalEnvelope,
       executor: params.executor,
       simService: params.simService,
+      sequencerClient: params.sequencerClient,
+      nonceManager: params.nonceManager,
+      executionPreparer: params.executionPreparer,
       shadowMode: params.shadowMode
     });
 
@@ -142,8 +164,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         scheduledBlock: schedule.scheduledBlock,
         decision: 'WOULD_SEND',
         reason: 'SUPPORTED',
-        predictedEdge,
-        simResult: 'SIM_OK'
+        predictedEdgeOut,
+        simResult: 'SIM_OK',
+        preparedExecution: hotDecision.preparedExecution
       });
       continue;
     }
@@ -155,8 +178,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         scheduledBlock: schedule.scheduledBlock,
         decision: 'NO_SEND',
         reason: 'SHADOW_MODE',
-        predictedEdge,
-        simResult: 'SIM_OK'
+        predictedEdgeOut,
+        simResult: 'SIM_OK',
+        preparedExecution: hotDecision.preparedExecution
       });
       continue;
     }
@@ -168,8 +192,9 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       scheduledBlock: schedule.scheduledBlock,
       decision: 'NO_SEND',
       reason: failureReason,
-      predictedEdge,
-      simResult: 'SIM_FAIL'
+      predictedEdgeOut,
+      simResult: 'SIM_FAIL',
+      preparedExecution: hotDecision.action === 'DROP' ? hotDecision.preparedExecution : undefined
     });
   }
 

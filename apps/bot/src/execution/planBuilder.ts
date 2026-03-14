@@ -43,7 +43,12 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
   if (!routeResult.ok) {
     return {
       ok: false,
-      reason: routeResult.failure.reason === 'NOT_PROFITABLE' ? 'NOT_PROFITABLE' : 'NOT_ROUTEABLE',
+      reason:
+        routeResult.failure.reason === 'NOT_PROFITABLE'
+          ? 'NOT_PROFITABLE'
+          : routeResult.failure.reason === 'NOT_PRICEABLE_GAS'
+            ? 'NOT_PRICEABLE_GAS'
+            : 'NOT_ROUTEABLE',
       details: routeResult.failure.details
     };
   }
@@ -81,8 +86,8 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
       value: 0n
     },
     conditionalEnvelope: params.conditionalEnvelope,
-    expectedRequiredOutput: totalRequiredOutput(resolvedOrder.outputs),
-    predictedNetEdge: routeResult.route.netEdge,
+    requiredOutputOut: totalRequiredOutput(resolvedOrder.outputs),
+    predictedNetEdgeOut: routeResult.route.netEdgeOut,
     selectedBlock: params.blockNumberish,
     resolveEnv: params.resolveEnv
   };

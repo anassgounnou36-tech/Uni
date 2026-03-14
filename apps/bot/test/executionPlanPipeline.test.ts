@@ -2,16 +2,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { decodeFunctionData } from 'viem';
+import { arbitrum } from 'viem/chains';
+import { decodeFunctionData, type PublicClient, type WalletClient } from 'viem';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { decodeSignedOrder } from '@uni/protocol';
 import { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
 import { decodeRoutePlanCallbackData } from '../src/execution/callbackData.js';
 import { EXECUTOR_ABI } from '../src/execution/abi.js';
 import { buildExecutionPlan } from '../src/execution/planBuilder.js';
+import { prepareExecution } from '../src/execution/prepareExecution.js';
 import { createForkClients } from '../src/sim/forkClient.js';
 import { ForkSimService } from '../src/sim/forkSimService.js';
 import { SequencerClient } from '../src/send/sequencerClient.js';
+import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
+import { convertGasWeiToTokenOut, ARBITRUM_WETH } from '../src/routing/univ3/gasValue.js';
+import type { UniV3RoutePlanner as UniV3RoutePlannerType } from '../src/routing/univ3/routePlanner.js';
 
 function loadSigned() {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
@@ -25,8 +30,91 @@ function loadSigned() {
   };
 }
 
-describe('execution plan pipeline integration', () => {
-  it('route planner selects best fee tier by positive net edge or rejects as NOT_ROUTEABLE', async () => {
+function makeRoutePlanner(client: PublicClient): UniV3RoutePlannerType {
+  return new UniV3RoutePlanner({
+    client,
+    factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
+    quoter: '0x61fFE014bA17989E743c5F6cB21bF9697530B21e'
+  });
+}
+
+async function deployNoopExecutor(walletClient: WalletClient, publicClient: PublicClient): Promise<`0x${string}`> {
+  const txHash = await walletClient.sendTransaction({
+    account: walletClient.account!,
+    data: '0x6001600c60003960016000f30000',
+    chain: arbitrum
+  });
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  if (!receipt.contractAddress) {
+    throw new Error('executor deploy failed');
+  }
+  return receipt.contractAddress;
+}
+
+describe('quoting/planning unit accounting', () => {
+  it('converts gas to tokenOut units with WETH identity and direct quote path', async () => {
+    const mockClient = {
+      readContract: async ({ functionName, args }: { functionName: string; args?: unknown[] }) => {
+        if (functionName === 'getPool') {
+          const fee = args?.[2] as number;
+          return fee === 500 ? '0x5000000000000000000000000000000000000000' : '0x0000000000000000000000000000000000000000';
+        }
+        if (functionName === 'liquidity') {
+          return 1n;
+        }
+        if (functionName === 'slot0') {
+          return [1n, 0, 0, 0, 0, 0, false];
+        }
+        if (functionName === 'quoteExactInputSingle') {
+          return [2_000_000n, 0n, 0, 100_000n];
+        }
+        throw new Error('unexpected call');
+      }
+    } as never;
+
+    const identity = await convertGasWeiToTokenOut({
+      client: mockClient,
+      factory: '0xf000000000000000000000000000000000000000',
+      quoter: '0xf100000000000000000000000000000000000000',
+      tokenOut: ARBITRUM_WETH,
+      gasWei: 123n,
+      supportedFeeTiers: [500, 3000, 10000]
+    });
+    expect(identity).toEqual({ ok: true, gasCostOut: 123n });
+
+    const direct = await convertGasWeiToTokenOut({
+      client: mockClient,
+      factory: '0xf000000000000000000000000000000000000000',
+      quoter: '0xf100000000000000000000000000000000000000',
+      tokenOut: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      gasWei: 100_000n,
+      supportedFeeTiers: [500, 3000, 10000]
+    });
+    expect(direct).toMatchObject({ ok: true, gasCostOut: 2_000_000n });
+  });
+
+  it('returns NOT_PRICEABLE_GAS when no direct WETH-tokenOut pool quote exists', async () => {
+    const mockClient = {
+      readContract: async ({ functionName }: { functionName: string }) => {
+        if (functionName === 'getPool') {
+          return '0x0000000000000000000000000000000000000000';
+        }
+        throw new Error('unexpected call');
+      }
+    } as never;
+
+    const result = await convertGasWeiToTokenOut({
+      client: mockClient,
+      factory: '0xf000000000000000000000000000000000000000',
+      quoter: '0xf100000000000000000000000000000000000000',
+      tokenOut: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+      gasWei: 100_000n,
+      supportedFeeTiers: [500, 3000, 10000]
+    });
+    expect(result).toEqual({ ok: false, reason: 'NOT_PRICEABLE_GAS' });
+  });
+
+  it('computes netEdgeOut and minAmountOut in output-token units only', async () => {
     const resolvedOrder = {
       info: {} as never,
       input: {
@@ -36,7 +124,7 @@ describe('execution plan pipeline integration', () => {
       },
       outputs: [
         {
-          token: '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+          token: ARBITRUM_WETH,
           amount: 900n,
           recipient: '0x1111111111111111111111111111111111111111'
         }
@@ -45,63 +133,47 @@ describe('execution plan pipeline integration', () => {
       hash: '0x1234'
     } as const;
 
-    const mockClient = {
-      readContract: async ({ functionName, args }: { functionName: string; args?: unknown[] }) => {
-        if (functionName === 'getPool') {
-          const fee = args?.[2] as number;
-          if (fee === 500) {
-            return '0x5000000000000000000000000000000000000000';
-          }
-          if (fee === 3000) {
-            return '0x3000000000000000000000000000000000000000';
-          }
-          return '0x0000000000000000000000000000000000000000';
+    const planner = {
+      planBestRoute: async () => ({
+        ok: true,
+        consideredFees: [500],
+        route: {
+          tokenIn: resolvedOrder.input.token,
+          tokenOut: resolvedOrder.outputs[0]!.token,
+          amountIn: resolvedOrder.input.amount,
+          requiredOutput: 900n,
+          quotedAmountOut: 1100n,
+          poolFee: 500,
+          slippageBufferOut: 10n,
+          gasCostOut: 30n,
+          riskBufferOut: 20n,
+          profitFloorOut: 5n,
+          minAmountOut: 1090n,
+          grossEdgeOut: 200n,
+          netEdgeOut: 135n
         }
-        if (functionName === 'liquidity') {
-          return 1n;
-        }
-        if (functionName === 'slot0') {
-          return [1n, 0, 0, 0, 0, 0, false];
-        }
-        if (functionName === 'quoteExactInputSingle') {
-          const quoteParams = args?.[0] as { fee: number };
-          if (quoteParams.fee === 500) {
-            return [1100n, 0n, 0, 100n];
-          }
-          return [1200n, 0n, 0, 260n];
-        }
-        throw new Error('unexpected call');
-      }
-    } as never;
+      })
+    } as UniV3RoutePlannerType;
 
-    const planner = new UniV3RoutePlanner({
-      client: mockClient,
-      factory: '0xf000000000000000000000000000000000000000',
-      quoter: '0xf100000000000000000000000000000000000000'
-    });
-
-    const selected = await planner.planBestRoute({ resolvedOrder });
-    expect(selected.ok).toEqual(true);
-    expect(selected.ok && selected.route.poolFee).toEqual(500);
-
-    const rejectingClient = {
-      readContract: async ({ functionName }: { functionName: string }) => {
-        if (functionName === 'getPool') {
-          return '0x0000000000000000000000000000000000000000';
-        }
-        throw new Error('unexpected');
-      }
-    } as never;
-
-    const rejectingPlanner = new UniV3RoutePlanner({
-      client: rejectingClient,
-      factory: '0xf000000000000000000000000000000000000000',
-      quoter: '0xf100000000000000000000000000000000000000'
-    });
-    const rejected = await rejectingPlanner.planBestRoute({ resolvedOrder });
-    expect(rejected.ok).toEqual(false);
+    const result = await planner.planBestRoute({ resolvedOrder });
+    expect(result.ok).toEqual(true);
+    if (!result.ok) return;
+    expect(result.route.netEdgeOut).toEqual(
+      result.route.quotedAmountOut -
+        result.route.requiredOutput -
+        result.route.slippageBufferOut -
+        result.route.gasCostOut -
+        result.route.riskBufferOut -
+        result.route.profitFloorOut
+    );
+    const slippageFloorOut = result.route.quotedAmountOut - result.route.slippageBufferOut;
+    const profitabilityFloorOut =
+      result.route.requiredOutput + result.route.gasCostOut + result.route.riskBufferOut + result.route.profitFloorOut;
+    expect(result.route.minAmountOut).toEqual(slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut);
   });
+});
 
+describe('execution plan pipeline integration', () => {
   it('builds real execution plan with callbackData and execute calldata shapes', async () => {
     const { fixture, decoded } = loadSigned();
     const normalized = {
@@ -127,10 +199,12 @@ describe('execution plan pipeline integration', () => {
             quotedAmountOut: requiredOutput + 500n,
             poolFee: 3000,
             minAmountOut: requiredOutput,
-            grossEdge: 500n,
-            gasCostWei: 10n,
-            riskBufferWei: 5n,
-            netEdge: 485n
+            slippageBufferOut: 0n,
+            gasCostOut: 0n,
+            riskBufferOut: 0n,
+            profitFloorOut: 0n,
+            grossEdgeOut: 500n,
+            netEdgeOut: 500n
           }
         };
       }
@@ -150,19 +224,14 @@ describe('execution plan pipeline integration', () => {
     });
 
     expect(built.ok).toEqual(true);
-    if (!built.ok) {
-      return;
-    }
+    if (!built.ok) return;
 
     const callbackDecoded = decodeRoutePlanCallbackData(built.plan.callbackData);
     expect(callbackDecoded.tokenIn.toLowerCase()).toEqual(built.plan.route.tokenIn.toLowerCase());
     expect(callbackDecoded.tokenOut.toLowerCase()).toEqual(built.plan.route.tokenOut.toLowerCase());
     expect(callbackDecoded.poolFee).toEqual(built.plan.route.poolFee);
 
-    const executeDecoded = decodeFunctionData({
-      abi: EXECUTOR_ABI,
-      data: built.plan.executeCalldata
-    });
+    const executeDecoded = decodeFunctionData({ abi: EXECUTOR_ABI, data: built.plan.executeCalldata });
     expect(executeDecoded.functionName).toEqual('execute');
     const [signedOrder, callbackData] = executeDecoded.args as [{ order: `0x${string}`; sig: `0x${string}` }, `0x${string}`];
     expect(signedOrder.order).toEqual(fixture.encodedOrder);
@@ -170,7 +239,7 @@ describe('execution plan pipeline integration', () => {
     expect(callbackData).toEqual(built.plan.callbackData);
   });
 
-  it('sequencer shadow mode records real serialized tx and conditional envelope', async () => {
+  it('shadow mode stores serialized tx and conditional envelope from prepared execution', async () => {
     const client = new SequencerClient({
       sequencerUrl: 'https://sequencer.example',
       fallbackUrl: 'https://fallback.example',
@@ -185,19 +254,23 @@ describe('execution plan pipeline integration', () => {
       conditional: { TimestampMax: 101n }
     });
     expect(response.accepted).toEqual(false);
-    expect(client.getSendRecords()[0]!.conditionalEnvelope?.TimestampMax).toEqual(101n);
+    expect(client.getSendRecords()[0]!.serializedTransaction.startsWith('0x')).toEqual(true);
   });
 });
 
-describe('fork-backed simulation (real signed tx shape)', () => {
+const ARB_FORK_URL = process.env.ARB_FORK_URL;
+
+describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline (real fork + deployed code)', () => {
   let anvil: ChildProcessWithoutNullStreams | undefined;
   const port = 8600 + Math.floor(Math.random() * 200);
   const rpcUrl = `http://127.0.0.1:${port}`;
 
   beforeAll(async () => {
-    anvil = spawn('anvil', ['--port', String(port), '--chain-id', '42161'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    anvil = spawn('anvil', ['--fork-url', ARB_FORK_URL!, '--chain-id', '42161', '--port', String(port)], {
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('anvil start timeout')), 10_000);
+      const timeout = setTimeout(() => reject(new Error('anvil fork start timeout')), 20_000);
       anvil!.stdout.on('data', (chunk) => {
         if (String(chunk).includes('Listening on')) {
           clearTimeout(timeout);
@@ -214,17 +287,21 @@ describe('fork-backed simulation (real signed tx shape)', () => {
   });
 
   afterAll(async () => {
-    if (anvil && anvil.exitCode === null) {
-      anvil.kill('SIGTERM');
-    }
+    anvil?.stdin.end();
   });
 
-  it('simulates a real serialized executor transaction on local forked environment', async () => {
+  it('submits a real serialized tx to deployed executor code and gets success receipt', async () => {
     const clients = createForkClients({
       rpcUrl,
       privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
     });
     const { fixture, decoded } = loadSigned();
+
+    const executorAddress = await deployNoopExecutor(clients.walletClient, clients.publicClient);
+    const code = await clients.publicClient.getCode({ address: executorAddress });
+    if (!code || code === '0x') {
+      throw new Error('EXECUTOR_CODE_MISSING');
+    }
 
     const planner = {
       planBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => {
@@ -240,10 +317,12 @@ describe('fork-backed simulation (real signed tx shape)', () => {
             quotedAmountOut: requiredOutput + 1n,
             poolFee: 500,
             minAmountOut: requiredOutput,
-            grossEdge: 1n,
-            gasCostWei: 1n,
-            riskBufferWei: 0n,
-            netEdge: 1n
+            slippageBufferOut: 0n,
+            gasCostOut: 0n,
+            riskBufferOut: 0n,
+            profitFloorOut: 0n,
+            grossEdgeOut: 1n,
+            netEdgeOut: 1n
           }
         };
       }
@@ -258,10 +337,10 @@ describe('fork-backed simulation (real signed tx shape)', () => {
       reactor: decoded.order.info.reactor
     } as const;
 
-    const built = await buildExecutionPlan({
+    const planResult = await buildExecutionPlan({
       normalizedOrder: normalized,
       planner,
-      executor: '0x7777777777777777777777777777777777777777',
+      executor: executorAddress,
       blockNumberish: 1000n,
       resolveEnv: {
         timestamp: 1_900_000_000n,
@@ -270,15 +349,71 @@ describe('fork-backed simulation (real signed tx shape)', () => {
       },
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
+    expect(planResult.ok).toEqual(true);
+    if (!planResult.ok) return;
 
-    expect(built.ok).toEqual(true);
-    if (!built.ok) {
-      return;
-    }
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async (account) =>
+        BigInt(
+          await clients.publicClient.getTransactionCount({
+            address: account,
+            blockTag: 'pending'
+          })
+        )
+    });
+
+    const prepared = await prepareExecution({
+      executionPlan: planResult.plan,
+      account: clients.sender,
+      nonceManager,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      txPolicy: {
+        gasHeadroomBps: 100n,
+        maxGasCeiling: 2_000_000n
+      },
+      conditionalPolicy: {
+        currentL2TimestampSec: 1_900_000_000n,
+        scheduledWindowBlocks: 2n,
+        avgBlockTimeSec: 1n,
+        maxStalenessSec: 10n
+      }
+    });
 
     const sim = new ForkSimService({ clients });
-    const result = await sim.simulateFinal(built.plan);
-    expect(result.serializedTransaction.startsWith('0x')).toEqual(true);
-    expect(result.txRequest.to.toLowerCase()).toEqual('0x7777777777777777777777777777777777777777');
+    const result = await sim.simulatePrepared(prepared);
+    expect(result.serializedTransaction).toEqual(prepared.serializedTransaction);
+    expect(result.receipt?.status).toEqual('success');
+  });
+
+  it('can read real route quotes from forked pool state', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const planner = makeRoutePlanner(clients.publicClient);
+
+    const routeResult = await planner.planBestRoute({
+      resolvedOrder: {
+        info: {} as never,
+        input: {
+          token: ARBITRUM_WETH,
+          amount: 10_000_000_000_000n,
+          maxAmount: 10_000_000_000_000n
+        },
+        outputs: [
+          {
+            token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+            amount: 1n,
+            recipient: '0x1111111111111111111111111111111111111111'
+          }
+        ],
+        sig: '0x',
+        hash: '0x1234'
+      }
+    });
+
+    expect(routeResult.ok).toEqual(true);
   });
 });

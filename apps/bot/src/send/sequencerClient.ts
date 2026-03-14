@@ -1,5 +1,6 @@
 import { assertTimestampMaxFresh, normalizeConditionalEnvelope, type ConditionalEnvelope } from './conditional.js';
 import { classifySendResult, type JsonRpcErrorShape, type SendResultClassification } from './sendResultClassifier.js';
+import type { PreparedExecution } from '../execution/preparedExecution.js';
 
 type FetchLike = typeof fetch;
 
@@ -130,6 +131,15 @@ export class SequencerClient {
 
     this.records.push(...records);
     return { attempts, accepted: false, records };
+  }
+
+  async sendPreparedExecution(prepared: PreparedExecution): Promise<SequencerClientResult> {
+    return this.send({
+      orderHash: prepared.orderHash,
+      serializedTransaction: prepared.serializedTransaction,
+      nonce: prepared.nonce,
+      conditional: prepared.conditionalEnvelope
+    });
   }
 
   private async sendRpc(

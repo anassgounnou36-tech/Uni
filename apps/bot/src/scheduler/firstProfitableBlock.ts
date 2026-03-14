@@ -8,10 +8,12 @@ export type BlockEvaluation = {
   requiredOutput: bigint;
   quotedAmountOut: bigint;
   minAmountOut: bigint;
-  grossEdge: bigint;
-  gasCostWei: bigint;
-  riskBufferWei: bigint;
-  netEdge: bigint;
+  slippageBufferOut: bigint;
+  gasCostOut: bigint;
+  riskBufferOut: bigint;
+  profitFloorOut: bigint;
+  grossEdgeOut: bigint;
+  netEdgeOut: bigint;
   route?: UniV3RoutePlan;
 };
 
@@ -35,8 +37,6 @@ export type FirstProfitableBlockParams = {
   candidateBlocks: readonly bigint[];
   threshold: bigint;
   competeWindowBlocks: bigint;
-  gasCostEstimator?: (resolved: ResolvedV3DutchOrder, block: bigint) => bigint;
-  riskBufferEstimator?: (resolved: ResolvedV3DutchOrder, block: bigint) => bigint;
 };
 
 function totalOutputAmount(resolved: ResolvedV3DutchOrder): bigint {
@@ -59,10 +59,12 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         requiredOutput: totalOutputAmount(resolved),
         quotedAmountOut: 0n,
         minAmountOut: 0n,
-        grossEdge: 0n,
-        gasCostWei: 0n,
-        riskBufferWei: 0n,
-        netEdge: -1n
+        slippageBufferOut: 0n,
+        gasCostOut: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n,
+        grossEdgeOut: 0n,
+        netEdgeOut: -1n
       });
       continue;
     }
@@ -70,30 +72,22 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
     const route = routeResult.route;
     const requiredOutput = route.requiredOutput;
     const quotedAmountOut = route.quotedAmountOut;
-    const grossEdge = route.grossEdge;
-    const gasCostWei = params.gasCostEstimator?.(resolved, block) ?? route.gasCostWei;
-    const riskBufferWei = params.riskBufferEstimator?.(resolved, block) ?? route.riskBufferWei;
-    const netEdge = grossEdge - gasCostWei - riskBufferWei;
-
     const evaluation: BlockEvaluation = {
       block,
       requiredOutput,
       quotedAmountOut,
       minAmountOut: route.minAmountOut,
-      grossEdge,
-      gasCostWei,
-      riskBufferWei,
-      netEdge,
-      route: {
-        ...route,
-        gasCostWei,
-        riskBufferWei,
-        netEdge
-      }
+      slippageBufferOut: route.slippageBufferOut,
+      gasCostOut: route.gasCostOut,
+      riskBufferOut: route.riskBufferOut,
+      profitFloorOut: route.profitFloorOut,
+      grossEdgeOut: route.grossEdgeOut,
+      netEdgeOut: route.netEdgeOut,
+      route
     };
     evaluations.push(evaluation);
 
-    if (netEdge >= params.threshold) {
+    if (route.netEdgeOut >= params.threshold) {
       return {
         scheduledBlock: block,
         competeWindowStart: block,

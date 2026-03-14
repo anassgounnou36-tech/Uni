@@ -1,5 +1,5 @@
 import type { Address, PublicClient, TestClient, WalletClient } from 'viem';
-import type { ExecutionPlan } from '../execution/types.js';
+import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { OrderReasonCode } from '../store/types.js';
 
 export type ForkClients = {
@@ -24,7 +24,7 @@ export type SimTxRequest = {
 export type ForkSimResult = {
   ok: boolean;
   reason: OrderReasonCode;
-  executionPlan: ExecutionPlan;
+  preparedExecution: PreparedExecution;
   txRequest: SimTxRequest;
   serializedTransaction: `0x${string}`;
   gasUsed?: bigint;
