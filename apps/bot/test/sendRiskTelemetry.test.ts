@@ -33,8 +33,8 @@ const SAMPLE_PLAN: ExecutionPlan = {
     value: 0n
   },
   conditionalEnvelope: { TimestampMax: 100n },
-  expectedRequiredOutput: 1n,
-  predictedNetEdge: 1n,
+  requiredOutputOut: 1n,
+  predictedNetEdgeOut: 1n,
   selectedBlock: 1n,
   resolveEnv: { timestamp: 1n, basefee: 1n, chainId: 42161n }
 };
@@ -52,7 +52,10 @@ describe('send path primitives', () => {
       avgBlockTimeSec: 1n,
       maxStalenessSec: 5n
     });
-    const freshness = buildFreshnessGuard(timestampMax, 123n);
+    const freshness = buildFreshnessGuard(timestampMax, {
+      enableConditionalBlockBounds: true,
+      blockNumberMax: 123n
+    });
     expect(freshness).toEqual({
       TimestampMax: 1_900_000_007n,
       BlockNumberMax: 123n

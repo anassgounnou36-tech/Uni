@@ -1,5 +1,5 @@
 import type { Address, PublicClient, WalletClient } from 'viem';
-import { buildFreshnessGuard, deriveTimestampMax, type ConditionalEnvelope } from '../send/conditional.js';
+import { deriveFreshnessEnvelopeFromSchedule, type ConditionalEnvelope } from '../send/conditional.js';
 import { NonceManager } from '../send/nonceManager.js';
 import { buildTransaction, validateSerializedTransactionShape } from '../send/txBuilder.js';
 import type { TxBuildPolicy } from '../send/types.js';
@@ -19,6 +19,8 @@ export type PrepareExecutionParams = {
     scheduledWindowBlocks: bigint;
     avgBlockTimeSec: bigint;
     maxStalenessSec: bigint;
+    enableConditionalBlockBounds?: boolean;
+    blockNumberMin?: bigint;
     blockNumberMax?: bigint;
   };
 };
@@ -43,17 +45,15 @@ export async function prepareExecution(params: PrepareExecutionParams): Promise<
       chainId: params.executionPlan.txRequestDraft.chainId
     });
 
-    const timestampMax = deriveTimestampMax({
+    const conditionalEnvelope: ConditionalEnvelope = deriveFreshnessEnvelopeFromSchedule({
       currentL2TimestampSec: params.conditionalPolicy.currentL2TimestampSec,
       scheduledWindowBlocks: params.conditionalPolicy.scheduledWindowBlocks,
       avgBlockTimeSec: params.conditionalPolicy.avgBlockTimeSec,
-      maxStalenessSec: params.conditionalPolicy.maxStalenessSec
+      maxStalenessSec: params.conditionalPolicy.maxStalenessSec,
+      enableConditionalBlockBounds: params.conditionalPolicy.enableConditionalBlockBounds ?? false,
+      blockNumberMin: params.conditionalPolicy.blockNumberMin,
+      blockNumberMax: params.conditionalPolicy.blockNumberMax
     });
-
-    const conditionalEnvelope: ConditionalEnvelope = buildFreshnessGuard(
-      timestampMax,
-      params.conditionalPolicy.blockNumberMax
-    );
 
     return {
       orderHash: params.executionPlan.orderHash,

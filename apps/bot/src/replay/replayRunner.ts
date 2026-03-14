@@ -40,7 +40,7 @@ export type ReplayRunnerParams = {
   conditionalEnvelope: ConditionalEnvelope;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { blockNumberMax?: bigint; executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
 };
 
 function normalize(address: `0x${string}`): string {

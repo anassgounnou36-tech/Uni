@@ -16,6 +16,12 @@ export type ConditionalEnvelopeOptions = {
   enableKnownAccounts?: boolean;
 };
 
+export type ConditionalBlockBoundsPolicy = {
+  enableConditionalBlockBounds?: boolean;
+  blockNumberMin?: bigint;
+  blockNumberMax?: bigint;
+};
+
 export type TimestampMaxDerivationParams = {
   currentL2TimestampSec: bigint;
   scheduledWindowBlocks: bigint;
@@ -57,15 +63,24 @@ export function normalizeConditionalEnvelope(
   return envelope;
 }
 
-export function buildFreshnessGuard(timestampMax: bigint, blockNumberMax?: bigint): ConditionalEnvelope {
+export function buildFreshnessGuard(
+  timestampMax: bigint,
+  blockBoundsPolicy: ConditionalBlockBoundsPolicy = {}
+): ConditionalEnvelope {
+  const includeBlockBounds = blockBoundsPolicy.enableConditionalBlockBounds ?? false;
   return {
     TimestampMax: timestampMax,
-    ...(blockNumberMax !== undefined ? { BlockNumberMax: blockNumberMax } : {})
+    ...(includeBlockBounds && blockBoundsPolicy.blockNumberMin !== undefined
+      ? { BlockNumberMin: blockBoundsPolicy.blockNumberMin }
+      : {}),
+    ...(includeBlockBounds && blockBoundsPolicy.blockNumberMax !== undefined
+      ? { BlockNumberMax: blockBoundsPolicy.blockNumberMax }
+      : {})
   };
 }
 
 export function deriveFreshnessEnvelopeFromSchedule(
-  params: TimestampMaxDerivationParams & { blockNumberMax?: bigint }
+  params: TimestampMaxDerivationParams & ConditionalBlockBoundsPolicy
 ): ConditionalEnvelope {
-  return buildFreshnessGuard(deriveTimestampMax(params), params.blockNumberMax);
+  return buildFreshnessGuard(deriveTimestampMax(params), params);
 }

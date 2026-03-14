@@ -53,7 +53,7 @@ export type HotLaneStepParams = {
   simService: ForkSimService;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { blockNumberMax?: bigint; executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
   shadowMode: boolean;
   leadBlocks?: bigint;
 };
@@ -96,7 +96,6 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
   let preparedExecution: PreparedExecution;
   try {
     preparedExecution = await params.executionPreparer({
-      blockNumberMax: params.entry.competeWindowEnd,
       executionPlan: result.plan
     });
   } catch {
