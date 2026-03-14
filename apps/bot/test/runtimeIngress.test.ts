@@ -14,6 +14,7 @@ import { BotMetrics } from '../src/telemetry/metrics.js';
 import { PrometheusMetricsServer } from '../src/telemetry/prometheus.js';
 import { BotRuntime } from '../src/runtime/BotRuntime.js';
 import type { RuntimeConfig } from '../src/runtime/config.js';
+import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
@@ -75,6 +76,10 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
     readRpcUrl: 'https://read.example',
     sequencerUrl: 'https://sequencer.example',
+    databaseUrl: undefined,
+    allowEphemeralState: true,
+    signerPrivateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80',
+    executorAddress: '0x3333333333333333333333333333333333333333',
     pollCadenceMs: 15,
     enableWebhookIngress: false,
     webhookHost: '127.0.0.1',
@@ -218,6 +223,7 @@ describe('runtime ingress and orchestration', () => {
       store,
       journal,
       metrics,
+      inflightTracker: new InflightTracker(),
       schedulerContext: {
         routePlanner: routePlannerWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
@@ -317,6 +323,7 @@ describe('runtime ingress and orchestration', () => {
         store,
         journal,
         metrics,
+        inflightTracker: new InflightTracker(),
         schedulerContext: {
           routePlanner: routePlannerWithEdge(10n),
           resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
@@ -402,6 +409,7 @@ describe('runtime ingress and orchestration', () => {
       store,
       journal,
       metrics,
+      inflightTracker: new InflightTracker(),
       metricsServer,
       schedulerContext: {
         routePlanner: routePlannerWithEdge(10n),
@@ -498,6 +506,7 @@ describe('runtime ingress and orchestration', () => {
       store,
       journal,
       metrics,
+      inflightTracker: new InflightTracker(),
       webhookServer
     });
 

@@ -65,7 +65,7 @@ contract V3DutchResolveHarnessTest {
             cosigner: address(0x2222),
             startingBaseFee: 100000000,
             baseInput: V3DutchResolveHarness.V3DutchInput({
-                token: address(0x82af49447d8a07e3bd95bd0d56f35241523fbab1),
+                token: address(0x82aF49447D8a07e3bd95BD0d56f35241523fBab1),
                 startAmount: 1000000,
                 curve: V3DutchResolveHarness.NonlinearDutchDecay({relativeBlocks: 500, relativeAmounts: inputRelativeAmounts}),
                 maxAmount: 1300000,

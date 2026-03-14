@@ -12,6 +12,10 @@ pnpm bot:start
 - `READ_RPC_URL` (required): read RPC endpoint for chain state.
 - `FORK_RPC_URL` (optional): fork RPC endpoint for simulation/testing.
 - `SEQUENCER_URL` (required): sequencer RPC endpoint used for send path.
+- `DATABASE_URL` (optional but required outside shadow-dev): enables Postgres-backed runtime state components.
+- `ALLOW_EPHEMERAL_STATE` (default `false`): permits in-memory state only for explicit shadow/dev runs.
+- `SIGNER_PRIVATE_KEY` (optional): runtime signer key used by prepared execution builder (dev default is an anvil key).
+- `EXECUTOR_ADDRESS` (default `0x3333...3333`): executor target for built execution plans.
 
 ### Ingress
 - `POLL_CADENCE_MS` (default `1000`): polling interval for Orders API backstop.
@@ -47,6 +51,12 @@ pnpm bot:start
 - Keep `SHADOW_MODE=true` by default.
 - Keep `CANARY_MODE=false` until pair-level guardrails are configured.
 - Keep `ENABLE_WEBHOOK_INGRESS=false` until allowlist CIDRs and trust proxy are validated.
+- Keep `ALLOW_EPHEMERAL_STATE=false` by default and set `DATABASE_URL` for any non-shadow operational runtime.
+
+## Durable state boot policy
+- Live/canary boot requires `DATABASE_URL`; startup fails fast with `databaseUrl is required for live/canary mode` when missing.
+- In-memory journal/store are only allowed when `SHADOW_MODE=true` **and** `ALLOW_EPHEMERAL_STATE=true`.
+- If shadow is enabled but ephemeral mode is not explicitly allowed and no `DATABASE_URL` is provided, startup fails fast with `ephemeral order store is not allowed outside shadow dev mode`.
 
 ## Execution modes
 - **Shadow**: enabled when `SHADOW_MODE=true`; simulation and decisioning run, but no live broadcast.

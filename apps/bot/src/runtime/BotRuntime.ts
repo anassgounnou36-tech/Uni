@@ -8,6 +8,7 @@ import type { BotMetrics } from '../telemetry/metrics.js';
 import type { PrometheusMetricsServer } from '../telemetry/prometheus.js';
 import type { RuntimeConfig } from './config.js';
 import { decideExecutionMode } from './livePolicy.js';
+import { InflightTracker } from './inflightTracker.js';
 import type { OrderStore } from '../store/types.js';
 import type { ResolveEnv } from '@uni/protocol';
 import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
@@ -18,12 +19,12 @@ import { NonceManager } from '../send/nonceManager.js';
 import type { ExecutionPlan } from '../execution/types.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 
-type SchedulerContext = {
+export type SchedulerContext = {
   routePlanner: UniV3RoutePlanner;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
 };
 
-type HotLaneContext = SchedulerContext & {
+export type HotLaneContext = SchedulerContext & {
   conditionalEnvelope: ConditionalEnvelope;
   executor: `0x${string}`;
   simService: ForkSimService;
@@ -43,6 +44,8 @@ export type BotRuntimeDeps = {
   metrics: BotMetrics;
   webhookServer?: WebhookIngressServer;
   metricsServer?: PrometheusMetricsServer;
+  inflightTracker: InflightTracker;
+  requireTradingDeps?: boolean;
   schedulerContext?: SchedulerContext;
   hotLaneContext?: HotLaneContext;
 };
@@ -55,9 +58,28 @@ export class BotRuntime {
 
   constructor(private readonly deps: BotRuntimeDeps) {}
 
+  private getPolicyInflightCount(): number {
+    return this.deps.inflightTracker.getInflightCount();
+  }
+
+  private assertTradingDependencies(): void {
+    if (!this.deps.schedulerContext || !this.deps.hotLaneContext) {
+      throw new Error('runtime trading dependencies are required (schedulerContext/hotLaneContext)');
+    }
+    if (!this.deps.hotLaneContext.executionPreparer) {
+      throw new Error('runtime trading dependency executionPreparer is required');
+    }
+    if (!this.deps.hotLaneContext.simService || !this.deps.hotLaneContext.sequencerClient || !this.deps.hotLaneContext.nonceManager) {
+      throw new Error('runtime trading dependencies simService/sequencerClient/nonceManager are required');
+    }
+  }
+
   async start(): Promise<void> {
     if (this.pollTimer || this.schedulerTimer || this.hotLaneTimer) {
       return;
+    }
+    if (this.deps.requireTradingDeps ?? false) {
+      this.assertTradingDependencies();
     }
 
     if (this.deps.webhookServer) {
@@ -198,7 +220,7 @@ export class BotRuntime {
         },
         { netEdgeOut: queued.predictedEdgeOut },
         this.deps.config,
-        { inflightCount: this.hotQueue.length }
+        { inflightCount: this.getPolicyInflightCount() }
       );
 
       if (policy.mode === 'SKIP') {
@@ -211,6 +233,11 @@ export class BotRuntime {
         });
         this.hotQueue.splice(index, 1);
         continue;
+      }
+
+      const liveAttemptTracking = policy.mode === 'LIVE';
+      if (liveAttemptTracking) {
+        this.deps.inflightTracker.markAttempted(queued.orderHash);
       }
 
       const decision = await runHotLaneStep({
@@ -231,6 +258,9 @@ export class BotRuntime {
       });
 
       if (decision.action === 'WAIT') {
+        if (liveAttemptTracking) {
+          this.deps.inflightTracker.markResolved(queued.orderHash);
+        }
         index += 1;
         continue;
       }
@@ -267,6 +297,7 @@ export class BotRuntime {
       }
 
       if (decision.action === 'NO_SEND') {
+        this.deps.inflightTracker.markResolved(queued.orderHash);
         this.deps.metrics.increment('send_attempt_total{mode="SHADOW",writer="shadow"}');
         this.deps.metrics.increment('shadow_would_send_total');
         await this.deps.journal.append({
@@ -300,6 +331,7 @@ export class BotRuntime {
           }
           this.deps.metrics.increment(`send_accept_total{writer="${writer}"}`);
         } else {
+          this.deps.inflightTracker.markResolved(queued.orderHash);
           this.deps.metrics.increment('send_reject_total{reason="SEND_REJECTED"}');
         }
         if (preparedAtMs !== undefined) {
@@ -311,6 +343,8 @@ export class BotRuntime {
           orderHash: queued.orderHash,
           payload: { accepted, reason: accepted ? undefined : 'SEND_REJECTED', writer }
         });
+      } else if (decision.action === 'DROP') {
+        this.deps.inflightTracker.markResolved(queued.orderHash);
       }
 
       this.hotQueue.splice(index, 1);
