@@ -196,9 +196,10 @@ contract UniswapXDutchV3ExecutorTest {
         MockReactorForExecutorFlow reactor = new MockReactorForExecutorFlow();
         MockSwapRouter02 router = new MockSwapRouter02();
         UniV3SwapRouter02Adapter realAdapter = new UniV3SwapRouter02Adapter(address(router));
+        UniV3SwapRouter02Adapter distinctCamelotSlotAdapter = new UniV3SwapRouter02Adapter(address(router));
         UniswapXDutchV3Executor wrapper =
             new UniswapXDutchV3Executor(
-                address(reactor), address(realAdapter), address(realAdapter), TREASURY, address(this)
+                address(reactor), address(realAdapter), address(distinctCamelotSlotAdapter), TREASURY, address(this)
             );
 
         tokenIn.mint(address(wrapper), 1e18);

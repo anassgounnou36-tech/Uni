@@ -34,7 +34,8 @@ import type { UniV3RoutePlanner as UniV3RoutePlannerType } from '../src/routing/
 const TREASURY = '0x1234560000000000000000000000000000000000' as const;
 
 type CompiledExecutorArtifacts = {
-  adapterCreationCode: (mockRouter: `0x${string}`) => Hex;
+  uniAdapterCreationCode: (mockUniRouter: `0x${string}`) => Hex;
+  camelotAdapterCreationCode: (mockCamelotRouter: `0x${string}`) => Hex;
   executorCreationCode: (args: {
     reactor: `0x${string}`;
     uniswapAdapter: `0x${string}`;
@@ -43,7 +44,8 @@ type CompiledExecutorArtifacts = {
     owner: `0x${string}`;
   }) => Hex;
   mockReactorCreationCode: Hex;
-  mockRouterCreationCode: Hex;
+  mockUniRouterCreationCode: Hex;
+  mockCamelotRouterCreationCode: Hex;
 };
 
 let compiledArtifacts: CompiledExecutorArtifacts | undefined;
@@ -118,13 +120,47 @@ const MOCK_REACTOR_ABI = [
   }
 ] as const;
 
-const MOCK_ROUTER_ABI = [
+const MOCK_UNI_ROUTER_ABI = [
   {
     type: 'function',
     name: 'setAmountOut',
     stateMutability: 'nonpayable',
     inputs: [{ name: 'value', type: 'uint256' }],
     outputs: []
+  }
+] as const;
+
+const MOCK_CAMELOT_ROUTER_ABI = [
+  {
+    type: 'function',
+    name: 'setAmountOut',
+    stateMutability: 'nonpayable',
+    inputs: [{ name: 'value', type: 'uint256' }],
+    outputs: []
+  },
+  {
+    type: 'function',
+    name: 'swapCalls',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }]
+  }
+] as const;
+
+const EXECUTOR_WIRING_ABI = [
+  {
+    type: 'function',
+    name: 'UNISWAP_V3_ADAPTER',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }]
+  },
+  {
+    type: 'function',
+    name: 'CAMELOT_AMMV3_ADAPTER',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }]
   }
 ] as const;
 
@@ -195,6 +231,7 @@ interface IMintableToken {
 
 contract MockSwapRouter02ForExecutorFlow {
   uint256 public amountOut;
+  uint256 public swapCalls;
 
   struct ExactInputSingleParams {
     address tokenIn;
@@ -211,6 +248,45 @@ contract MockSwapRouter02ForExecutorFlow {
   }
 
   function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256) {
+    swapCalls += 1;
+    if (amountOut < params.amountOutMinimum) {
+      return amountOut;
+    }
+    if (amountOut > 0) {
+      IMintableToken(params.tokenOut).mint(params.recipient, amountOut);
+    }
+    return amountOut;
+  }
+}`
+  };
+  sources['MockCamelotAmmv3RouterForExecutorFlow.sol'] = {
+    content: `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IMintableToken {
+  function mint(address to, uint256 amount) external;
+}
+
+contract MockCamelotAmmv3RouterForExecutorFlow {
+  uint256 public amountOut;
+  uint256 public swapCalls;
+
+  struct ExactInputSingleParams {
+    address tokenIn;
+    address tokenOut;
+    address recipient;
+    uint256 deadline;
+    uint256 amountIn;
+    uint256 amountOutMinimum;
+    uint160 limitSqrtPrice;
+  }
+
+  function setAmountOut(uint256 value) external {
+    amountOut = value;
+  }
+
+  function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256) {
+    swapCalls += 1;
     if (amountOut < params.amountOutMinimum) {
       return amountOut;
     }
@@ -253,14 +329,18 @@ contract MockSwapRouter02ForExecutorFlow {
     return `0x${code}`;
   };
 
-  const adapterBytecode = getBytecode('adapters/UniV3SwapRouter02Adapter.sol', 'UniV3SwapRouter02Adapter');
+  const uniAdapterBytecode = getBytecode('adapters/UniV3SwapRouter02Adapter.sol', 'UniV3SwapRouter02Adapter');
+  const camelotAdapterBytecode = getBytecode('adapters/CamelotAmmv3Adapter.sol', 'CamelotAmmv3Adapter');
   const executorBytecode = getBytecode('UniswapXDutchV3Executor.sol', 'UniswapXDutchV3Executor');
   const mockReactorBytecode = getBytecode('MockReactorForExecutorFlow.sol', 'MockReactorForExecutorFlow');
-  const mockRouterBytecode = getBytecode('MockSwapRouter02ForExecutorFlow.sol', 'MockSwapRouter02ForExecutorFlow');
+  const mockUniRouterBytecode = getBytecode('MockSwapRouter02ForExecutorFlow.sol', 'MockSwapRouter02ForExecutorFlow');
+  const mockCamelotRouterBytecode = getBytecode('MockCamelotAmmv3RouterForExecutorFlow.sol', 'MockCamelotAmmv3RouterForExecutorFlow');
 
   compiledArtifacts = {
-    adapterCreationCode: (mockRouter) =>
-      concatHex([adapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockRouter])]),
+    uniAdapterCreationCode: (mockUniRouter) =>
+      concatHex([uniAdapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockUniRouter])]),
+    camelotAdapterCreationCode: (mockCamelotRouter) =>
+      concatHex([camelotAdapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockCamelotRouter])]),
     executorCreationCode: ({ reactor, uniswapAdapter, camelotAdapter, treasury, owner }) =>
       concatHex([
         executorBytecode,
@@ -276,7 +356,8 @@ contract MockSwapRouter02ForExecutorFlow {
         )
       ]),
     mockReactorCreationCode: mockReactorBytecode,
-    mockRouterCreationCode: mockRouterBytecode
+    mockUniRouterCreationCode: mockUniRouterBytecode,
+    mockCamelotRouterCreationCode: mockCamelotRouterBytecode
   };
 
   return compiledArtifacts;
@@ -315,34 +396,68 @@ async function sendContractCall(
 
 async function deployRealExecutorStack(clients: { walletClient: WalletClient; publicClient: PublicClient }) {
   const artifacts = compileExecutorArtifacts();
-  const mockRouterAddress = await deployCreationCode(
+  const mockUniRouterAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
-    artifacts.mockRouterCreationCode
+    artifacts.mockUniRouterCreationCode
+  );
+  const mockCamelotRouterAddress = await deployCreationCode(
+    clients.walletClient,
+    clients.publicClient,
+    artifacts.mockCamelotRouterCreationCode
   );
   const mockReactorAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
     artifacts.mockReactorCreationCode
   );
-  const adapterAddress = await deployCreationCode(
+  const uniAdapterAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
-    artifacts.adapterCreationCode(mockRouterAddress)
+    artifacts.uniAdapterCreationCode(mockUniRouterAddress)
+  );
+  const camelotAdapterAddress = await deployCreationCode(
+    clients.walletClient,
+    clients.publicClient,
+    artifacts.camelotAdapterCreationCode(mockCamelotRouterAddress)
   );
   const executorAddress = await deployCreationCode(
     clients.walletClient,
     clients.publicClient,
     artifacts.executorCreationCode({
       reactor: mockReactorAddress,
-      uniswapAdapter: adapterAddress,
-      camelotAdapter: adapterAddress,
+      uniswapAdapter: uniAdapterAddress,
+      camelotAdapter: camelotAdapterAddress,
       treasury: TREASURY,
       owner: clients.walletClient.account!.address
     })
   );
+  if (uniAdapterAddress.toLowerCase() === camelotAdapterAddress.toLowerCase()) {
+    throw new Error('VENUE_ADAPTERS_MUST_BE_DISTINCT');
+  }
+  const [uniAdapterCode, camelotAdapterCode, executorCode] = await Promise.all([
+    clients.publicClient.getCode({ address: uniAdapterAddress }),
+    clients.publicClient.getCode({ address: camelotAdapterAddress }),
+    clients.publicClient.getCode({ address: executorAddress })
+  ]);
+  if (!uniAdapterCode || uniAdapterCode === '0x') {
+    throw new Error('UNI_ADAPTER_CODE_MISSING');
+  }
+  if (!camelotAdapterCode || camelotAdapterCode === '0x') {
+    throw new Error('CAMELOT_ADAPTER_CODE_MISSING');
+  }
+  if (!executorCode || executorCode === '0x') {
+    throw new Error('EXECUTOR_CODE_MISSING');
+  }
 
-  return { mockRouterAddress, mockReactorAddress, adapterAddress, executorAddress };
+  return {
+    mockUniRouterAddress,
+    mockCamelotRouterAddress,
+    mockReactorAddress,
+    uniAdapterAddress,
+    camelotAdapterAddress,
+    executorAddress
+  };
 }
 
 describe('quoting/planning unit accounting', () => {
@@ -622,6 +737,21 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     anvil?.stdin.end();
   });
 
+  it('executorStackDeploysDistinctVenueAdapters', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const { uniAdapterAddress, camelotAdapterAddress } = await deployRealExecutorStack(clients);
+    expect(uniAdapterAddress.toLowerCase()).not.toEqual(camelotAdapterAddress.toLowerCase());
+    const [uniCode, camelotCode] = await Promise.all([
+      clients.publicClient.getCode({ address: uniAdapterAddress }),
+      clients.publicClient.getCode({ address: camelotAdapterAddress })
+    ]);
+    expect(uniCode && uniCode !== '0x').toEqual(true);
+    expect(camelotCode && camelotCode !== '0x').toEqual(true);
+  });
+
   it('usesSamePreparedExecutionAgainstRealExecutorAndReactorCompatibleMock', async () => {
     const clients = createForkClients({
       rpcUrl,
@@ -629,16 +759,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     });
     const { fixture, decoded } = loadSigned();
 
-    const { mockRouterAddress, mockReactorAddress, adapterAddress, executorAddress } = await deployRealExecutorStack(clients);
+    const { mockUniRouterAddress, mockReactorAddress, executorAddress } = await deployRealExecutorStack(clients);
 
-    const adapterCode = await clients.publicClient.getCode({ address: adapterAddress });
-    if (!adapterCode || adapterCode === '0x') {
-      throw new Error('ADAPTER_CODE_MISSING');
-    }
-    const executorCode = await clients.publicClient.getCode({ address: executorAddress });
-    if (!executorCode || executorCode === '0x') {
-      throw new Error('EXECUTOR_CODE_MISSING');
-    }
     const reactorCode = await clients.publicClient.getCode({ address: mockReactorAddress });
     if (!reactorCode || reactorCode === '0x') {
       throw new Error('REACTOR_CODE_MISSING');
@@ -697,9 +819,9 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
 
     await sendContractCall(
       clients,
-      mockRouterAddress,
+      mockUniRouterAddress,
       encodeFunctionData({
-        abi: MOCK_ROUTER_ABI,
+        abi: MOCK_UNI_ROUTER_ABI,
         functionName: 'setAmountOut',
         args: [0n]
       })
@@ -1030,22 +1152,36 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     }
   });
 
-  it('builds Camelot venue prepared execution and runs real prepare/sim path', async () => {
+  it('usesRealCamelotAdapterWhenPreparedExecutionVenueIsCamelot', async () => {
     const clients = createForkClients({
       rpcUrl,
       privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
     });
     const { fixture, decoded } = loadSigned();
-    const { mockRouterAddress, mockReactorAddress, executorAddress } = await deployRealExecutorStack(clients);
+    const {
+      mockCamelotRouterAddress,
+      mockReactorAddress,
+      uniAdapterAddress,
+      camelotAdapterAddress,
+      executorAddress
+    } = await deployRealExecutorStack(clients);
 
-    const requiredOutput = decoded.order.baseOutputs.reduce((sum, output) => sum + output.startAmount, 0n);
     await sendContractCall(
       clients,
-      mockRouterAddress,
+      mockCamelotRouterAddress,
       encodeFunctionData({
-        abi: MOCK_ROUTER_ABI,
+        abi: MOCK_CAMELOT_ROUTER_ABI,
         functionName: 'setAmountOut',
-        args: [requiredOutput + 10n]
+        args: [0n]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'clearConfiguredResolvedOrders',
+        args: []
       })
     );
     await sendContractCall(
@@ -1105,6 +1241,60 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     if (!planResult.ok) {
       return;
     }
+    expect(planResult.plan.route.venue).toEqual('CAMELOT_AMMV3');
+    expect(planResult.plan.executor.toLowerCase()).toEqual(executorAddress.toLowerCase());
+    expect(planResult.plan.callbackData.startsWith('0x')).toEqual(true);
+
+    const [wiredUniAdapter, wiredCamelotAdapter] = await Promise.all([
+      clients.publicClient.readContract({
+        address: executorAddress,
+        abi: EXECUTOR_WIRING_ABI,
+        functionName: 'UNISWAP_V3_ADAPTER'
+      }),
+      clients.publicClient.readContract({
+        address: executorAddress,
+        abi: EXECUTOR_WIRING_ABI,
+        functionName: 'CAMELOT_AMMV3_ADAPTER'
+      })
+    ]);
+    expect((wiredUniAdapter as `0x${string}`).toLowerCase()).toEqual(uniAdapterAddress.toLowerCase());
+    expect((wiredCamelotAdapter as `0x${string}`).toLowerCase()).toEqual(camelotAdapterAddress.toLowerCase());
+    expect(uniAdapterAddress.toLowerCase()).not.toEqual(camelotAdapterAddress.toLowerCase());
+
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'pushConfiguredResolvedOrder',
+        args: [
+          {
+            info: {
+              reactor: mockReactorAddress,
+              swapper: clients.sender,
+              nonce: 1n,
+              deadline: 2n ** 255n,
+              additionalValidationContract: '0x0000000000000000000000000000000000000000',
+              additionalValidationData: '0x'
+            },
+            input: {
+              token: planResult.plan.route.tokenIn,
+              amount: 0n,
+              maxAmount: 0n
+            },
+            outputs: [
+              {
+                token: planResult.plan.route.tokenOut,
+                amount: 0n,
+                recipient: clients.sender
+              }
+            ],
+            sig: '0x',
+            hash: '0x0000000000000000000000000000000000000000000000000000000000000000'
+          }
+        ]
+      })
+    );
 
     const nonceManager = new NonceManager({
       ledger: new InMemoryNonceLedger(),
@@ -1127,8 +1317,29 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         maxStalenessSec: 10n
       }
     });
+    expect(prepared.executionPlan.route.venue).toEqual('CAMELOT_AMMV3');
+    expect(prepared.txRequest.to.toLowerCase()).toEqual(executorAddress.toLowerCase());
+    expect(prepared.serializedTransaction.startsWith('0x')).toEqual(true);
+
     const sim = new ForkSimService({ clients });
     const simResult = await sim.simulatePrepared(prepared);
+    expect(simResult.ok).toEqual(true);
     expect(simResult.serializedTransaction).toEqual(prepared.serializedTransaction);
+
+    const camelotSwapCalls = await clients.publicClient.readContract({
+      address: mockCamelotRouterAddress,
+      abi: MOCK_CAMELOT_ROUTER_ABI,
+      functionName: 'swapCalls'
+    });
+    expect(camelotSwapCalls).toEqual(1n);
+
+    const sequencerClient = new SequencerClient({
+      sequencerUrl: 'http://127.0.0.1:0',
+      fallbackUrl: 'http://127.0.0.1:0',
+      shadowMode: true
+    });
+    const sendObservation = await sequencerClient.sendPreparedExecution(prepared);
+    expect(sendObservation.records[0]?.serializedTransaction).toEqual(prepared.serializedTransaction);
+    expect(sendObservation.records[0]?.serializedTransaction).toEqual(simResult.serializedTransaction);
   });
 });
