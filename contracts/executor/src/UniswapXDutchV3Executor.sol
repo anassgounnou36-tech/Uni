@@ -2,6 +2,9 @@
 pragma solidity ^0.8.24;
 
 import {ISettlementAdapter} from "./interfaces/ISettlementAdapter.sol";
+import {IReactor} from "./external/uniswapx/IReactor.sol";
+import {IReactorCallback} from "./external/uniswapx/IReactorCallback.sol";
+import {ReactorStructs} from "./external/uniswapx/ReactorStructs.sol";
 import {ExecutorErrors} from "./libraries/ExecutorErrors.sol";
 import {ExecutorTypes} from "./libraries/ExecutorTypes.sol";
 
@@ -9,15 +12,6 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
     function transfer(address to, uint256 amount) external returns (bool);
     function approve(address spender, uint256 amount) external returns (bool);
-}
-
-interface IReactor {
-    function executeWithCallback(bytes calldata order, bytes calldata callbackData) external;
-}
-
-interface IReactorCallback {
-    function reactorCallback(ExecutorTypes.ResolvedOrder[] calldata resolvedOrders, bytes calldata callbackData)
-        external;
 }
 
 contract UniswapXDutchV3Executor is IReactorCallback {
@@ -63,11 +57,13 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         owner = owner_;
     }
 
-    function execute(bytes calldata order, bytes calldata callbackData) external whenNotPaused nonReentrant {
+    /// @dev `execute` intentionally does not take the callback reentrancy lock.
+    /// The valid flow is external caller -> execute -> reactor -> reactorCallback in the same transaction.
+    function execute(ReactorStructs.SignedOrder calldata order, bytes calldata callbackData) external whenNotPaused {
         IReactor(REACTOR).executeWithCallback(order, callbackData);
     }
 
-    function reactorCallback(ExecutorTypes.ResolvedOrder[] calldata resolvedOrders, bytes calldata callbackData)
+    function reactorCallback(ReactorStructs.ResolvedOrder[] calldata resolvedOrders, bytes calldata callbackData)
         external
         whenNotPaused
         nonReentrant
@@ -75,11 +71,12 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         if (msg.sender != REACTOR) revert ExecutorErrors.UnauthorizedCaller();
         if (resolvedOrders.length != 1) revert ExecutorErrors.UnsupportedOrderShape();
 
-        ExecutorTypes.ResolvedOrder calldata order = resolvedOrders[0];
+        ReactorStructs.ResolvedOrder calldata order = resolvedOrders[0];
         ExecutorTypes.RoutePlan memory route = abi.decode(callbackData, (ExecutorTypes.RoutePlan));
         if (route.tokenIn == address(0) || route.tokenOut == address(0) || route.poolFee == 0) {
             revert ExecutorErrors.BadRoute();
         }
+        if (route.tokenIn == route.tokenOut) revert ExecutorErrors.BadRoute();
         if (order.input.token != route.tokenIn) revert ExecutorErrors.TokenMismatch();
 
         uint256 outputCount = order.outputs.length;

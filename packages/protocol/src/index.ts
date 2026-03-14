@@ -30,6 +30,13 @@ export { decayInput, decayOutput, decayOutputs, locateCurvePosition } from './un
 export { classifySupport } from './uniswapx/v3dutch/supportPolicy.js';
 export { resolveAt, resolveSignedOrder, validateOrder } from './uniswapx/v3dutch/resolve.js';
 export {
+  REACTOR_ABI,
+  encodeExecute,
+  encodeExecuteBatchWithCallback,
+  encodeExecuteWithCallback,
+  toReactorSignedOrder
+} from './uniswapx/reactor/abi.js';
+export {
   ArithmeticOverflowError,
   DeadlineReachedError,
   InvalidCosignerInputError,
@@ -55,3 +62,9 @@ export type {
   V3DutchOrder,
   V3DutchOutput
 } from './uniswapx/v3dutch/types.js';
+export type {
+  ReactorResolvedInput,
+  ReactorResolvedOrder,
+  ReactorResolvedOutput,
+  ReactorSignedOrder
+} from './uniswapx/reactor/types.js';

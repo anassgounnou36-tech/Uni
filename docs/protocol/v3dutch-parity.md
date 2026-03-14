@@ -53,3 +53,15 @@ Mirror implication:
   - input path rounds to reduce swapper cost
   - output path rounds to improve swapper receive amount
 - Exclusivity override uses ceil division.
+
+## Reactor envelope and order-hash reconciliation
+
+The reactor-facing envelope is now tracked separately from the decoded semantic order object:
+
+- `SignedOrder { bytes order; bytes sig; }` for reactor calldata
+- decoded `V3DutchOrder` for semantic validation and resolution
+- verified canonical hash (`computeOrderHash(decoded.order)`)
+
+`orderHash` returned by the Orders API is treated as advisory until it is recomputed locally from the decoded order bytes and matched exactly. The bot intake path now drops payloads whose API `orderHash` does not equal the canonical computed hash.
+
+This separation prevents accidental ABI drift (passing raw bytes where a `SignedOrder` tuple is required) and prevents trusting unverified API hashes.
