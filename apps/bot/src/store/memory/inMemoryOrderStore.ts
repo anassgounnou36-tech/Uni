@@ -1,5 +1,5 @@
 import { assertLegalOrderTransition } from '../../domain/orderState.js';
-import type { OrderStore, StoredOrderRecord, UpsertResult } from '../types.js';
+import type { IngressObservation, OrderStore, StoredOrderRecord, UpsertResult } from '../types.js';
 import type { OrderReasonCode, NormalizedOrder } from '../types.js';
 
 function now(nowMs?: number): number {
@@ -9,7 +9,12 @@ function now(nowMs?: number): number {
 export class InMemoryOrderStore implements OrderStore {
   private readonly records = new Map<`0x${string}`, StoredOrderRecord>();
 
-  upsertDiscovered(rawPayload: unknown, normalizedOrder: NormalizedOrder | undefined, nowMs?: number): UpsertResult {
+  async upsertDiscovered(
+    rawPayload: unknown,
+    normalizedOrder: NormalizedOrder | undefined,
+    nowMs?: number,
+    ingress?: IngressObservation
+  ): Promise<UpsertResult> {
     if (!normalizedOrder) {
       throw new Error('normalizedOrder is required for dedupe by orderHash');
     }
@@ -26,6 +31,11 @@ export class InMemoryOrderStore implements OrderStore {
       normalizedOrder,
       state: 'DISCOVERED',
       transitions: [{ state: 'DISCOVERED', at: timestamp }],
+      firstSeenAtMs: ingress?.receivedAtMs ?? timestamp,
+      firstSeenSource: ingress?.source ?? 'POLL',
+      firstCreatedAtMs: ingress?.createdAtMs,
+      firstRemoteIp: ingress?.remoteIp,
+      confirmedBySources: ingress ? [ingress.source] : ['POLL'],
       createdAt: timestamp,
       updatedAt: timestamp
     };
@@ -34,7 +44,27 @@ export class InMemoryOrderStore implements OrderStore {
     return { created: true, record: discovered };
   }
 
-  transition(orderHash: `0x${string}`, nextState: StoredOrderRecord['state'], reason?: OrderReasonCode, nowMs?: number): StoredOrderRecord {
+  async recordIngressConfirmation(orderHash: `0x${string}`, ingress: IngressObservation): Promise<StoredOrderRecord> {
+    const existing = this.records.get(orderHash);
+    if (!existing) {
+      throw new Error(`Cannot confirm ingress for unknown order ${orderHash}`);
+    }
+    const hasSource = existing.confirmedBySources.includes(ingress.source);
+    const updated: StoredOrderRecord = hasSource
+      ? existing
+      : { ...existing, confirmedBySources: [...existing.confirmedBySources, ingress.source], updatedAt: now() };
+    if (!hasSource) {
+      this.records.set(orderHash, updated);
+    }
+    return updated;
+  }
+
+  async transition(
+    orderHash: `0x${string}`,
+    nextState: StoredOrderRecord['state'],
+    reason?: OrderReasonCode,
+    nowMs?: number
+  ): Promise<StoredOrderRecord> {
     const existing = this.records.get(orderHash);
     if (!existing) {
       throw new Error(`Cannot transition unknown order ${orderHash}`);
@@ -54,11 +84,11 @@ export class InMemoryOrderStore implements OrderStore {
     return updated;
   }
 
-  get(orderHash: `0x${string}`): StoredOrderRecord | undefined {
+  async get(orderHash: `0x${string}`): Promise<StoredOrderRecord | undefined> {
     return this.records.get(orderHash);
   }
 
-  list(): StoredOrderRecord[] {
+  async list(): Promise<StoredOrderRecord[]> {
     return [...this.records.values()];
   }
 }

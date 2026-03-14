@@ -9,6 +9,7 @@ export type MetricsSnapshot = {
   simLatencyMs: Quantiles;
   realizedPnl: bigint;
   gasPerLandedFill: Quantiles;
+  histograms: Record<string, Quantiles>;
 };
 
 function quantile(values: readonly number[], q: number): number {
@@ -32,6 +33,7 @@ export class BotMetrics {
   private readonly ingestToSendLatencies: number[] = [];
   private readonly simLatencies: number[] = [];
   private readonly gasPerFill: number[] = [];
+  private readonly histograms = new Map<string, number[]>();
   private realizedPnl = 0n;
 
   increment(name: string, value: number = 1): void {
@@ -54,13 +56,23 @@ export class BotMetrics {
     this.gasPerFill.push(gasUsed);
   }
 
+  observeHistogram(name: string, value: number): void {
+    const values = this.histograms.get(name) ?? [];
+    values.push(value);
+    this.histograms.set(name, values);
+  }
+
   snapshot(): MetricsSnapshot {
+    const histograms = Object.fromEntries(
+      [...this.histograms.entries()].map(([name, values]) => [name, makeQuantiles(values)])
+    );
     return {
       counters: Object.fromEntries(this.counters.entries()),
       ingestToSendLatencyMs: makeQuantiles(this.ingestToSendLatencies),
       simLatencyMs: makeQuantiles(this.simLatencies),
       realizedPnl: this.realizedPnl,
-      gasPerLandedFill: makeQuantiles(this.gasPerFill)
+      gasPerLandedFill: makeQuantiles(this.gasPerFill),
+      histograms
     };
   }
 }

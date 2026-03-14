@@ -81,13 +81,13 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
   const records: ReplayRecord[] = [];
 
   for (const normalized of orderedCorpus) {
-    params.store.upsertDiscovered(normalized, normalized);
-    params.store.transition(normalized.orderHash, 'DECODED');
+    await params.store.upsertDiscovered(normalized, normalized);
+    await params.store.transition(normalized.orderHash, 'DECODED');
     const order = normalized.decodedOrder.order;
 
     const support = classifySupport(order, params.supportPolicy);
     if (support !== 'SUPPORTED') {
-      params.store.transition(normalized.orderHash, 'UNSUPPORTED', support);
+      await params.store.transition(normalized.orderHash, 'UNSUPPORTED', support);
       records.push({
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
@@ -98,7 +98,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       continue;
     }
 
-    params.store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await params.store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
 
     const schedule = await findFirstProfitableBlock({
       order,
@@ -120,7 +120,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
         }
       }
 
-      params.store.transition(normalized.orderHash, 'SIM_FAIL', noEdgeReason);
+      await params.store.transition(normalized.orderHash, 'SIM_FAIL', noEdgeReason);
       records.push({
         orderHash: normalized.orderHash,
         decision: 'NO_SEND',
@@ -131,7 +131,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       continue;
     }
 
-    params.store.transition(normalized.orderHash, 'SCHEDULED');
+    await params.store.transition(normalized.orderHash, 'SCHEDULED');
 
     const predictedEdgeOut = schedule.chosenRoute.netEdgeOut;
     const hotDecision = await runHotLaneStep({
@@ -157,8 +157,8 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     });
 
     if (hotDecision.action === 'WOULD_SEND') {
-      params.store.transition(normalized.orderHash, 'SIM_OK', 'SUPPORTED');
-      params.store.transition(normalized.orderHash, 'SUBMITTING');
+      await params.store.transition(normalized.orderHash, 'SIM_OK', 'SUPPORTED');
+      await params.store.transition(normalized.orderHash, 'SUBMITTING');
       records.push({
         orderHash: normalized.orderHash,
         scheduledBlock: schedule.scheduledBlock,
@@ -172,7 +172,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     }
 
     if (hotDecision.action === 'NO_SEND') {
-      params.store.transition(normalized.orderHash, 'SIM_OK', 'SHADOW_MODE');
+      await params.store.transition(normalized.orderHash, 'SIM_OK', 'SHADOW_MODE');
       records.push({
         orderHash: normalized.orderHash,
         scheduledBlock: schedule.scheduledBlock,
@@ -186,7 +186,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
     }
 
     const failureReason = hotDecision.action === 'DROP' ? hotDecision.simResult?.reason ?? 'NOT_PROFITABLE' : 'NOT_PROFITABLE';
-    params.store.transition(normalized.orderHash, 'SIM_FAIL', failureReason);
+    await params.store.transition(normalized.orderHash, 'SIM_FAIL', failureReason);
     records.push({
       orderHash: normalized.orderHash,
       scheduledBlock: schedule.scheduledBlock,

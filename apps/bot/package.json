@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "start": "node dist/runtime/main.js"
   },
   "dependencies": {
     "@uni/config": "workspace:*",
@@ -15,6 +16,11 @@
     "@uni/routing": "workspace:*",
     "@uni/sim": "workspace:*",
     "@uni/telemetry": "workspace:*",
-    "viem": "^2.23.5"
+    "pg": "^8.13.1",
+    "viem": "^2.23.5",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11"
   }
 }
