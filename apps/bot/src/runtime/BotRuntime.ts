@@ -11,16 +11,17 @@ import { decideExecutionMode } from './livePolicy.js';
 import { InflightTracker } from './inflightTracker.js';
 import type { OrderStore } from '../store/types.js';
 import type { ResolveEnv } from '@uni/protocol';
-import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import type { RouteBook } from '../routing/routeBook.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 import type { ForkSimService } from '../sim/forkSimService.js';
 import type { SequencerClient } from '../send/sequencerClient.js';
 import { NonceManager } from '../send/nonceManager.js';
 import type { ExecutionPlan } from '../execution/types.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
+import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from '../attribution/routeDecisionAttribution.js';
 
 export type SchedulerContext = {
-  routePlanner: UniV3RoutePlanner;
+  routeBook: RouteBook;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
 };
 
@@ -150,13 +151,13 @@ export class BotRuntime {
       if (!record?.normalizedOrder) {
         continue;
       }
-      const schedule = await findFirstProfitableBlock({
-        order: record.normalizedOrder.decodedOrder.order,
-        baseEnv: scheduler.resolveEnv,
-        routePlanner: scheduler.routePlanner,
-        candidateBlocks: this.deps.config.candidateBlocks,
-        threshold: this.deps.config.thresholdOut,
-        competeWindowBlocks: this.deps.config.competeWindowBlocks
+        const schedule = await findFirstProfitableBlock({
+          order: record.normalizedOrder.decodedOrder.order,
+          baseEnv: scheduler.resolveEnv,
+          routeBook: scheduler.routeBook,
+          candidateBlocks: this.deps.config.candidateBlocks,
+          threshold: this.deps.config.thresholdOut,
+          competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
       if (!schedule) {
         this.deps.metrics.increment('orders_dropped_total{reason="SCHEDULER_NO_EDGE"}');
@@ -177,6 +178,7 @@ export class BotRuntime {
         predictedEdgeOut: schedule.chosenRoute.netEdgeOut
       });
       this.deps.metrics.increment('orders_scheduled_total');
+      this.deps.metrics.increment(`route_chosen_total{venue="${schedule.chosenRoute.venue}"}`);
       this.deps.metrics.observeHistogram('first_seen_to_scheduled_ms', Math.max(0, Date.now() - record.firstSeenAtMs));
       await this.deps.journal.append({
         type: 'ORDER_SCHEDULED',
@@ -185,7 +187,8 @@ export class BotRuntime {
         payload: {
           scheduledBlock: schedule.scheduledBlock.toString(),
           competeWindowEnd: schedule.competeWindowEnd.toString(),
-          predictedEdgeOut: schedule.chosenRoute.netEdgeOut.toString()
+          predictedEdgeOut: schedule.chosenRoute.netEdgeOut.toString(),
+          chosenVenue: schedule.chosenRoute.venue
         }
       });
     }
@@ -246,7 +249,7 @@ export class BotRuntime {
         thresholdOut: this.deps.config.thresholdOut,
         normalizedOrder: normalized,
         order: normalized.decodedOrder.order,
-        routePlanner: hotLane.routePlanner,
+        routeBook: hotLane.routeBook,
         resolveEnv: hotLane.resolveEnv,
         conditionalEnvelope: hotLane.conditionalEnvelope,
         executor: hotLane.executor,
@@ -266,11 +269,31 @@ export class BotRuntime {
       }
 
       this.deps.metrics.increment('plan_built_total');
+      if ('chosenRouteVenue' in decision && decision.chosenRouteVenue) {
+        this.deps.metrics.increment(`route_chosen_total{venue="${decision.chosenRouteVenue}"}`);
+      }
+      if ('routeAlternatives' in decision && decision.routeAlternatives) {
+        for (const candidate of decision.routeAlternatives) {
+          this.deps.metrics.increment(
+            `route_candidate_total{venue="${candidate.venue}",result="${candidate.eligible ? 'eligible' : 'rejected'}"}`
+          );
+          if (!candidate.eligible || candidate.reason) {
+            this.deps.metrics.increment(
+              `route_rejected_total{venue="${candidate.venue}",reason="${candidate.reason ?? 'INELIGIBLE'}"}`
+            );
+          }
+        }
+      }
       await this.deps.journal.append({
         type: 'PLAN_BUILT',
         atMs: Date.now(),
         orderHash: queued.orderHash,
-        payload: { ok: true }
+        payload: {
+          ok: true,
+          routeDecision: decision.preparedExecution
+            ? buildRouteDecisionAttribution(decision.preparedExecution.executionPlan)
+            : undefined
+        }
       });
 
       let preparedAtMs: number | undefined;
@@ -287,18 +310,32 @@ export class BotRuntime {
 
       if ('simResult' in decision && decision.simResult) {
         const simOk = decision.simResult.ok;
-        this.deps.metrics.increment(simOk ? 'sim_ok_total' : `sim_fail_total{reason="${decision.simResult.reason}"}`);
+        this.deps.metrics.increment(
+          simOk
+            ? `sim_ok_total{venue="${decision.chosenRouteVenue}"}`
+            : `sim_fail_total{venue="${decision.chosenRouteVenue}",reason="${decision.simResult.reason}"}`
+        );
         await this.deps.journal.append({
           type: 'SIM_RESULT',
           atMs: Date.now(),
           orderHash: queued.orderHash,
-          payload: { ok: simOk, reason: decision.simResult.reason }
+          payload: {
+            ok: simOk,
+            reason: decision.simResult.reason,
+            attribution:
+              decision.preparedExecution
+                ? buildExecutionOutcomeAttribution({
+                    plan: decision.preparedExecution.executionPlan,
+                    simResult: decision.simResult
+                  })
+                : undefined
+          }
         });
       }
 
       if (decision.action === 'NO_SEND') {
         this.deps.inflightTracker.markResolved(queued.orderHash);
-        this.deps.metrics.increment('send_attempt_total{mode="SHADOW",writer="shadow"}');
+        this.deps.metrics.increment(`send_attempt_total{venue="${decision.chosenRouteVenue}",mode="SHADOW",writer="shadow"}`);
         this.deps.metrics.increment('shadow_would_send_total');
         await this.deps.journal.append({
           type: 'SEND_ATTEMPT',
@@ -314,7 +351,9 @@ export class BotRuntime {
         });
       } else if (decision.action === 'WOULD_SEND' || (decision.action === 'DROP' && decision.sendResult)) {
         const writer = decision.sendResult?.attempts[0]?.writer ?? 'sequencer';
-        this.deps.metrics.increment(`send_attempt_total{mode="LIVE",writer="${writer}"}`);
+        this.deps.metrics.increment(
+          `send_attempt_total{venue="${decision.chosenRouteVenue}",mode="LIVE",writer="${writer}"}`
+        );
         this.deps.metrics.observeHistogram('first_seen_to_send_attempt_ms', Math.max(0, Date.now() - record.firstSeenAtMs));
         await this.deps.journal.append({
           type: 'SEND_ATTEMPT',
@@ -329,10 +368,12 @@ export class BotRuntime {
           if (this.deps.config.canaryMode) {
             this.deps.metrics.increment('canary_live_send_total');
           }
-          this.deps.metrics.increment(`send_accept_total{writer="${writer}"}`);
+          this.deps.metrics.increment(`send_accept_total{venue="${decision.chosenRouteVenue}",writer="${writer}"}`);
         } else {
           this.deps.inflightTracker.markResolved(queued.orderHash);
-          this.deps.metrics.increment('send_reject_total{reason="SEND_REJECTED"}');
+          this.deps.metrics.increment(
+            `send_reject_total{venue="${decision.chosenRouteVenue}",reason="SEND_REJECTED"}`
+          );
         }
         if (preparedAtMs !== undefined) {
           this.deps.metrics.observeHistogram('prepared_to_send_result_ms', Math.max(0, Date.now() - preparedAtMs));
@@ -341,7 +382,19 @@ export class BotRuntime {
           type: 'SEND_RESULT',
           atMs: Date.now(),
           orderHash: queued.orderHash,
-          payload: { accepted, reason: accepted ? undefined : 'SEND_REJECTED', writer }
+          payload: {
+            accepted,
+            reason: accepted ? undefined : 'SEND_REJECTED',
+            writer,
+            attribution:
+              decision.preparedExecution
+                ? buildExecutionOutcomeAttribution({
+                    plan: decision.preparedExecution.executionPlan,
+                    simResult: decision.simResult,
+                    sendResult: decision.sendResult
+                  })
+                : undefined
+          }
         });
       } else if (decision.action === 'DROP') {
         this.deps.inflightTracker.markResolved(queued.orderHash);

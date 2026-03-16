@@ -72,6 +72,7 @@ const baseSchema = z.object({
   MAX_LIVE_NOTIONAL_IN: z.string().default('0'),
   MAX_LIVE_INFLIGHT: z.coerce.number().int().nonnegative().default(0),
   MIN_LIVE_EDGE_OUT: z.string().default('0'),
+  ENABLE_CAMELOT_AMMV3: z.string().optional(),
 
   ENABLE_METRICS_SERVER: z.string().optional(),
   METRICS_HOST: z.string().default('0.0.0.0'),
@@ -108,6 +109,7 @@ export type RuntimeConfig = {
   maxLiveNotionalIn: bigint;
   maxLiveInflight: number;
   minLiveEdgeOut: bigint;
+  enableCamelotAmmv3: boolean;
 
   enableMetricsServer: boolean;
   metricsHost: string;
@@ -146,6 +148,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxLiveNotionalIn: parseBigInt(parsed.MAX_LIVE_NOTIONAL_IN, 'MAX_LIVE_NOTIONAL_IN'),
     maxLiveInflight: parsed.MAX_LIVE_INFLIGHT,
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
+    enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),
     metricsHost: parsed.METRICS_HOST,

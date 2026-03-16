@@ -99,19 +99,24 @@ export class UniV3RoutePlanner {
         }
 
         candidates.push({
+          venue: 'UNISWAP_V3',
           tokenIn,
           tokenOut,
           amountIn,
           requiredOutput,
           quotedAmountOut,
-          poolFee: feeTier,
           minAmountOut,
+          limitSqrtPriceX96: 0n,
           slippageBufferOut,
           gasCostOut,
           riskBufferOut,
           profitFloorOut,
           grossEdgeOut,
-          netEdgeOut
+          netEdgeOut,
+          quoteMetadata: {
+            venue: 'UNISWAP_V3',
+            poolFee: feeTier
+          }
         });
       } catch (error) {
         // Per-fee quote failures are tolerated so other fee tiers can still produce a route.

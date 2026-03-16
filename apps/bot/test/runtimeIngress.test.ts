@@ -18,7 +18,7 @@ import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
-import type { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
+import type { RouteBook } from '../src/routing/routeBook.js';
 
 function fixture(name: string): { encodedOrder: `0x${string}`; signature: `0x${string}` } {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
@@ -48,28 +48,30 @@ function makeWebhookPayload(name = 'live-01.json') {
   };
 }
 
-function routePlannerWithEdge(netEdgeOut: bigint): UniV3RoutePlanner {
+function routeBookWithEdge(netEdgeOut: bigint): RouteBook {
   return {
-    planBestRoute: async ({ resolvedOrder }) => ({
+    selectBestRoute: async ({ resolvedOrder }) => ({
       ok: true,
-      consideredFees: [500],
-      route: {
+      chosenRoute: {
+        venue: 'UNISWAP_V3',
         tokenIn: resolvedOrder.input.token,
         tokenOut: resolvedOrder.outputs[0]!.token,
         amountIn: resolvedOrder.input.amount,
         requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
         quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + netEdgeOut,
-        poolFee: 500,
         minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+        limitSqrtPriceX96: 0n,
         slippageBufferOut: 0n,
         gasCostOut: 0n,
         riskBufferOut: 0n,
         profitFloorOut: 0n,
         grossEdgeOut: netEdgeOut,
-        netEdgeOut
-      }
+        netEdgeOut,
+        quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+      },
+      alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut }]
     })
-  } as UniV3RoutePlanner;
+  } as RouteBook;
 }
 
 function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
@@ -99,6 +101,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxLiveNotionalIn: 10n ** 30n,
     maxLiveInflight: 100,
     minLiveEdgeOut: 1n,
+    enableCamelotAmmv3: false,
     enableMetricsServer: false,
     metricsHost: '127.0.0.1',
     metricsPort: 0,
@@ -225,11 +228,11 @@ describe('runtime ingress and orchestration', () => {
       metrics,
       inflightTracker: new InflightTracker(),
       schedulerContext: {
-        routePlanner: routePlannerWithEdge(10n),
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
       },
       hotLaneContext: {
-        routePlanner: routePlannerWithEdge(10n),
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n },
         conditionalEnvelope: { TimestampMax: 1_900_000_010n },
         executor: '0x3333333333333333333333333333333333333333',
@@ -325,11 +328,11 @@ describe('runtime ingress and orchestration', () => {
         metrics,
         inflightTracker: new InflightTracker(),
         schedulerContext: {
-          routePlanner: routePlannerWithEdge(10n),
+          routeBook: routeBookWithEdge(10n),
           resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
         },
         hotLaneContext: {
-          routePlanner: routePlannerWithEdge(10n),
+          routeBook: routeBookWithEdge(10n),
           resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n },
           conditionalEnvelope: { TimestampMax: 1_900_000_010n },
           executor: '0x3333333333333333333333333333333333333333',
@@ -412,11 +415,11 @@ describe('runtime ingress and orchestration', () => {
       inflightTracker: new InflightTracker(),
       metricsServer,
       schedulerContext: {
-        routePlanner: routePlannerWithEdge(10n),
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
       },
       hotLaneContext: {
-        routePlanner: routePlannerWithEdge(10n),
+        routeBook: routeBookWithEdge(10n),
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n },
         conditionalEnvelope: { TimestampMax: 1_900_000_010n },
         executor: '0x3333333333333333333333333333333333333333',

@@ -1,0 +1,13 @@
+import { parseAbi } from 'viem';
+
+export const CAMELOT_AMMV3_FACTORY_ABI = parseAbi([
+  'function poolByPair(address tokenA, address tokenB) view returns (address pool)'
+]);
+
+export const CAMELOT_AMMV3_QUOTER_ABI = parseAbi([
+  'function quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice) returns (uint256 amountOut, uint16 observedFee)'
+]);
+
+export const CAMELOT_AMMV3_ROUTER_ABI = parseAbi([
+  'function exactInputSingle((address tokenIn,address tokenOut,address recipient,uint256 deadline,uint256 amountIn,uint256 amountOutMinimum,uint160 limitSqrtPrice)) payable returns (uint256 amountOut)'
+]);

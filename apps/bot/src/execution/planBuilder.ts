@@ -4,7 +4,7 @@ import { resolveAt } from '@uni/protocol';
 import { EXECUTOR_ABI } from './abi.js';
 import { encodeRoutePlanCallbackData } from './callbackData.js';
 import type { BuildExecutionPlanResult, ExecutionPlan } from './types.js';
-import type { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
+import type { RouteBook } from '../routing/routeBook.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 import type { NormalizedOrder } from '../store/types.js';
 import { hasSameOutputTokenShape } from '../routing/univ3QuoteModel.js';
@@ -13,7 +13,7 @@ const ARBITRUM_ONE_CHAIN_ID = 42161n;
 
 export type BuildExecutionPlanParams = {
   normalizedOrder: NormalizedOrder;
-  planner: UniV3RoutePlanner;
+  routeBook: RouteBook;
   executor: Address;
   blockNumberish: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
@@ -39,21 +39,19 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     return { ok: false, reason: 'UNSUPPORTED_SHAPE', details: 'resolved output shape is not same-token' };
   }
 
-  const routeResult = await params.planner.planBestRoute({ resolvedOrder });
-  if (!routeResult.ok) {
+  const routeDecision = await params.routeBook.selectBestRoute({ resolvedOrder });
+  if (!routeDecision.ok) {
+    const isGasPricingFailure = routeDecision.alternativeRoutes.some(
+      (summary) => summary.reason === 'NOT_PRICEABLE_GAS' || summary.reason === 'CAMELOT_GAS_NOT_PRICEABLE'
+    );
+    const isProfitabilityFailure = routeDecision.alternativeRoutes.some((summary) => summary.reason === 'NOT_PROFITABLE');
     return {
       ok: false,
-      reason:
-        routeResult.failure.reason === 'NOT_PROFITABLE'
-          ? 'NOT_PROFITABLE'
-          : routeResult.failure.reason === 'NOT_PRICEABLE_GAS'
-            ? 'NOT_PRICEABLE_GAS'
-            : 'NOT_ROUTEABLE',
-      details: routeResult.failure.details
+      reason: isGasPricingFailure ? 'NOT_PRICEABLE_GAS' : isProfitabilityFailure ? 'NOT_PROFITABLE' : 'NOT_ROUTEABLE'
     };
   }
 
-  const callbackData = encodeRoutePlanCallbackData(routeResult.route);
+  const callbackData = encodeRoutePlanCallbackData(routeDecision.chosenRoute);
   const executeCalldata = encodeFunctionData({
     abi: EXECUTOR_ABI,
     functionName: 'execute',
@@ -76,7 +74,8 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     },
     normalizedOrder: params.normalizedOrder,
     resolvedOrder,
-    route: routeResult.route,
+    route: routeDecision.chosenRoute,
+    routeAlternatives: routeDecision.alternativeRoutes,
     callbackData,
     executeCalldata,
     txRequestDraft: {
@@ -87,7 +86,7 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     },
     conditionalEnvelope: params.conditionalEnvelope,
     requiredOutputOut: totalRequiredOutput(resolvedOrder.outputs),
-    predictedNetEdgeOut: routeResult.route.netEdgeOut,
+    predictedNetEdgeOut: routeDecision.chosenRoute.netEdgeOut,
     selectedBlock: params.blockNumberish,
     resolveEnv: params.resolveEnv
   };

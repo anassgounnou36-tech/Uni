@@ -1,5 +1,6 @@
 import type { Address, PublicClient } from 'viem';
 import type { ResolvedV3DutchOrder } from '@uni/protocol';
+import type { HedgeRoutePlan } from '../venues.js';
 
 export type UniV3FeeTier = 500 | 3000 | 10000;
 
@@ -12,20 +13,12 @@ export type RoutePlanningPolicy = {
   profitFloorOut?: bigint;
 };
 
-export type UniV3RoutePlan = {
-  tokenIn: Address;
-  tokenOut: Address;
-  amountIn: bigint;
-  requiredOutput: bigint; // output-token units
-  quotedAmountOut: bigint; // output-token units
-  poolFee: UniV3FeeTier;
-  minAmountOut: bigint; // output-token units
-  slippageBufferOut: bigint; // output-token units
-  gasCostOut: bigint; // output-token units
-  riskBufferOut: bigint; // output-token units
-  profitFloorOut: bigint; // output-token units
-  grossEdgeOut: bigint; // output-token units
-  netEdgeOut: bigint; // output-token units
+export type UniV3RoutePlan = HedgeRoutePlan & {
+  venue: 'UNISWAP_V3';
+  quoteMetadata: {
+    venue: 'UNISWAP_V3';
+    poolFee: UniV3FeeTier;
+  };
 };
 
 export type RoutePlanningFailure = {

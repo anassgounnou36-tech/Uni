@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { findFirstProfitableBlock } from '../src/scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../src/scheduler/hotLane.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
-import type { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
+import type { RouteBook } from '../src/routing/routeBook.js';
 import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
 import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
@@ -20,37 +20,42 @@ function loadSigned() {
   return decodeSignedOrder(fixture.encodedOrder, fixture.signature);
 }
 
-function makeRoutePlanner(netEdgeOut: bigint): UniV3RoutePlanner {
+function makeRouteBook(netEdgeOut: bigint): RouteBook {
   return {
-    planBestRoute: async ({ resolvedOrder }) => {
+    selectBestRoute: async ({ resolvedOrder }) => {
       const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
       const quotedAmountOut = requiredOutput + 100n;
       const route = {
+        venue: 'UNISWAP_V3',
         tokenIn: resolvedOrder.input.token,
         tokenOut: resolvedOrder.outputs[0]!.token,
         amountIn: resolvedOrder.input.amount,
         requiredOutput,
         quotedAmountOut,
-        poolFee: 500,
         minAmountOut: requiredOutput,
+        limitSqrtPriceX96: 0n,
         slippageBufferOut: 5n,
         gasCostOut: 10n,
         riskBufferOut: 0n,
         profitFloorOut: 0n,
         grossEdgeOut: 100n,
-        netEdgeOut
+        netEdgeOut,
+        quoteMetadata: {
+          venue: 'UNISWAP_V3',
+          poolFee: 500
+        }
       } as const;
       return netEdgeOut > 0n
-        ? { ok: true, route, consideredFees: [500] }
-        : { ok: false, failure: { reason: 'NOT_ROUTEABLE' }, consideredFees: [500] };
+        ? { ok: true, chosenRoute: route, alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut }] }
+        : { ok: false, reason: 'NOT_ROUTEABLE', alternativeRoutes: [] };
     }
-  } as UniV3RoutePlanner;
+  } as RouteBook;
 }
 
 describe('scheduler + prepared-execution gate', () => {
   it('finds first profitable block using output-unit edges', async () => {
     const signed = loadSigned();
-    const routePlanner = makeRoutePlanner(50n);
+    const routeBook = makeRouteBook(50n);
 
     const schedule = await findFirstProfitableBlock({
       order: signed.order,
@@ -59,7 +64,7 @@ describe('scheduler + prepared-execution gate', () => {
         basefee: 100_000_000n,
         chainId: 42161n
       },
-      routePlanner,
+      routeBook,
       candidateBlocks: [1000n, 1001n, 1002n],
       threshold: 1n,
       competeWindowBlocks: 2n
@@ -72,7 +77,7 @@ describe('scheduler + prepared-execution gate', () => {
 
   it('uses the exact same serialized tx for simulation and live send', async () => {
     const signed = loadSigned();
-    const routePlanner = makeRoutePlanner(50n);
+    const routeBook = makeRouteBook(50n);
     const orderHash = computeOrderHash(signed.order) as `0x${string}`;
     const nonceManager = new NonceManager({
       ledger: new InMemoryNonceLedger(),
@@ -138,7 +143,7 @@ describe('scheduler + prepared-execution gate', () => {
         reactor: signed.order.info.reactor
       },
       order: signed.order,
-      routePlanner,
+      routeBook,
       resolveEnv: {
         timestamp: 1_900_000_000n,
         basefee: 100_000_000n,
@@ -190,7 +195,7 @@ describe('scheduler + prepared-execution gate', () => {
 
   it('does not call sendPreparedExecution when shadowMode is true', async () => {
     const signed = loadSigned();
-    const routePlanner = makeRoutePlanner(50n);
+    const routeBook = makeRouteBook(50n);
     const orderHash = computeOrderHash(signed.order) as `0x${string}`;
     const nonceManager = new NonceManager({
       ledger: new InMemoryNonceLedger(),
@@ -243,7 +248,7 @@ describe('scheduler + prepared-execution gate', () => {
         reactor: signed.order.info.reactor
       },
       order: signed.order,
-      routePlanner,
+      routeBook,
       resolveEnv: {
         timestamp: 1_900_000_000n,
         basefee: 100_000_000n,

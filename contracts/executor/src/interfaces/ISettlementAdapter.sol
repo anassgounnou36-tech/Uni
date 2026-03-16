@@ -8,6 +8,7 @@ interface ISettlementAdapter {
         uint24 poolFee,
         uint256 amountIn,
         uint256 minAmountOut,
+        uint160 limitSqrtPriceX96,
         address recipient
     ) external returns (uint256 amountOut);
 }

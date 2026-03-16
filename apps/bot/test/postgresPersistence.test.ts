@@ -40,6 +40,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxLiveNotionalIn: 10n ** 30n,
     maxLiveInflight: 10,
     minLiveEdgeOut: 1n,
+    enableCamelotAmmv3: false,
     enableMetricsServer: false,
     metricsHost: '127.0.0.1',
     metricsPort: 9100,

@@ -1,7 +1,7 @@
 import type { Hex } from 'viem';
 import type { ResolveEnv, ResolvedV3DutchOrder } from '@uni/protocol';
 import type { NormalizedOrder } from '../store/types.js';
-import type { UniV3RoutePlan } from '../routing/univ3/types.js';
+import type { HedgeRoutePlan, RouteCandidateSummary } from '../routing/venues.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 
 export type ExecutionPlan = {
@@ -14,7 +14,8 @@ export type ExecutionPlan = {
   };
   normalizedOrder: NormalizedOrder;
   resolvedOrder: ResolvedV3DutchOrder;
-  route: UniV3RoutePlan;
+  route: HedgeRoutePlan;
+  routeAlternatives: RouteCandidateSummary[];
   callbackData: Hex;
   executeCalldata: Hex;
   txRequestDraft: {
