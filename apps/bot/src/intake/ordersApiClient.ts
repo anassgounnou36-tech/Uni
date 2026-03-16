@@ -19,6 +19,7 @@ export type OrdersApiClientConfig = {
   cadenceMs?: number;
   orderType?: string;
   orderStatus?: string;
+  requestTimeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
 
@@ -66,6 +67,7 @@ export class OrdersApiClient {
   readonly chainId: number;
   readonly orderType: string;
   readonly orderStatus: string;
+  readonly requestTimeoutMs: number;
 
   constructor(private readonly config: OrdersApiClientConfig) {
     this.fetchImpl = config.fetchImpl ?? fetch;
@@ -73,6 +75,7 @@ export class OrdersApiClient {
     this.chainId = config.chainId;
     this.orderType = config.orderType ?? 'Dutch_V3';
     this.orderStatus = config.orderStatus ?? 'open';
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 10_000;
   }
 
   private buildUrl(): string {
@@ -84,7 +87,29 @@ export class OrdersApiClient {
   }
 
   async fetchOpenOrders(signal?: AbortSignal): Promise<OrdersApiOrderPayload[]> {
-    const response = await this.fetchImpl(this.buildUrl(), { method: 'GET', signal });
+    const timeoutMs = this.requestTimeoutMs;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
+
+    const timeoutError = new Error(`Orders API request timed out after ${timeoutMs}ms`);
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort);
+
+    let response: Response;
+    try {
+      response = await this.fetchImpl(this.buildUrl(), { method: 'GET', signal: controller.signal });
+    } catch (error) {
+      if (controller.signal.aborted && !signal?.aborted) {
+        throw timeoutError;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+    }
+
     if (!response.ok) {
       throw new Error(`Orders API error ${response.status}`);
     }

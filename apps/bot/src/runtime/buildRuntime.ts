@@ -26,6 +26,7 @@ import { PrometheusMetricsServer } from '../telemetry/prometheus.js';
 import { BotRuntime, type HotLaneContext, type SchedulerContext } from './BotRuntime.js';
 import type { RuntimeConfig } from './config.js';
 import { InflightTracker } from './inflightTracker.js';
+import type { StructuredLogger } from '../telemetry/logging.js';
 
 const DEFAULT_DEV_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as const;
 
@@ -48,6 +49,7 @@ export type BuildRuntimeOverrides = {
   inflightTracker: InflightTracker;
   sqlAdapter: SqlAdapter;
   createSqlAdapter: (databaseUrl: string) => Promise<SqlAdapter>;
+  logger: StructuredLogger;
 };
 
 export type BuildRuntimeResult = {
@@ -302,7 +304,8 @@ export async function buildRuntimeFromConfig(
     inflightTracker,
     requireTradingDeps: true,
     schedulerContext,
-    hotLaneContext
+    hotLaneContext,
+    logger: overrides.logger
   });
 
   return {

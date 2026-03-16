@@ -19,6 +19,7 @@ import { NonceManager } from '../send/nonceManager.js';
 import type { ExecutionPlan } from '../execution/types.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from '../attribution/routeDecisionAttribution.js';
+import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -49,6 +50,7 @@ export type BotRuntimeDeps = {
   requireTradingDeps?: boolean;
   schedulerContext?: SchedulerContext;
   hotLaneContext?: HotLaneContext;
+  logger?: StructuredLogger;
 };
 
 export class BotRuntime {
@@ -56,8 +58,18 @@ export class BotRuntime {
   private schedulerTimer: NodeJS.Timeout | undefined;
   private hotLaneTimer: NodeJS.Timeout | undefined;
   private readonly hotQueue: ScheduledOrder[] = [];
+  private readonly logger: StructuredLogger;
 
-  constructor(private readonly deps: BotRuntimeDeps) {}
+  constructor(private readonly deps: BotRuntimeDeps) {
+    this.logger = deps.logger ?? new JsonConsoleLogger();
+  }
+
+  private toErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
+  }
 
   private getPolicyInflightCount(): number {
     return this.deps.inflightTracker.getInflightCount();
@@ -85,18 +97,53 @@ export class BotRuntime {
 
     if (this.deps.webhookServer) {
       await this.deps.webhookServer.start();
+      this.logger.log('info', 'webhook_server_started', {
+        host: this.deps.config.webhookHost,
+        port: this.deps.config.webhookPort,
+        path: this.deps.config.webhookPath
+      });
     }
     if (this.deps.metricsServer) {
       await this.deps.metricsServer.start();
+      this.logger.log('info', 'metrics_server_started', {
+        host: this.deps.config.metricsHost,
+        port: this.deps.config.metricsPort
+      });
     }
 
-    this.pollTimer = setInterval(() => void this.pollTick(), this.deps.config.pollCadenceMs);
-    this.schedulerTimer = setInterval(() => void this.schedulerTick(), this.deps.config.schedulerCadenceMs);
-    this.hotLaneTimer = setInterval(() => void this.hotLaneTick(), this.deps.config.hotLaneCadenceMs);
+    this.pollTimer = setInterval(
+      () =>
+        void this.pollTick().catch((error) => {
+          this.logger.log('error', 'poll_tick_failed', { error: this.toErrorMessage(error) });
+        }),
+      this.deps.config.pollCadenceMs
+    );
+    this.schedulerTimer = setInterval(
+      () =>
+        void this.schedulerTick().catch((error) => {
+          this.logger.log('error', 'scheduler_tick_failed', { error: this.toErrorMessage(error) });
+        }),
+      this.deps.config.schedulerCadenceMs
+    );
+    this.hotLaneTimer = setInterval(
+      () =>
+        void this.hotLaneTick().catch((error) => {
+          this.logger.log('error', 'hot_lane_tick_failed', { error: this.toErrorMessage(error) });
+        }),
+      this.deps.config.hotLaneCadenceMs
+    );
 
-    await this.pollTick();
-    await this.schedulerTick();
-    await this.hotLaneTick();
+    this.logger.log('info', 'runtime_started');
+
+    void this.pollTick().catch((error) => {
+      this.logger.log('error', 'poll_tick_failed', { error: this.toErrorMessage(error) });
+    });
+    void this.schedulerTick().catch((error) => {
+      this.logger.log('error', 'scheduler_tick_failed', { error: this.toErrorMessage(error) });
+    });
+    void this.hotLaneTick().catch((error) => {
+      this.logger.log('error', 'hot_lane_tick_failed', { error: this.toErrorMessage(error) });
+    });
   }
 
   async stop(): Promise<void> {
@@ -126,17 +173,23 @@ export class BotRuntime {
   }
 
   private async pollTick(): Promise<void> {
-    const result = await this.deps.poller.pollOnce();
-    for (const payload of result.payloads) {
-      await this.deps.ingress.ingest({
-        source: 'POLL',
-        receivedAtMs: Date.now(),
-        payload,
-        orderHashHint:
-          typeof payload.orderHash === 'string' && payload.orderHash.startsWith('0x')
-            ? (payload.orderHash as `0x${string}`)
-            : undefined
-      });
+    this.logger.log('info', 'poll_tick_started');
+    try {
+      const result = await this.deps.poller.pollOnce();
+      for (const payload of result.payloads) {
+        await this.deps.ingress.ingest({
+          source: 'POLL',
+          receivedAtMs: Date.now(),
+          payload,
+          orderHashHint:
+            typeof payload.orderHash === 'string' && payload.orderHash.startsWith('0x')
+              ? (payload.orderHash as `0x${string}`)
+              : undefined
+        });
+      }
+      this.logger.log('info', 'poll_tick_completed', { fetched: result.fetched });
+    } catch (error) {
+      this.logger.log('error', 'poll_tick_failed', { error: this.toErrorMessage(error) });
     }
   }
 
