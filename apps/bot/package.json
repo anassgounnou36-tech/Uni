@@ -8,7 +8,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "start": "node dist/apps/bot/src/runtime/main.js"
+    "start": "node dist/apps/bot/src/runtime/main.js",
+    "start:shadow": "BOT_ENV_FILE=../../.env.shadow1 node dist/apps/bot/src/runtime/main.js"
   },
   "dependencies": {
     "@uni/config": "workspace:*",
@@ -16,6 +17,7 @@
     "@uni/routing": "workspace:*",
     "@uni/sim": "workspace:*",
     "@uni/telemetry": "workspace:*",
+    "dotenv": "^17.3.1",
     "pg": "^8.13.1",
     "viem": "^2.23.5",
     "zod": "^3.24.2"
