@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "start": "node dist/runtime/main.js"
+    "start": "node dist/apps/bot/src/runtime/main.js"
   },
   "dependencies": {
     "@uni/config": "workspace:*",
