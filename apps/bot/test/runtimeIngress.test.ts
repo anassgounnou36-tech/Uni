@@ -12,6 +12,7 @@ import { InMemoryNonceLedger, NonceManager } from '../src/send/nonceManager.js';
 import { InMemoryOrderStore } from '../src/store/memory/inMemoryOrderStore.js';
 import { BotMetrics } from '../src/telemetry/metrics.js';
 import { PrometheusMetricsServer } from '../src/telemetry/prometheus.js';
+import { JsonConsoleLogger } from '../src/telemetry/logging.js';
 import { BotRuntime } from '../src/runtime/BotRuntime.js';
 import type { RuntimeConfig } from '../src/runtime/config.js';
 import { InflightTracker } from '../src/runtime/inflightTracker.js';
@@ -517,5 +518,81 @@ describe('runtime ingress and orchestration', () => {
     expect(runtime.isRunning()).toEqual(true);
     await runtime.stop();
     expect(runtime.isRunning()).toEqual(false);
+  });
+
+  it('startupReturnsWhenFirstPollTimesOutAndServersStayUp', async () => {
+    const logLines: string[] = [];
+    const logger = new JsonConsoleLogger((line) => {
+      logLines.push(line);
+    });
+
+    const fetchImpl: typeof fetch = async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new Error('aborted'));
+        });
+      });
+
+    const poller = new OrdersPoller(
+      new OrdersApiClient({
+        baseUrl: 'https://orders.example',
+        chainId: 42161,
+        cadenceMs: 50,
+        requestTimeoutMs: 20,
+        fetchImpl
+      })
+    );
+    const journal = new InMemoryDecisionJournal();
+    const metrics = new BotMetrics();
+    const store = new InMemoryOrderStore();
+    const ingress = new HybridIngressCoordinator({ metrics, journal, store });
+    const webhookServer = new WebhookIngressServer(
+      {
+        host: '127.0.0.1',
+        port: 18085,
+        path: '/uniswapx/webhook',
+        trustProxy: false,
+        allowedCidrs: ['127.0.0.1/32'],
+        maxBodyBytes: 100_000
+      },
+      async (envelope) => ingress.ingest(envelope)
+    );
+    const metricsServer = new PrometheusMetricsServer({ host: '127.0.0.1', port: 18086, metrics });
+    const runtime = new BotRuntime({
+      config: runtimeConfig({ enableWebhookIngress: true, enableMetricsServer: true }),
+      poller,
+      ingress,
+      store,
+      journal,
+      metrics,
+      inflightTracker: new InflightTracker(),
+      webhookServer,
+      metricsServer,
+      logger
+    });
+
+    await expect(
+      Promise.race([
+        runtime.start().then(() => 'started'),
+        wait(200).then(() => 'timeout')
+      ])
+    ).resolves.toEqual('started');
+
+    await wait(80);
+    expect(runtime.isRunning()).toEqual(true);
+
+    const metricsResponse = await fetch('http://127.0.0.1:18086/metrics');
+    expect(metricsResponse.status).toEqual(200);
+
+    const webhookResponse = await fetch('http://127.0.0.1:18085/uniswapx/webhook');
+    expect(webhookResponse.status).toEqual(404);
+
+    const events = logLines.map((line) => JSON.parse(line).event as string);
+    expect(events).toContain('metrics_server_started');
+    expect(events).toContain('webhook_server_started');
+    expect(events).toContain('runtime_started');
+    expect(events).toContain('poll_tick_failed');
+
+    await runtime.stop();
   });
 });
