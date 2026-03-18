@@ -57,7 +57,7 @@ describe('scheduler + prepared-execution gate', () => {
     const signed = loadSigned();
     const routeBook = makeRouteBook(50n);
 
-    const schedule = await findFirstProfitableBlock({
+    const scheduleResult = await findFirstProfitableBlock({
       order: signed.order,
       baseEnv: {
         timestamp: 1_900_000_000n,
@@ -70,8 +70,12 @@ describe('scheduler + prepared-execution gate', () => {
       competeWindowBlocks: 2n
     });
 
-    expect(schedule?.scheduledBlock).toEqual(1000n);
-    const finalEval = schedule!.evaluations.at(-1)!;
+    expect(scheduleResult.ok).toEqual(true);
+    if (!scheduleResult.ok) {
+      throw new Error('expected successful schedule');
+    }
+    expect(scheduleResult.schedule.scheduledBlock).toEqual(1000n);
+    const finalEval = scheduleResult.evaluations.at(-1)!;
     expect(finalEval.netEdgeOut).toBeGreaterThanOrEqual(1n);
   });
 

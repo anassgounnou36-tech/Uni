@@ -113,7 +113,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
 
     await params.store.transition(normalized.orderHash, 'SUPPORTED', 'SUPPORTED');
 
-    const schedule = await findFirstProfitableBlock({
+    const scheduleResult = await findFirstProfitableBlock({
       order,
       baseEnv: params.resolveEnv,
       routeBook: params.routeBook,
@@ -122,7 +122,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
     });
 
-    if (!schedule) {
+    if (!scheduleResult.ok) {
       let noEdgeReason: OrderReasonCode = 'SCHEDULER_NO_EDGE';
       const probeBlock = params.supportPolicy.candidateBlocks[0];
       if (probeBlock !== undefined) {
@@ -148,6 +148,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       });
       continue;
     }
+    const schedule = scheduleResult.schedule;
 
     await params.store.transition(normalized.orderHash, 'SCHEDULED');
 

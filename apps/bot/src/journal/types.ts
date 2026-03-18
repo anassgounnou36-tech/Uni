@@ -42,7 +42,43 @@ export type DecisionJournalEvent =
       { scheduledBlock: string; competeWindowEnd: string; predictedEdgeOut: string; chosenVenue?: string }
     >
   | BaseJournalEvent<'ORDER_REPRICED', { reason?: string; edgeOut?: string }>
-  | BaseJournalEvent<'ORDER_DROPPED', { reason: string }>
+  | BaseJournalEvent<
+      'ORDER_DROPPED',
+      {
+        reason: string;
+        thresholdOut?: string;
+        candidateBlocks?: string[];
+        bestObservedNetEdgeOut?: string;
+        bestObservedVenue?: string;
+        evaluations?: Array<{
+          block: string;
+          selectionOk: boolean;
+          selectionReason?: string;
+          chosenRouteVenue?: string;
+          requiredOutput: string;
+          quotedAmountOut: string;
+          minAmountOut: string;
+          gasCostOut: string;
+          riskBufferOut: string;
+          profitFloorOut: string;
+          netEdgeOut: string;
+          alternativeRoutes: Array<{
+            venue: string;
+            eligible: boolean;
+            reason?: string;
+            details?: string;
+            quotedAmountOut?: string;
+            requiredOutput?: string;
+            minAmountOut?: string;
+            netEdgeOut?: string;
+            gasCostOut?: string;
+          }>;
+        }>;
+        chosenRouteVenue?: string;
+        netEdgeOut?: string;
+        simReason?: string;
+      }
+    >
   | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>
   | BaseJournalEvent<'PREPARED', { ok: boolean; nonce?: string; reason?: string }>
   | BaseJournalEvent<'SIM_RESULT', { ok: boolean; reason: string; attribution?: ExecutionOutcomeAttribution }>
