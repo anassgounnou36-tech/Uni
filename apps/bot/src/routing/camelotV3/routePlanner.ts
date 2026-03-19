@@ -65,8 +65,7 @@ export class CamelotAmmv3RoutePlanner {
       policy: input.policy
     });
     if (!quote.ok) {
-      const summary: VenueRouteAttemptSummary = quote.summary;
-      return { ok: false, failure: { reason: quote.reason, details: quote.details, summary } };
+      return { ok: false, failure: { reason: quote.reason, details: quote.details, summary: quote.summary } };
     }
 
     return { ok: true, route: quote.route, summary: quote.summary };

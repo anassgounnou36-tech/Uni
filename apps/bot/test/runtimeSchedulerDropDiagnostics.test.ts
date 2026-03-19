@@ -314,7 +314,7 @@ function noEdgeNearMissRouteBook(): RouteBook {
           venue: 'UNISWAP_V3',
           eligible: false,
           reason: 'NOT_PROFITABLE',
-          details: 'near miss'
+          details: 'Near miss'
         }
       ]
     })
