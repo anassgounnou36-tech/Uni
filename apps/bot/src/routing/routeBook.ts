@@ -2,16 +2,21 @@ import type { RoutePlannerInput } from './univ3/types.js';
 import type { UniV3RoutePlanner } from './univ3/routePlanner.js';
 import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
+import type { VenueRouteAttemptSummary } from './attemptTypes.js';
 
 export type RouteBookSelection =
   | {
       ok: true;
       chosenRoute: HedgeRoutePlan;
+      chosenSummary: VenueRouteAttemptSummary;
+      venueAttempts: VenueRouteAttemptSummary[];
       alternativeRoutes: RouteCandidateSummary[];
     }
   | {
       ok: false;
-      reason: 'NOT_ROUTEABLE';
+      reason: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE';
+      venueAttempts: VenueRouteAttemptSummary[];
+      bestRejectedSummary?: VenueRouteAttemptSummary;
       alternativeRoutes: RouteCandidateSummary[];
     };
 
@@ -32,6 +37,19 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
     netEdgeOut: route.netEdgeOut,
     gasCostOut: route.gasCostOut
   };
+}
+
+function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandidateSummary['reason'] {
+  if (summary.status === 'NOT_PROFITABLE' || summary.status === 'CONSTRAINT_REJECTED') {
+    return 'NOT_PROFITABLE';
+  }
+  if (summary.status === 'QUOTE_FAILED') {
+    return 'QUOTE_FAILED';
+  }
+  if (summary.status === 'GAS_NOT_PRICEABLE') {
+    return 'NOT_PRICEABLE_GAS';
+  }
+  return 'NOT_ROUTEABLE';
 }
 
 function sortByBestEdge(routes: HedgeRoutePlan[]): HedgeRoutePlan[] {
@@ -67,20 +85,23 @@ export class RouteBook {
     ]);
 
     const alternatives: RouteCandidateSummary[] = [];
+    const venueAttempts: VenueRouteAttemptSummary[] = [];
     const eligible: HedgeRoutePlan[] = [];
 
     if (uniswapResult.ok) {
       const summary = toSummary(uniswapResult.route);
       alternatives.push(summary);
+      venueAttempts.push(uniswapResult.summary);
       if (summary.eligible) {
         eligible.push(uniswapResult.route);
       }
     } else {
+      venueAttempts.push(uniswapResult.failure.summary);
       alternatives.push({
         venue: 'UNISWAP_V3',
         eligible: false,
-        reason: uniswapResult.failure.reason,
-        details: uniswapResult.failure.details
+        reason: toCandidateFailureReason(uniswapResult.failure.summary),
+        details: uniswapResult.failure.summary.reason
       });
     }
 
@@ -88,18 +109,25 @@ export class RouteBook {
       if (camelotResult.ok) {
         const summary = toSummary(camelotResult.route);
         alternatives.push(summary);
+        venueAttempts.push(camelotResult.summary);
         if (summary.eligible) {
           eligible.push(camelotResult.route);
         }
       } else {
+        venueAttempts.push(camelotResult.failure.summary);
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
           eligible: false,
-          reason: camelotResult.failure.reason,
-          details: camelotResult.failure.details
+          reason: toCandidateFailureReason(camelotResult.failure.summary),
+          details: camelotResult.failure.summary.reason
         });
       }
     } else if (!this.planners.enableCamelotAmmv3) {
+      venueAttempts.push({
+        venue: 'CAMELOT_AMMV3',
+        status: 'NOT_ROUTEABLE',
+        reason: 'CAMELOT_DISABLED'
+      });
       alternatives.push({
         venue: 'CAMELOT_AMMV3',
         eligible: false,
@@ -108,9 +136,30 @@ export class RouteBook {
     }
 
     if (eligible.length === 0) {
+      const successfulQuoteAttempts = venueAttempts.filter(
+        (attempt) => attempt.quotedAmountOut !== undefined || (attempt.quoteCount ?? 0) > 0
+      );
+      const hasGasOnly = successfulQuoteAttempts.length > 0
+        && successfulQuoteAttempts.every((attempt) => attempt.status === 'GAS_NOT_PRICEABLE');
+      const reason: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' = hasGasOnly
+        ? 'GAS_NOT_PRICEABLE'
+        : successfulQuoteAttempts.length > 0
+          ? 'NOT_PROFITABLE'
+          : 'NOT_ROUTEABLE';
+      const bestRejectedSummary = [...venueAttempts]
+        .sort((a, b) => {
+          const aEdge = a.netEdgeOut ?? -1n;
+          const bEdge = b.netEdgeOut ?? -1n;
+          if (aEdge !== bEdge) {
+            return aEdge > bEdge ? -1 : 1;
+          }
+          return venueTieBreak(a.venue, b.venue);
+        })[0];
       return {
         ok: false,
-        reason: 'NOT_ROUTEABLE',
+        reason,
+        venueAttempts,
+        bestRejectedSummary,
         alternativeRoutes: alternatives
       };
     }
@@ -136,9 +185,20 @@ export class RouteBook {
       return candidate;
     });
 
+    const chosenSummary = venueAttempts.find((summary) => summary.venue === chosenRoute.venue) ?? {
+      venue: chosenRoute.venue,
+      status: 'ROUTEABLE',
+      reason: 'ROUTEABLE',
+      quotedAmountOut: chosenRoute.quotedAmountOut,
+      minAmountOut: chosenRoute.minAmountOut,
+      grossEdgeOut: chosenRoute.grossEdgeOut,
+      netEdgeOut: chosenRoute.netEdgeOut
+    };
     return {
       ok: true,
       chosenRoute,
+      chosenSummary,
+      venueAttempts,
       alternativeRoutes
     };
   }

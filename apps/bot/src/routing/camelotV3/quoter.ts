@@ -2,7 +2,8 @@ import type { Address, PublicClient } from 'viem';
 import { CAMELOT_AMMV3_FACTORY_ABI, CAMELOT_AMMV3_QUOTER_ABI } from './abi.js';
 import { convertGasWeiToTokenOut } from '../univ3/gasValue.js';
 import type { RoutePlanningPolicy, UniV3FeeTier } from '../univ3/types.js';
-import type { HedgeRoutePlan, RouteCandidateFailureReason } from '../venues.js';
+import type { HedgeRoutePlan } from '../venues.js';
+import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -26,11 +27,13 @@ export type CamelotAmmv3QuoteResult =
           observedFee?: number;
         };
       };
+      summary: VenueRouteAttemptSummary;
     }
   | {
       ok: false;
-      reason: RouteCandidateFailureReason;
+      reason: 'NOT_ROUTEABLE' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' | 'CONSTRAINT_REJECTED';
       details?: string;
+      summary: VenueRouteAttemptSummary;
     };
 
 function applyBpsFloor(amount: bigint, bpsToKeep: bigint): bigint {
@@ -52,7 +55,15 @@ export class CamelotAmmv3Quoter {
     policy?: RoutePlanningPolicy;
   }): Promise<CamelotAmmv3QuoteResult> {
     if (!this.context.enabled) {
-      return { ok: false, reason: 'CAMELOT_DISABLED' };
+      return {
+        ok: false,
+        reason: 'NOT_ROUTEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'CAMELOT_DISABLED'
+        }
+      };
     }
 
     let discoveredPool: Address;
@@ -64,10 +75,26 @@ export class CamelotAmmv3Quoter {
         args: [params.tokenIn, params.tokenOut]
       });
     } catch {
-      return { ok: false, reason: 'CAMELOT_NOT_ROUTEABLE' };
+      return {
+        ok: false,
+        reason: 'NOT_ROUTEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'POOL_LOOKUP_FAILED'
+        }
+      };
     }
     if (discoveredPool.toLowerCase() === ZERO_ADDRESS) {
-      return { ok: false, reason: 'CAMELOT_NOT_ROUTEABLE' };
+      return {
+        ok: false,
+        reason: 'NOT_ROUTEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'POOL_MISSING'
+        }
+      };
     }
 
     let quotedAmountOut: bigint;
@@ -81,21 +108,44 @@ export class CamelotAmmv3Quoter {
       });
       if (Array.isArray(quoteResult)) {
         if (typeof quoteResult[0] !== 'bigint') {
-          return { ok: false, reason: 'CAMELOT_QUOTE_FAILED', details: 'unexpected Camelot quote shape' };
+          return {
+            ok: false,
+            reason: 'QUOTE_FAILED',
+            details: 'unexpected Camelot quote shape',
+            summary: {
+              venue: 'CAMELOT_AMMV3',
+              status: 'QUOTE_FAILED',
+              reason: 'UNEXPECTED_QUOTE_SHAPE'
+            }
+          };
         }
         quotedAmountOut = quoteResult[0];
         observedFee = quoteResult[1] === undefined ? undefined : Number(quoteResult[1]);
       } else {
         if (typeof quoteResult !== 'bigint') {
-          return { ok: false, reason: 'CAMELOT_QUOTE_FAILED', details: 'unexpected Camelot quote scalar result' };
+          return {
+            ok: false,
+            reason: 'QUOTE_FAILED',
+            details: 'unexpected Camelot quote scalar result',
+            summary: {
+              venue: 'CAMELOT_AMMV3',
+              status: 'QUOTE_FAILED',
+              reason: 'UNEXPECTED_QUOTE_SCALAR'
+            }
+          };
         }
         quotedAmountOut = quoteResult;
       }
     } catch (error) {
       return {
         ok: false,
-        reason: 'CAMELOT_QUOTE_FAILED',
-        details: error instanceof Error ? error.message : String(error)
+        reason: 'QUOTE_FAILED',
+        details: error instanceof Error ? error.message : String(error),
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'QUOTE_FAILED',
+          reason: 'QUOTE_CALL_FAILED'
+        }
       };
     }
 
@@ -117,7 +167,17 @@ export class CamelotAmmv3Quoter {
       supportedFeeTiers: DEFAULT_UNIV3_GAS_FEE_TIERS
     });
     if (!gasConversion.ok) {
-      return { ok: false, reason: 'CAMELOT_GAS_NOT_PRICEABLE' };
+      return {
+        ok: false,
+        reason: 'GAS_NOT_PRICEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'GAS_NOT_PRICEABLE',
+          reason: 'GAS_CONVERSION_FAILED',
+          quotedAmountOut,
+          grossEdgeOut: quotedAmountOut - requiredOutput
+        }
+      };
     }
 
     const slippageBufferOut = quotedAmountOut - applyBpsFloor(quotedAmountOut, 10_000n - policy.slippageBufferBps);
@@ -129,8 +189,35 @@ export class CamelotAmmv3Quoter {
     const profitabilityFloorOut = requiredOutput + gasCostOut + riskBufferOut + profitFloorOut;
     const minAmountOut = slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut;
     const netEdgeOut = quotedAmountOut - requiredOutput - slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
-    if (quotedAmountOut < minAmountOut || netEdgeOut <= 0n) {
-      return { ok: false, reason: 'NOT_PROFITABLE' };
+    if (quotedAmountOut < minAmountOut) {
+      return {
+        ok: false,
+        reason: 'CONSTRAINT_REJECTED',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'MIN_AMOUNT_OUT',
+          quotedAmountOut,
+          minAmountOut,
+          grossEdgeOut,
+          netEdgeOut
+        }
+      };
+    }
+    if (netEdgeOut <= 0n) {
+      return {
+        ok: false,
+        reason: 'NOT_PROFITABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_PROFITABLE',
+          reason: 'NET_EDGE_NON_POSITIVE',
+          quotedAmountOut,
+          minAmountOut,
+          grossEdgeOut,
+          netEdgeOut
+        }
+      };
     }
 
     return {
@@ -154,6 +241,15 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           observedFee
         }
+      },
+      summary: {
+        venue: 'CAMELOT_AMMV3',
+        status: 'ROUTEABLE',
+        reason: 'ROUTEABLE',
+        quotedAmountOut,
+        minAmountOut,
+        grossEdgeOut,
+        netEdgeOut
       }
     };
   }

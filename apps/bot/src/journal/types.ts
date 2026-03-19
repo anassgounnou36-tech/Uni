@@ -50,6 +50,28 @@ export type DecisionJournalEvent =
         candidateBlocks?: string[];
         bestObservedNetEdgeOut?: string;
         bestObservedVenue?: string;
+        bestRejectedSummary?: {
+          venue: string;
+          status: string;
+          reason: string;
+          quotedAmountOut?: string;
+          minAmountOut?: string;
+          grossEdgeOut?: string;
+          netEdgeOut?: string;
+          selectedFeeTier?: number;
+          quoteCount?: number;
+          feeTierAttempts?: Array<{
+            feeTier: number;
+            poolExists: boolean;
+            quoteSucceeded: boolean;
+            quotedAmountOut?: string;
+            minAmountOut?: string;
+            grossEdgeOut?: string;
+            netEdgeOut?: string;
+            status: string;
+            reason: string;
+          }>;
+        };
         evaluations?: Array<{
           block: string;
           selectionOk: boolean;
@@ -62,17 +84,50 @@ export type DecisionJournalEvent =
           riskBufferOut: string;
           profitFloorOut: string;
           netEdgeOut: string;
-          alternativeRoutes: Array<{
+          venueAttempts: Array<{
             venue: string;
-            eligible: boolean;
+            status: string;
             reason?: string;
-            details?: string;
             quotedAmountOut?: string;
-            requiredOutput?: string;
             minAmountOut?: string;
+            grossEdgeOut?: string;
             netEdgeOut?: string;
-            gasCostOut?: string;
+            selectedFeeTier?: number;
+            quoteCount?: number;
+            feeTierAttempts?: Array<{
+              feeTier: number;
+              poolExists: boolean;
+              quoteSucceeded: boolean;
+              quotedAmountOut?: string;
+              minAmountOut?: string;
+              grossEdgeOut?: string;
+              netEdgeOut?: string;
+              status: string;
+              reason: string;
+            }>;
           }>;
+          bestRejectedSummary?: {
+            venue: string;
+            status: string;
+            reason: string;
+            quotedAmountOut?: string;
+            minAmountOut?: string;
+            grossEdgeOut?: string;
+            netEdgeOut?: string;
+            selectedFeeTier?: number;
+            quoteCount?: number;
+            feeTierAttempts?: Array<{
+              feeTier: number;
+              poolExists: boolean;
+              quoteSucceeded: boolean;
+              quotedAmountOut?: string;
+              minAmountOut?: string;
+              grossEdgeOut?: string;
+              netEdgeOut?: string;
+              status: string;
+              reason: string;
+            }>;
+          };
         }>;
         chosenRouteVenue?: string;
         netEdgeOut?: string;
