@@ -15,4 +15,3 @@ export type ExactOutputViability = {
   checkedFeeTier?: number;
   reason: string;
 };
-
