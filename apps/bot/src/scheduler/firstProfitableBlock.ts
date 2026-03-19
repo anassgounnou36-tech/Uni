@@ -2,7 +2,7 @@ import type { ResolveEnv, ResolvedV3DutchOrder, V3DutchOrder } from '@uni/protoc
 import { resolveAt } from '@uni/protocol';
 import type { RouteBook } from '../routing/routeBook.js';
 import type { HedgeRoutePlan } from '../routing/venues.js';
-import type { RouteCandidateSummary } from '../routing/venues.js';
+import type { VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -17,8 +17,9 @@ export type BlockEvaluation = {
   netEdgeOut: bigint;
   chosenRouteVenue?: HedgeRoutePlan['venue'];
   selectionOk: boolean;
-  selectionReason?: 'NOT_ROUTEABLE';
-  alternativeRoutes: RouteCandidateSummary[];
+  selectionReason?: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE';
+  venueAttempts: VenueRouteAttemptSummary[];
+  bestRejectedSummary?: VenueRouteAttemptSummary;
 };
 
 export type FirstProfitableSchedule = {
@@ -84,7 +85,8 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         netEdgeOut: -1n,
         selectionOk: false,
         selectionReason: routeResult.reason,
-        alternativeRoutes: routeResult.alternativeRoutes
+        venueAttempts: routeResult.venueAttempts,
+        bestRejectedSummary: routeResult.bestRejectedSummary
       });
       continue;
     }
@@ -105,7 +107,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
       netEdgeOut: route.netEdgeOut,
       chosenRouteVenue: route.venue,
       selectionOk: true,
-      alternativeRoutes: routeResult.alternativeRoutes
+      venueAttempts: routeResult.venueAttempts
     };
     evaluations.push(evaluation);
 

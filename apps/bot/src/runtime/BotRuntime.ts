@@ -20,7 +20,7 @@ import type { ExecutionPlan } from '../execution/types.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from '../attribution/routeDecisionAttribution.js';
 import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.js';
-import type { RouteCandidateSummary } from '../routing/venues.js';
+import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -76,27 +76,63 @@ export class BotRuntime {
     return this.deps.inflightTracker.getInflightCount();
   }
 
-  private toJournalRouteSummary(summary: RouteCandidateSummary): {
-    venue: string;
-    eligible: boolean;
-    reason?: string;
-    details?: string;
+  private toJournalFeeTierAttempt(summary: FeeTierAttemptSummary): {
+    feeTier: number;
+    poolExists: boolean;
+    quoteSucceeded: boolean;
     quotedAmountOut?: string;
-    requiredOutput?: string;
     minAmountOut?: string;
+    grossEdgeOut?: string;
     netEdgeOut?: string;
-    gasCostOut?: string;
+    status: string;
+    reason: string;
+  } {
+    return {
+      feeTier: summary.feeTier,
+      poolExists: summary.poolExists,
+      quoteSucceeded: summary.quoteSucceeded,
+      quotedAmountOut: summary.quotedAmountOut?.toString(),
+      minAmountOut: summary.minAmountOut?.toString(),
+      grossEdgeOut: summary.grossEdgeOut?.toString(),
+      netEdgeOut: summary.netEdgeOut?.toString(),
+      status: summary.status,
+      reason: summary.reason
+    };
+  }
+
+  private toJournalVenueAttempt(summary: VenueRouteAttemptSummary): {
+    venue: string;
+    status: string;
+    reason: string;
+    quotedAmountOut?: string;
+    minAmountOut?: string;
+    grossEdgeOut?: string;
+    netEdgeOut?: string;
+    selectedFeeTier?: number;
+    quoteCount?: number;
+    feeTierAttempts?: Array<{
+      feeTier: number;
+      poolExists: boolean;
+      quoteSucceeded: boolean;
+      quotedAmountOut?: string;
+      minAmountOut?: string;
+      grossEdgeOut?: string;
+      netEdgeOut?: string;
+      status: string;
+      reason: string;
+    }>;
   } {
     return {
       venue: summary.venue,
-      eligible: summary.eligible,
+      status: summary.status,
       reason: summary.reason,
-      details: summary.details,
       quotedAmountOut: summary.quotedAmountOut?.toString(),
-      requiredOutput: summary.requiredOutput?.toString(),
       minAmountOut: summary.minAmountOut?.toString(),
+      grossEdgeOut: summary.grossEdgeOut?.toString(),
       netEdgeOut: summary.netEdgeOut?.toString(),
-      gasCostOut: summary.gasCostOut?.toString()
+      selectedFeeTier: summary.selectedFeeTier,
+      quoteCount: summary.quoteCount,
+      feeTierAttempts: summary.feeTierAttempts?.map((attempt) => this.toJournalFeeTierAttempt(attempt))
     };
   }
 
@@ -112,17 +148,50 @@ export class BotRuntime {
     riskBufferOut: string;
     profitFloorOut: string;
     netEdgeOut: string;
-    alternativeRoutes: Array<{
+    venueAttempts: Array<{
       venue: string;
-      eligible: boolean;
-      reason?: string;
-      details?: string;
+      status: string;
+      reason: string;
       quotedAmountOut?: string;
-      requiredOutput?: string;
       minAmountOut?: string;
+      grossEdgeOut?: string;
       netEdgeOut?: string;
-      gasCostOut?: string;
+      selectedFeeTier?: number;
+      quoteCount?: number;
+      feeTierAttempts?: Array<{
+        feeTier: number;
+        poolExists: boolean;
+        quoteSucceeded: boolean;
+        quotedAmountOut?: string;
+        minAmountOut?: string;
+        grossEdgeOut?: string;
+        netEdgeOut?: string;
+        status: string;
+        reason: string;
+      }>;
     }>;
+    bestRejectedSummary?: {
+      venue: string;
+      status: string;
+      reason: string;
+      quotedAmountOut?: string;
+      minAmountOut?: string;
+      grossEdgeOut?: string;
+      netEdgeOut?: string;
+      selectedFeeTier?: number;
+      quoteCount?: number;
+      feeTierAttempts?: Array<{
+        feeTier: number;
+        poolExists: boolean;
+        quoteSucceeded: boolean;
+        quotedAmountOut?: string;
+        minAmountOut?: string;
+        grossEdgeOut?: string;
+        netEdgeOut?: string;
+        status: string;
+        reason: string;
+      }>;
+    };
   } {
     return {
       block: evaluation.block.toString(),
@@ -136,7 +205,10 @@ export class BotRuntime {
       riskBufferOut: evaluation.riskBufferOut.toString(),
       profitFloorOut: evaluation.profitFloorOut.toString(),
       netEdgeOut: evaluation.netEdgeOut.toString(),
-      alternativeRoutes: evaluation.alternativeRoutes.map((summary) => this.toJournalRouteSummary(summary))
+      venueAttempts: evaluation.venueAttempts.map((summary) => this.toJournalVenueAttempt(summary)),
+      bestRejectedSummary: evaluation.bestRejectedSummary
+        ? this.toJournalVenueAttempt(evaluation.bestRejectedSummary)
+        : undefined
     };
   }
 
@@ -294,6 +366,18 @@ export class BotRuntime {
           bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
           candidateCount: scheduleResult.evaluations.length
         });
+        this.logger.log('info', 'routebook_no_edge_summary', {
+          orderHash,
+          thresholdOut: this.deps.config.thresholdOut.toString(),
+          bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
+          bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
+          bestRejectedReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.reason,
+          venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
+            venue: attempt.venue,
+            status: attempt.status,
+            reason: attempt.reason
+          }))
+        });
         await this.deps.journal.append({
           type: 'ORDER_DROPPED',
           atMs: Date.now(),
@@ -304,6 +388,9 @@ export class BotRuntime {
             candidateBlocks: this.deps.config.candidateBlocks.map((block) => block.toString()),
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
             bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
+            bestRejectedSummary: scheduleResult.bestObservedEvaluation?.bestRejectedSummary
+              ? this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
+              : undefined,
             evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
           }
         });

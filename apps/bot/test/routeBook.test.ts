@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RouteBook } from '../src/routing/routeBook.js';
 import type { HedgeRoutePlan } from '../src/routing/venues.js';
+import type { VenueRouteAttemptSummary } from '../src/routing/attemptTypes.js';
 
 function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
   return {
@@ -26,11 +27,36 @@ function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<Hed
   };
 }
 
+function venueSummary(
+  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3',
+  status: VenueRouteAttemptSummary['status'],
+  overrides: Partial<VenueRouteAttemptSummary> = {}
+): VenueRouteAttemptSummary {
+  return {
+    venue,
+    status,
+    reason: status,
+    ...overrides
+  };
+}
+
 describe('RouteBook', () => {
   it('routeBookChoosesHigherNetEdgeVenue', async () => {
     const routeBook = new RouteBook({
-      uniswapV3: { planBestRoute: async () => ({ ok: true as const, route: makeRoute('UNISWAP_V3', { netEdgeOut: 10n }) }) },
-      camelotAmmv3: { planBestRoute: async () => ({ ok: true as const, route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 20n }) }) },
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('UNISWAP_V3', { netEdgeOut: 10n }),
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', { netEdgeOut: 10n })
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 20n }),
+          summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 20n })
+        })
+      },
       enableCamelotAmmv3: true
     });
     const selected = await routeBook.selectBestRoute({
@@ -40,18 +66,27 @@ describe('RouteBook', () => {
     expect(selected.ok).toBe(true);
     if (selected.ok) {
       expect(selected.chosenRoute.venue).toBe('CAMELOT_AMMV3');
+      expect(selected.chosenSummary.venue).toBe('CAMELOT_AMMV3');
+      expect(selected.venueAttempts).toHaveLength(2);
     }
   });
 
   it('routeBookTieBreaksDeterministically', async () => {
     const tieRoute = makeRoute('UNISWAP_V3', { netEdgeOut: 10n, quotedAmountOut: 100n, minAmountOut: 50n, gasCostOut: 5n });
     const routeBook = new RouteBook({
-      uniswapV3: { planBestRoute: async () => ({ ok: true as const, route: tieRoute }) },
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: tieRoute,
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', { netEdgeOut: 10n })
+        })
+      },
       camelotAmmv3: {
         planBestRoute: async () =>
           ({
             ok: true as const,
-            route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 10n, quotedAmountOut: 100n, minAmountOut: 50n, gasCostOut: 5n })
+            route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 10n, quotedAmountOut: 100n, minAmountOut: 50n, gasCostOut: 5n }),
+            summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 10n })
           })
       },
       enableCamelotAmmv3: true
@@ -68,9 +103,19 @@ describe('RouteBook', () => {
 
   it('camelotDisabledSkipsVenue', async () => {
     const routeBook = new RouteBook({
-      uniswapV3: { planBestRoute: async () => ({ ok: true as const, route: makeRoute('UNISWAP_V3') }) },
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('UNISWAP_V3'),
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE')
+        })
+      },
       camelotAmmv3: {
-        planBestRoute: async () => ({ ok: true as const, route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 999n }) })
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 999n }),
+          summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE')
+        })
       },
       enableCamelotAmmv3: false
     });
@@ -85,6 +130,146 @@ describe('RouteBook', () => {
     if (selected.ok) {
       expect(selected.chosenRoute.venue).toBe('UNISWAP_V3');
       expect(selected.alternativeRoutes.find((summary) => summary.venue === 'CAMELOT_AMMV3')?.reason).toBe('CAMELOT_DISABLED');
+    }
+  });
+
+  it('routeBookFailureReasonSeparatesRouteabilityFromProfitability', async () => {
+    const noPoolRouteBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            details: 'no quote',
+            summary: venueSummary('UNISWAP_V3', 'NOT_ROUTEABLE', { reason: 'POOL_MISSING' })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'NOT_ROUTEABLE', { reason: 'POOL_MISSING' })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const unprofitableRouteBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_PROFITABLE' as const,
+            details: 'negative edge',
+            summary: venueSummary('UNISWAP_V3', 'NOT_PROFITABLE', {
+              reason: 'NET_EDGE_NON_POSITIVE',
+              quotedAmountOut: 1000n,
+              minAmountOut: 900n,
+              netEdgeOut: -1n
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_PROFITABLE' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'NOT_PROFITABLE', {
+              reason: 'NET_EDGE_NON_POSITIVE',
+              quotedAmountOut: 999n,
+              minAmountOut: 900n,
+              netEdgeOut: -2n
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const input = {
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    };
+
+    const noPool = await noPoolRouteBook.selectBestRoute(input);
+    const unprofitable = await unprofitableRouteBook.selectBestRoute(input);
+
+    expect(noPool.ok).toBe(false);
+    if (!noPool.ok) {
+      expect(noPool.reason).toBe('NOT_ROUTEABLE');
+    }
+    expect(unprofitable.ok).toBe(false);
+    if (!unprofitable.ok) {
+      expect(unprofitable.reason).toBe('NOT_PROFITABLE');
+    }
+  });
+
+  it('routeBookKeepsNotRouteableWhenOnlyQuoteFailuresAndMissingPools', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            details: 'no successful quote',
+            summary: venueSummary('UNISWAP_V3', 'NOT_ROUTEABLE', {
+              reason: 'POOL_OR_QUOTE_UNAVAILABLE',
+              quoteCount: 0,
+              feeTierAttempts: [
+                {
+                  feeTier: 500,
+                  poolExists: false,
+                  quoteSucceeded: false,
+                  status: 'NOT_ROUTEABLE',
+                  reason: 'POOL_MISSING'
+                },
+                {
+                  feeTier: 3000,
+                  poolExists: true,
+                  quoteSucceeded: false,
+                  status: 'QUOTE_FAILED',
+                  reason: 'READ_ERROR'
+                },
+                {
+                  feeTier: 10000,
+                  poolExists: false,
+                  quoteSucceeded: false,
+                  status: 'NOT_ROUTEABLE',
+                  reason: 'POOL_MISSING'
+                }
+              ]
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'QUOTE_FAILED' as const,
+            details: 'call failed',
+            summary: venueSummary('CAMELOT_AMMV3', 'QUOTE_FAILED', { reason: 'QUOTE_CALL_FAILED' })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (!selected.ok) {
+      expect(selected.reason).toBe('NOT_ROUTEABLE');
     }
   });
 });

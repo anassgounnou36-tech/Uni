@@ -41,13 +41,14 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
 
   const routeDecision = await params.routeBook.selectBestRoute({ resolvedOrder });
   if (!routeDecision.ok) {
-    const isGasPricingFailure = routeDecision.alternativeRoutes.some(
-      (summary) => summary.reason === 'NOT_PRICEABLE_GAS' || summary.reason === 'CAMELOT_GAS_NOT_PRICEABLE'
-    );
-    const isProfitabilityFailure = routeDecision.alternativeRoutes.some((summary) => summary.reason === 'NOT_PROFITABLE');
     return {
       ok: false,
-      reason: isGasPricingFailure ? 'NOT_PRICEABLE_GAS' : isProfitabilityFailure ? 'NOT_PROFITABLE' : 'NOT_ROUTEABLE'
+      reason:
+        routeDecision.reason === 'GAS_NOT_PRICEABLE'
+          ? 'NOT_PRICEABLE_GAS'
+          : routeDecision.reason === 'NOT_PROFITABLE'
+            ? 'NOT_PROFITABLE'
+            : 'NOT_ROUTEABLE'
     };
   }
 

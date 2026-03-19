@@ -7,6 +7,20 @@ export type QuotedExactInputSingle = {
   gasEstimate: bigint;
 };
 
+export function classifyQuoteFailure(error: unknown): string {
+  if (error instanceof Error) {
+    const message = error.message.toLowerCase();
+    if (message.includes('execution reverted')) {
+      return 'REVERTED';
+    }
+    if (message.includes('timeout')) {
+      return 'TIMEOUT';
+    }
+    return 'READ_ERROR';
+  }
+  return 'UNKNOWN_ERROR';
+}
+
 export async function quoteExactInputSingle(
   client: PublicClient,
   quoter: Address,

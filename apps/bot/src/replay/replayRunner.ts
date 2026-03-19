@@ -128,12 +128,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       if (probeBlock !== undefined) {
         const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlock });
         const probeRoute = await params.routeBook.selectBestRoute({ resolvedOrder: probeResolved });
-        if (
-          !probeRoute.ok
-          && probeRoute.alternativeRoutes.some(
-            (summary) => summary.reason === 'NOT_PRICEABLE_GAS' || summary.reason === 'CAMELOT_GAS_NOT_PRICEABLE'
-          )
-        ) {
+        if (!probeRoute.ok && probeRoute.reason === 'GAS_NOT_PRICEABLE') {
           noEdgeReason = 'NOT_PRICEABLE_GAS';
         }
       }

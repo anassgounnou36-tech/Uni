@@ -1,6 +1,7 @@
 import type { Address, PublicClient } from 'viem';
 import type { ResolvedV3DutchOrder } from '@uni/protocol';
 import type { HedgeRoutePlan } from '../venues.js';
+import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 
 export type UniV3FeeTier = 500 | 3000 | 10000;
 
@@ -22,20 +23,20 @@ export type UniV3RoutePlan = HedgeRoutePlan & {
 };
 
 export type RoutePlanningFailure = {
-  reason: 'NOT_ROUTEABLE' | 'NO_POOL' | 'POOL_DEAD' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'NOT_PRICEABLE_GAS';
+  reason: 'NOT_ROUTEABLE' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' | 'CONSTRAINT_REJECTED';
   details?: string;
+  summary: VenueRouteAttemptSummary;
 };
 
 export type RoutePlanningResult =
   | {
       ok: true;
       route: UniV3RoutePlan;
-      consideredFees: UniV3FeeTier[];
+      summary: VenueRouteAttemptSummary;
     }
   | {
       ok: false;
       failure: RoutePlanningFailure;
-      consideredFees: UniV3FeeTier[];
     };
 
 export type UniV3RoutingContext = {

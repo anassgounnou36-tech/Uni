@@ -106,6 +106,40 @@ function routeBookWithNetEdge(netEdgeOut: bigint): RouteBook {
           netEdgeOut,
           quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
         },
+        chosenSummary: {
+          venue: 'UNISWAP_V3',
+          status: 'ROUTEABLE',
+          reason: 'ROUTEABLE',
+          quotedAmountOut: requiredOutput + netEdgeOut,
+          minAmountOut: requiredOutput,
+          grossEdgeOut: netEdgeOut + 3n,
+          netEdgeOut
+        },
+        venueAttempts: [
+          {
+            venue: 'UNISWAP_V3',
+            status: 'ROUTEABLE',
+            reason: 'ROUTEABLE',
+            quotedAmountOut: requiredOutput + netEdgeOut,
+            minAmountOut: requiredOutput,
+            grossEdgeOut: netEdgeOut + 3n,
+            netEdgeOut,
+            selectedFeeTier: 500,
+            feeTierAttempts: [
+              {
+                feeTier: 500,
+                poolExists: true,
+                quoteSucceeded: true,
+                quotedAmountOut: requiredOutput + netEdgeOut,
+                minAmountOut: requiredOutput,
+                grossEdgeOut: netEdgeOut + 3n,
+                netEdgeOut,
+                status: 'ROUTEABLE',
+                reason: 'ROUTEABLE'
+              }
+            ]
+          }
+        ],
         alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut, requiredOutput, minAmountOut: requiredOutput }]
       };
     }
@@ -116,12 +150,99 @@ function noEdgeRouteBook(): RouteBook {
   return {
     selectBestRoute: async () => ({
       ok: false,
-      reason: 'NOT_ROUTEABLE',
+      reason: 'NOT_PROFITABLE',
+      venueAttempts: [
+        {
+          venue: 'UNISWAP_V3',
+          status: 'NOT_PROFITABLE',
+          reason: 'NET_EDGE_NON_POSITIVE',
+          quotedAmountOut: 100n,
+          minAmountOut: 100n,
+          grossEdgeOut: 0n,
+          netEdgeOut: -1n,
+          selectedFeeTier: 3000,
+          quoteCount: 1,
+          feeTierAttempts: [
+            {
+              feeTier: 500,
+              poolExists: false,
+              quoteSucceeded: false,
+              status: 'NOT_ROUTEABLE',
+              reason: 'POOL_MISSING'
+            },
+            {
+              feeTier: 3000,
+              poolExists: true,
+              quoteSucceeded: true,
+              quotedAmountOut: 100n,
+              minAmountOut: 100n,
+              grossEdgeOut: 0n,
+              netEdgeOut: -1n,
+              status: 'NOT_PROFITABLE',
+              reason: 'NET_EDGE_NON_POSITIVE'
+            },
+            {
+              feeTier: 10000,
+              poolExists: true,
+              quoteSucceeded: false,
+              status: 'QUOTE_FAILED',
+              reason: 'READ_ERROR'
+            }
+          ]
+        },
+        {
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_PROFITABLE',
+          reason: 'NET_EDGE_NON_POSITIVE',
+          quotedAmountOut: 99n,
+          minAmountOut: 100n,
+          grossEdgeOut: -1n,
+          netEdgeOut: -2n
+        }
+      ],
+      bestRejectedSummary: {
+        venue: 'UNISWAP_V3',
+        status: 'NOT_PROFITABLE',
+        reason: 'NET_EDGE_NON_POSITIVE',
+        quotedAmountOut: 100n,
+        minAmountOut: 100n,
+        grossEdgeOut: 0n,
+        netEdgeOut: -1n,
+        selectedFeeTier: 3000,
+        quoteCount: 1,
+        feeTierAttempts: [
+          {
+            feeTier: 500,
+            poolExists: false,
+            quoteSucceeded: false,
+            status: 'NOT_ROUTEABLE',
+            reason: 'POOL_MISSING'
+          },
+          {
+            feeTier: 3000,
+            poolExists: true,
+            quoteSucceeded: true,
+            quotedAmountOut: 100n,
+            minAmountOut: 100n,
+            grossEdgeOut: 0n,
+            netEdgeOut: -1n,
+            status: 'NOT_PROFITABLE',
+            reason: 'NET_EDGE_NON_POSITIVE'
+          },
+          {
+            feeTier: 10000,
+            poolExists: true,
+            quoteSucceeded: false,
+            status: 'QUOTE_FAILED',
+            reason: 'READ_ERROR'
+          }
+        ]
+      },
       alternativeRoutes: [
         {
           venue: 'UNISWAP_V3',
           eligible: false,
-          reason: 'NOT_ROUTEABLE',
+          reason: 'NOT_PROFITABLE',
           details: 'no path'
         }
       ]
@@ -246,6 +367,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
 
     const events = logs.map((line) => JSON.parse(line).event as string);
     expect(events).toContain('scheduler_no_edge');
+    expect(events).toContain('routebook_no_edge_summary');
   });
 
   it('scheduler no-edge dropped payload includes compact economics evaluations', async () => {
@@ -278,9 +400,41 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(firstEvaluation).toHaveProperty('riskBufferOut');
     expect(firstEvaluation).toHaveProperty('profitFloorOut');
     expect(firstEvaluation).toHaveProperty('netEdgeOut');
-    expect(firstEvaluation).toHaveProperty('alternativeRoutes');
+    expect(firstEvaluation).toHaveProperty('venueAttempts');
+    expect(firstEvaluation).toHaveProperty('bestRejectedSummary');
+    const venueAttempts = (firstEvaluation?.venueAttempts ?? []) as Array<Record<string, unknown>>;
+    const uniswapAttempt = venueAttempts.find((attempt) => attempt.venue === 'UNISWAP_V3');
+    expect(uniswapAttempt).toBeDefined();
+    expect(uniswapAttempt).toHaveProperty('feeTierAttempts');
+    expect(dropped?.payload).toHaveProperty('bestRejectedSummary');
     expect(firstEvaluation).not.toHaveProperty('route');
     expect(firstEvaluation).not.toHaveProperty('executionPlan');
+  });
+
+  it('routebook no-edge summary log stays concise', async () => {
+    const payload = makePayload();
+    const logs: string[] = [];
+    const logger = new JsonConsoleLogger((line) => logs.push(line));
+    const { runtime, ingress } = makeRuntime({
+      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeRouteBook(),
+      logger
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const summaryRecord = logs
+      .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
+      .find((record) => record.event === 'routebook_no_edge_summary');
+    expect(summaryRecord).toBeDefined();
+    expect(summaryRecord?.fields?.venueAttemptStatuses).toBeDefined();
+    expect(summaryRecord?.fields?.venueAttempts).toBeUndefined();
+    const statuses = summaryRecord?.fields?.venueAttemptStatuses as Array<Record<string, unknown>>;
+    expect(statuses[0]).toMatchObject({
+      venue: 'UNISWAP_V3'
+    });
+    expect(statuses[0]).not.toHaveProperty('feeTierAttempts');
   });
 
   it('hot-lane SKIP transitions order to DROPPED with skip reason and dropped journal event', async () => {
