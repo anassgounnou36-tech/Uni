@@ -14,7 +14,7 @@ export type RouteBookSelection =
     }
   | {
       ok: false;
-      reason: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE';
+      reason: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE';
       venueAttempts: VenueRouteAttemptSummary[];
       bestRejectedSummary?: VenueRouteAttemptSummary;
       alternativeRoutes: RouteCandidateSummary[];
@@ -40,7 +40,10 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
 }
 
 function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandidateSummary['reason'] {
-  if (summary.status === 'NOT_PROFITABLE' || summary.status === 'CONSTRAINT_REJECTED') {
+  if (summary.status === 'NOT_PROFITABLE') {
+    return 'NOT_PROFITABLE';
+  }
+  if (summary.status === 'CONSTRAINT_REJECTED') {
     return 'NOT_PROFITABLE';
   }
   if (summary.status === 'QUOTE_FAILED') {
@@ -136,18 +139,13 @@ export class RouteBook {
     }
 
     if (eligible.length === 0) {
-      const successfulQuoteAttempts = venueAttempts.filter(
-        (attempt) => attempt.quotedAmountOut !== undefined || (attempt.quoteCount ?? 0) > 0
-      );
-      const hasGasOnly = successfulQuoteAttempts.length > 0
-        && successfulQuoteAttempts.every((attempt) => attempt.status === 'GAS_NOT_PRICEABLE');
-      const reason: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' = hasGasOnly
-        ? 'GAS_NOT_PRICEABLE'
-        : successfulQuoteAttempts.length > 0
-          ? 'NOT_PROFITABLE'
-          : 'NOT_ROUTEABLE';
       const bestRejectedSummary = [...venueAttempts]
         .sort((a, b) => {
+          const aHasQuote = a.quotedAmountOut !== undefined;
+          const bHasQuote = b.quotedAmountOut !== undefined;
+          if (aHasQuote !== bHasQuote) {
+            return aHasQuote ? -1 : 1;
+          }
           const aEdge = a.netEdgeOut ?? -1n;
           const bEdge = b.netEdgeOut ?? -1n;
           if (aEdge !== bEdge) {
@@ -155,6 +153,23 @@ export class RouteBook {
           }
           return venueTieBreak(a.venue, b.venue);
         })[0];
+      const statuses = venueAttempts.map((attempt) => attempt.status);
+      const allNotRouteableOrQuoteFailed = statuses.every(
+        (status) => status === 'NOT_ROUTEABLE' || status === 'QUOTE_FAILED'
+      );
+      const hasGasNotPriceable = statuses.includes('GAS_NOT_PRICEABLE');
+      const reason: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE' =
+        allNotRouteableOrQuoteFailed
+          ? statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
+            ? 'QUOTE_FAILED'
+            : 'NOT_ROUTEABLE'
+          : bestRejectedSummary?.status === 'CONSTRAINT_REJECTED'
+            ? 'CONSTRAINT_REJECTED'
+            : bestRejectedSummary?.status === 'NOT_PROFITABLE'
+              ? 'NOT_PROFITABLE'
+              : hasGasNotPriceable
+                ? 'GAS_NOT_PRICEABLE'
+                : 'NOT_ROUTEABLE';
       return {
         ok: false,
         reason,

@@ -12,6 +12,7 @@ export type RoutePlanningPolicy = {
   riskBufferBps?: bigint;
   riskBufferOut?: bigint;
   profitFloorOut?: bigint;
+  nearMissBps?: bigint;
 };
 
 export type UniV3RoutePlan = HedgeRoutePlan & {

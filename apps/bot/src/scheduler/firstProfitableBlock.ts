@@ -17,7 +17,7 @@ export type BlockEvaluation = {
   netEdgeOut: bigint;
   chosenRouteVenue?: HedgeRoutePlan['venue'];
   selectionOk: boolean;
-  selectionReason?: 'NOT_ROUTEABLE' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE';
+  selectionReason?: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE';
   venueAttempts: VenueRouteAttemptSummary[];
   bestRejectedSummary?: VenueRouteAttemptSummary;
 };

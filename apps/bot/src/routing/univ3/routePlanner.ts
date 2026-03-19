@@ -11,8 +11,10 @@ import type {
   UniV3RoutingContext
 } from './types.js';
 import type { FeeTierAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummary } from '../attemptTypes.js';
+import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintRejectReason } from '../constraintTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
+const DEFAULT_NEAR_MISS_BPS = 25n;
 
 function sumRequiredOutput(outputs: ReadonlyArray<{ token: Address; amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
@@ -29,7 +31,8 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
     gasEstimateWei: policy?.gasEstimateWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
     riskBufferOut: policy?.riskBufferOut ?? 0n,
-    profitFloorOut: policy?.profitFloorOut ?? 0n
+    profitFloorOut: policy?.profitFloorOut ?? 0n,
+    nearMissBps: policy?.nearMissBps ?? DEFAULT_NEAR_MISS_BPS
   };
 }
 
@@ -53,6 +56,8 @@ type Candidate = {
   feeTierAttempt: FeeTierAttemptSummary;
   status: RouteAttemptStatus;
   reason: string;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: ConstraintBreakdown;
 };
 
 export class UniV3RoutePlanner {
@@ -152,17 +157,34 @@ export class UniV3RoutePlanner {
       const gasCostOut = gasConversion.gasCostOut;
       const riskBufferOut = policy.riskBufferOut + (quotedAmountOut * policy.riskBufferBps) / 10_000n;
       const profitFloorOut = policy.profitFloorOut;
-      const grossEdgeOut = quotedAmountOut - requiredOutput;
-      const slippageFloorOut = quotedAmountOut - slippageBufferOut;
-      const profitabilityFloorOut = requiredOutput + gasCostOut + riskBufferOut + profitFloorOut;
-      const minAmountOut = slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut;
-      const netEdgeOut = quotedAmountOut - requiredOutput - slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
+      const breakdown = buildConstraintBreakdown({
+        requiredOutput,
+        quotedAmountOut,
+        slippageBufferOut,
+        gasCostOut,
+        riskBufferOut,
+        profitFloorOut,
+        nearMissBps: policy.nearMissBps
+      });
+      const grossEdgeOut = quotedAmountOut - breakdown.requiredOutput;
+      const minAmountOut = breakdown.minAmountOut;
+      const netEdgeOut =
+        quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
 
       let status: RouteAttemptStatus = 'ROUTEABLE';
       let reason = 'ROUTE_SELECTED';
-      if (quotedAmountOut < minAmountOut) {
+      let constraintReason: ConstraintRejectReason | undefined;
+      let constraintBreakdown: ConstraintBreakdown | undefined;
+      if (quotedAmountOut < breakdown.requiredOutput) {
         status = 'CONSTRAINT_REJECTED';
-        reason = 'MIN_AMOUNT_OUT';
+        constraintReason = 'REQUIRED_OUTPUT';
+        reason = constraintReason;
+        constraintBreakdown = breakdown;
+      } else if (quotedAmountOut < minAmountOut) {
+        status = 'CONSTRAINT_REJECTED';
+        constraintReason = breakdown.bindingFloor;
+        reason = constraintReason;
+        constraintBreakdown = breakdown;
       } else if (netEdgeOut <= 0n) {
         status = 'NOT_PROFITABLE';
         reason = 'NET_EDGE_NON_POSITIVE';
@@ -177,7 +199,9 @@ export class UniV3RoutePlanner {
         grossEdgeOut,
         netEdgeOut,
         status,
-        reason
+        reason,
+        constraintReason,
+        constraintBreakdown
       };
       attempts.push(attemptSummary);
 
@@ -205,7 +229,9 @@ export class UniV3RoutePlanner {
         route,
         feeTierAttempt: attemptSummary,
         status,
-        reason
+        reason,
+        constraintReason,
+        constraintBreakdown
       });
     }
 
@@ -246,16 +272,40 @@ export class UniV3RoutePlanner {
     }
 
     if (successfulQuotes.length > 0) {
-      const bestRejected = [...successfulQuotes].sort((a, b) => (a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0))[0]!;
       const hasConstraintReject = successfulQuotes.some((candidate) => candidate.status === 'CONSTRAINT_REJECTED');
+      const bestRejectedByConstraint = hasConstraintReject
+        ? successfulQuotes
+            .filter((candidate) => candidate.status === 'CONSTRAINT_REJECTED' && candidate.constraintBreakdown)
+            .sort((a, b) => {
+              const aBreakdown = a.constraintBreakdown!;
+              const bBreakdown = b.constraintBreakdown!;
+              if (aBreakdown.minAmountOutShortfallOut !== bBreakdown.minAmountOutShortfallOut) {
+                return aBreakdown.minAmountOutShortfallOut < bBreakdown.minAmountOutShortfallOut ? -1 : 1;
+              }
+              if (a.route.quotedAmountOut !== b.route.quotedAmountOut) {
+                return a.route.quotedAmountOut > b.route.quotedAmountOut ? -1 : 1;
+              }
+              if (a.route.gasCostOut !== b.route.gasCostOut) {
+                return a.route.gasCostOut < b.route.gasCostOut ? -1 : 1;
+              }
+              return 0;
+            })[0]
+        : undefined;
+      const bestRejectedByEdge = [...successfulQuotes].sort((a, b) =>
+        a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0
+      )[0]!;
+      const bestRejected = bestRejectedByConstraint ?? bestRejectedByEdge;
       const summary: VenueRouteAttemptSummary = {
         venue: 'UNISWAP_V3',
         status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
-        reason: hasConstraintReject ? 'MIN_AMOUNT_OUT' : 'NET_EDGE_NON_POSITIVE',
+        reason: hasConstraintReject ? (bestRejected.constraintReason ?? 'MIN_AMOUNT_OUT') : 'NET_EDGE_NON_POSITIVE',
         quotedAmountOut: bestRejected.route.quotedAmountOut,
         minAmountOut: bestRejected.route.minAmountOut,
         grossEdgeOut: bestRejected.route.grossEdgeOut,
         netEdgeOut: bestRejected.route.netEdgeOut,
+        selectedFeeTier: bestRejected.feeTierAttempt.feeTier,
+        constraintReason: bestRejected.constraintReason,
+        constraintBreakdown: bestRejected.constraintBreakdown,
         feeTierAttempts: attempts,
         quoteCount
       };

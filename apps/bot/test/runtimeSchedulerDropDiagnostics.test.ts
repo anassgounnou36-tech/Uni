@@ -250,6 +250,77 @@ function noEdgeRouteBook(): RouteBook {
   } as RouteBook;
 }
 
+function noEdgeNearMissRouteBook(): RouteBook {
+  return {
+    selectBestRoute: async () => ({
+      ok: false,
+      reason: 'CONSTRAINT_REJECTED',
+      venueAttempts: [
+        {
+          venue: 'UNISWAP_V3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'PROFITABILITY_FLOOR',
+          quotedAmountOut: 998n,
+          minAmountOut: 1_000n,
+          grossEdgeOut: 98n,
+          netEdgeOut: -2n,
+          constraintReason: 'PROFITABILITY_FLOOR',
+          constraintBreakdown: {
+            requiredOutput: 900n,
+            quotedAmountOut: 998n,
+            slippageBufferOut: 1n,
+            gasCostOut: 1n,
+            riskBufferOut: 0n,
+            profitFloorOut: 100n,
+            slippageFloorOut: 997n,
+            profitabilityFloorOut: 1_000n,
+            minAmountOut: 1_000n,
+            requiredOutputShortfallOut: 0n,
+            minAmountOutShortfallOut: 2n,
+            bindingFloor: 'PROFITABILITY_FLOOR',
+            nearMiss: true,
+            nearMissBps: 25n
+          }
+        }
+      ],
+      bestRejectedSummary: {
+        venue: 'UNISWAP_V3',
+        status: 'CONSTRAINT_REJECTED',
+        reason: 'PROFITABILITY_FLOOR',
+        quotedAmountOut: 998n,
+        minAmountOut: 1_000n,
+        grossEdgeOut: 98n,
+        netEdgeOut: -2n,
+        constraintReason: 'PROFITABILITY_FLOOR',
+        constraintBreakdown: {
+          requiredOutput: 900n,
+          quotedAmountOut: 998n,
+          slippageBufferOut: 1n,
+          gasCostOut: 1n,
+          riskBufferOut: 0n,
+          profitFloorOut: 100n,
+          slippageFloorOut: 997n,
+          profitabilityFloorOut: 1_000n,
+          minAmountOut: 1_000n,
+          requiredOutputShortfallOut: 0n,
+          minAmountOutShortfallOut: 2n,
+          bindingFloor: 'PROFITABILITY_FLOOR',
+          nearMiss: true,
+          nearMissBps: 25n
+        }
+      },
+      alternativeRoutes: [
+        {
+          venue: 'UNISWAP_V3',
+          eligible: false,
+          reason: 'NOT_PROFITABLE',
+          details: 'near miss'
+        }
+      ]
+    })
+  } as RouteBook;
+}
+
 function makeRuntime(params: {
   config: RuntimeConfig;
   schedulerRouteBook: RouteBook;
@@ -435,6 +506,38 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       venue: 'UNISWAP_V3'
     });
     expect(statuses[0]).not.toHaveProperty('feeTierAttempts');
+  });
+
+  it('near-miss rejected candidate increments metric and is preserved in logs and dropped payload', async () => {
+    const payload = makePayload();
+    const logs: string[] = [];
+    const logger = new JsonConsoleLogger((line) => logs.push(line));
+    const { runtime, journal, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeNearMissRouteBook(),
+      logger
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    expect(metrics.snapshot().counters.scheduler_near_miss_total).toBe(1);
+    const summaryRecord = logs
+      .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
+      .find((record) => record.event === 'routebook_no_edge_summary');
+    expect(summaryRecord?.fields?.bestRejectedConstraintReason).toBe('PROFITABILITY_FLOOR');
+    expect(summaryRecord?.fields?.bestRejectedNearMiss).toBe(true);
+    expect(summaryRecord?.fields?.bestRejectedShortfallOut).toBe('2');
+
+    const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
+    const droppedBestRejected = dropped?.payload.bestRejectedSummary as Record<string, unknown> | undefined;
+    expect(droppedBestRejected?.constraintReason).toBe('PROFITABILITY_FLOOR');
+    const breakdown = droppedBestRejected?.constraintBreakdown as Record<string, unknown> | undefined;
+    expect(breakdown?.nearMiss).toBe(true);
+    expect(breakdown?.nearMissBps).toBe('25');
+    const firstEvaluation = (dropped?.payload.evaluations?.[0] ?? {}) as Record<string, unknown>;
+    const firstVenueAttempt = ((firstEvaluation.venueAttempts as Array<Record<string, unknown>> | undefined) ?? [])[0];
+    expect(firstVenueAttempt?.constraintBreakdown).toBeDefined();
   });
 
   it('hot-lane SKIP transitions order to DROPPED with skip reason and dropped journal event', async () => {

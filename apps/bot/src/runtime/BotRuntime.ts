@@ -21,6 +21,7 @@ import type { PreparedExecution } from '../execution/preparedExecution.js';
 import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from '../attribution/routeDecisionAttribution.js';
 import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.js';
 import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
+import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -86,6 +87,23 @@ export class BotRuntime {
     netEdgeOut?: string;
     status: string;
     reason: string;
+    constraintReason?: ConstraintRejectReason;
+    constraintBreakdown?: {
+      requiredOutput: string;
+      quotedAmountOut: string;
+      slippageBufferOut: string;
+      gasCostOut: string;
+      riskBufferOut: string;
+      profitFloorOut: string;
+      slippageFloorOut: string;
+      profitabilityFloorOut: string;
+      minAmountOut: string;
+      requiredOutputShortfallOut: string;
+      minAmountOutShortfallOut: string;
+      bindingFloor: 'SLIPPAGE_FLOOR' | 'PROFITABILITY_FLOOR';
+      nearMiss: boolean;
+      nearMissBps: string;
+    };
   } {
     return {
       feeTier: summary.feeTier,
@@ -96,7 +114,43 @@ export class BotRuntime {
       grossEdgeOut: summary.grossEdgeOut?.toString(),
       netEdgeOut: summary.netEdgeOut?.toString(),
       status: summary.status,
-      reason: summary.reason
+      reason: summary.reason,
+      constraintReason: summary.constraintReason,
+      constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined
+    };
+  }
+
+  private toJournalConstraintBreakdown(breakdown: ConstraintBreakdown): {
+    requiredOutput: string;
+    quotedAmountOut: string;
+    slippageBufferOut: string;
+    gasCostOut: string;
+    riskBufferOut: string;
+    profitFloorOut: string;
+    slippageFloorOut: string;
+    profitabilityFloorOut: string;
+    minAmountOut: string;
+    requiredOutputShortfallOut: string;
+    minAmountOutShortfallOut: string;
+    bindingFloor: 'SLIPPAGE_FLOOR' | 'PROFITABILITY_FLOOR';
+    nearMiss: boolean;
+    nearMissBps: string;
+  } {
+    return {
+      requiredOutput: breakdown.requiredOutput.toString(),
+      quotedAmountOut: breakdown.quotedAmountOut.toString(),
+      slippageBufferOut: breakdown.slippageBufferOut.toString(),
+      gasCostOut: breakdown.gasCostOut.toString(),
+      riskBufferOut: breakdown.riskBufferOut.toString(),
+      profitFloorOut: breakdown.profitFloorOut.toString(),
+      slippageFloorOut: breakdown.slippageFloorOut.toString(),
+      profitabilityFloorOut: breakdown.profitabilityFloorOut.toString(),
+      minAmountOut: breakdown.minAmountOut.toString(),
+      requiredOutputShortfallOut: breakdown.requiredOutputShortfallOut.toString(),
+      minAmountOutShortfallOut: breakdown.minAmountOutShortfallOut.toString(),
+      bindingFloor: breakdown.bindingFloor,
+      nearMiss: breakdown.nearMiss,
+      nearMissBps: breakdown.nearMissBps.toString()
     };
   }
 
@@ -110,6 +164,23 @@ export class BotRuntime {
     netEdgeOut?: string;
     selectedFeeTier?: number;
     quoteCount?: number;
+    constraintReason?: ConstraintRejectReason;
+    constraintBreakdown?: {
+      requiredOutput: string;
+      quotedAmountOut: string;
+      slippageBufferOut: string;
+      gasCostOut: string;
+      riskBufferOut: string;
+      profitFloorOut: string;
+      slippageFloorOut: string;
+      profitabilityFloorOut: string;
+      minAmountOut: string;
+      requiredOutputShortfallOut: string;
+      minAmountOutShortfallOut: string;
+      bindingFloor: 'SLIPPAGE_FLOOR' | 'PROFITABILITY_FLOOR';
+      nearMiss: boolean;
+      nearMissBps: string;
+    };
     feeTierAttempts?: Array<{
       feeTier: number;
       poolExists: boolean;
@@ -120,6 +191,23 @@ export class BotRuntime {
       netEdgeOut?: string;
       status: string;
       reason: string;
+      constraintReason?: ConstraintRejectReason;
+      constraintBreakdown?: {
+        requiredOutput: string;
+        quotedAmountOut: string;
+        slippageBufferOut: string;
+        gasCostOut: string;
+        riskBufferOut: string;
+        profitFloorOut: string;
+        slippageFloorOut: string;
+        profitabilityFloorOut: string;
+        minAmountOut: string;
+        requiredOutputShortfallOut: string;
+        minAmountOutShortfallOut: string;
+        bindingFloor: 'SLIPPAGE_FLOOR' | 'PROFITABILITY_FLOOR';
+        nearMiss: boolean;
+        nearMissBps: string;
+      };
     }>;
   } {
     return {
@@ -132,6 +220,8 @@ export class BotRuntime {
       netEdgeOut: summary.netEdgeOut?.toString(),
       selectedFeeTier: summary.selectedFeeTier,
       quoteCount: summary.quoteCount,
+      constraintReason: summary.constraintReason,
+      constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
       feeTierAttempts: summary.feeTierAttempts?.map((attempt) => this.toJournalFeeTierAttempt(attempt))
     };
   }
@@ -359,6 +449,9 @@ export class BotRuntime {
             Number(scheduleResult.bestObservedEvaluation.netEdgeOut)
           );
         }
+        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss) {
+          this.deps.metrics.incrementSchedulerNearMiss();
+        }
         this.logger.log('info', 'scheduler_no_edge', {
           orderHash,
           thresholdOut: this.deps.config.thresholdOut.toString(),
@@ -372,6 +465,9 @@ export class BotRuntime {
           bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
           bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
           bestRejectedReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.reason,
+          bestRejectedConstraintReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason,
+          bestRejectedNearMiss: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss,
+          bestRejectedShortfallOut: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
           venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
             venue: attempt.venue,
             status: attempt.status,
