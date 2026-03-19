@@ -104,12 +104,9 @@ export class UniV3RoutePlanner {
         continue;
       }
 
-      let quotedAmountOut: bigint;
-      let gasEstimate: bigint;
+      let quote: { amountOut: bigint; gasEstimate: bigint } | undefined;
       try {
-        const quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
-        quotedAmountOut = quote.amountOut;
-        gasEstimate = quote.gasEstimate;
+        quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
       } catch (error) {
         attempts.push({
           feeTier,
@@ -120,10 +117,14 @@ export class UniV3RoutePlanner {
         });
         continue;
       }
+      if (!quote) {
+        continue;
+      }
 
       quoteCount += 1;
+      const quotedAmountOut = quote.amountOut;
       const slippageBufferOut = quotedAmountOut - applyBpsFloor(quotedAmountOut, 10_000n - policy.slippageBufferBps);
-      const gasWei = policy.gasEstimateWei > 0n ? policy.gasEstimateWei : gasEstimate;
+      const gasWei = policy.gasEstimateWei > 0n ? policy.gasEstimateWei : quote.gasEstimate;
       const gasConversion = await convertGasWeiToTokenOut({
         client: this.context.client,
         factory: this.context.factory,

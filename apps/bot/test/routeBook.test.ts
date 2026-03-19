@@ -209,4 +209,67 @@ describe('RouteBook', () => {
       expect(unprofitable.reason).toBe('NOT_PROFITABLE');
     }
   });
+
+  it('routeBookKeepsNotRouteableWhenOnlyQuoteFailuresAndMissingPools', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            details: 'no successful quote',
+            summary: venueSummary('UNISWAP_V3', 'NOT_ROUTEABLE', {
+              reason: 'POOL_OR_QUOTE_UNAVAILABLE',
+              quoteCount: 0,
+              feeTierAttempts: [
+                {
+                  feeTier: 500,
+                  poolExists: false,
+                  quoteSucceeded: false,
+                  status: 'NOT_ROUTEABLE',
+                  reason: 'POOL_MISSING'
+                },
+                {
+                  feeTier: 3000,
+                  poolExists: true,
+                  quoteSucceeded: false,
+                  status: 'QUOTE_FAILED',
+                  reason: 'READ_ERROR'
+                },
+                {
+                  feeTier: 10000,
+                  poolExists: false,
+                  quoteSucceeded: false,
+                  status: 'NOT_ROUTEABLE',
+                  reason: 'POOL_MISSING'
+                }
+              ]
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'QUOTE_FAILED' as const,
+            details: 'call failed',
+            summary: venueSummary('CAMELOT_AMMV3', 'QUOTE_FAILED', { reason: 'QUOTE_CALL_FAILED' })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (!selected.ok) {
+      expect(selected.reason).toBe('NOT_ROUTEABLE');
+    }
+  });
 });
