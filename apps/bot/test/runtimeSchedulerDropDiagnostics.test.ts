@@ -146,7 +146,7 @@ function routeBookWithNetEdge(netEdgeOut: bigint): RouteBook {
   } as RouteBook;
 }
 
-function noEdgeRouteBook(): RouteBook {
+  function noEdgeRouteBook(): RouteBook {
   return {
     selectBestRoute: async () => ({
       ok: false,
@@ -197,7 +197,16 @@ function noEdgeRouteBook(): RouteBook {
           quotedAmountOut: 99n,
           minAmountOut: 100n,
           grossEdgeOut: -1n,
-          netEdgeOut: -2n
+          netEdgeOut: -2n,
+          exactOutputViability: {
+            status: 'NOT_CHECKED',
+            targetOutput: 100n,
+            requiredInputForTargetOutput: 0n,
+            availableInput: 1_000n,
+            inputDeficit: 0n,
+            inputSlack: 1_000n,
+            reason: 'exact-output diagnostic not implemented for camelot in this pr'
+          }
         }
       ],
       bestRejectedSummary: {
@@ -280,33 +289,53 @@ function noEdgeNearMissRouteBook(): RouteBook {
             bindingFloor: 'PROFITABILITY_FLOOR',
             nearMiss: true,
             nearMissBps: 25n
+          },
+          exactOutputViability: {
+            status: 'NOT_CHECKED',
+            targetOutput: 900n,
+            requiredInputForTargetOutput: 0n,
+            availableInput: 1_000n,
+            inputDeficit: 0n,
+            inputSlack: 1_000n,
+            checkedFeeTier: 500,
+            reason: 'exact-output diagnostic not implemented for camelot in this pr'
           }
         }
       ],
       bestRejectedSummary: {
         venue: 'UNISWAP_V3',
         status: 'CONSTRAINT_REJECTED',
-        reason: 'PROFITABILITY_FLOOR',
+        reason: 'REQUIRED_OUTPUT',
         quotedAmountOut: 998n,
         minAmountOut: 1_000n,
         grossEdgeOut: 98n,
         netEdgeOut: -2n,
-        constraintReason: 'PROFITABILITY_FLOOR',
+        constraintReason: 'REQUIRED_OUTPUT',
         constraintBreakdown: {
           requiredOutput: 900n,
-          quotedAmountOut: 998n,
+          quotedAmountOut: 898n,
           slippageBufferOut: 1n,
           gasCostOut: 1n,
           riskBufferOut: 0n,
-          profitFloorOut: 100n,
-          slippageFloorOut: 997n,
-          profitabilityFloorOut: 1_000n,
-          minAmountOut: 1_000n,
-          requiredOutputShortfallOut: 0n,
+          profitFloorOut: 0n,
+          slippageFloorOut: 897n,
+          profitabilityFloorOut: 901n,
+          minAmountOut: 901n,
+          requiredOutputShortfallOut: 2n,
           minAmountOutShortfallOut: 2n,
           bindingFloor: 'PROFITABILITY_FLOOR',
           nearMiss: true,
           nearMissBps: 25n
+        },
+        exactOutputViability: {
+          status: 'UNSATISFIABLE',
+          targetOutput: 900n,
+          requiredInputForTargetOutput: 1_001n,
+          availableInput: 1_000n,
+          inputDeficit: 1n,
+          inputSlack: 0n,
+          checkedFeeTier: 500,
+          reason: 'required output unsatisfiable with available input'
         }
       },
       alternativeRoutes: [
@@ -525,19 +554,27 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const summaryRecord = logs
       .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
       .find((record) => record.event === 'routebook_no_edge_summary');
-    expect(summaryRecord?.fields?.bestRejectedConstraintReason).toBe('PROFITABILITY_FLOOR');
+    expect(summaryRecord?.fields?.bestRejectedConstraintReason).toBe('REQUIRED_OUTPUT');
     expect(summaryRecord?.fields?.bestRejectedNearMiss).toBe(true);
     expect(summaryRecord?.fields?.bestRejectedShortfallOut).toBe('2');
+    expect(summaryRecord?.fields?.bestRejectedExactOutputStatus).toBe('UNSATISFIABLE');
+    expect(summaryRecord?.fields?.bestRejectedInputDeficit).toBe('1');
+    expect(summaryRecord?.fields?.bestRejectedInputSlack).toBe('0');
+    expect(summaryRecord?.fields?.bestRejectedCheckedFeeTier).toBe(500);
 
     const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
     const droppedBestRejected = dropped?.payload.bestRejectedSummary as Record<string, unknown> | undefined;
-    expect(droppedBestRejected?.constraintReason).toBe('PROFITABILITY_FLOOR');
+    expect(droppedBestRejected?.constraintReason).toBe('REQUIRED_OUTPUT');
+    expect((droppedBestRejected?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('UNSATISFIABLE');
     const breakdown = droppedBestRejected?.constraintBreakdown as Record<string, unknown> | undefined;
     expect(breakdown?.nearMiss).toBe(true);
     expect(breakdown?.nearMissBps).toBe('25');
     const firstEvaluation = (dropped?.payload.evaluations?.[0] ?? {}) as Record<string, unknown>;
     const firstVenueAttempt = ((firstEvaluation.venueAttempts as Array<Record<string, unknown>> | undefined) ?? [])[0];
     expect(firstVenueAttempt?.constraintBreakdown).toBeDefined();
+    expect((firstVenueAttempt?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('NOT_CHECKED');
+    expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBe(1);
+    expect(metrics.snapshot().counters.scheduler_required_output_near_miss_total).toBe(1);
   });
 
   it('hot-lane SKIP transitions order to DROPPED with skip reason and dropped journal event', async () => {

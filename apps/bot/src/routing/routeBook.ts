@@ -39,6 +39,10 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
   };
 }
 
+function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
+  return outputs.reduce((sum, output) => sum + output.amount, 0n);
+}
+
 function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandidateSummary['reason'] {
   if (summary.status === 'NOT_PROFITABLE') {
     return 'NOT_PROFITABLE';
@@ -126,10 +130,20 @@ export class RouteBook {
         });
       }
     } else if (!this.planners.enableCamelotAmmv3) {
+      const requiredOutput = sumRequiredOutput(input.resolvedOrder.outputs as ReadonlyArray<{ amount: bigint }>);
       venueAttempts.push({
         venue: 'CAMELOT_AMMV3',
         status: 'NOT_ROUTEABLE',
-        reason: 'CAMELOT_DISABLED'
+        reason: 'CAMELOT_DISABLED',
+        exactOutputViability: {
+          status: 'NOT_CHECKED',
+          targetOutput: requiredOutput,
+          requiredInputForTargetOutput: 0n,
+          availableInput: input.resolvedOrder.input.amount,
+          inputDeficit: 0n,
+          inputSlack: input.resolvedOrder.input.amount,
+          reason: 'exact-output diagnostic not implemented for camelot in this pr'
+        }
       });
       alternatives.push({
         venue: 'CAMELOT_AMMV3',

@@ -1,6 +1,6 @@
 import type { Address } from 'viem';
 import { discoverPool } from './poolDiscovery.js';
-import { classifyQuoteFailure, quoteExactInputSingle } from './quoter.js';
+import { classifyQuoteFailure, quoteExactInputSingle, quoteExactOutputSingle } from './quoter.js';
 import { convertGasWeiToTokenOut } from './gasValue.js';
 import type {
   RoutePlannerInput,
@@ -12,6 +12,7 @@ import type {
 } from './types.js';
 import type { FeeTierAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintRejectReason } from '../constraintTypes.js';
+import type { ExactOutputViability } from '../exactOutputTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
@@ -104,12 +105,23 @@ export class UniV3RoutePlanner {
           poolExists: false,
           quoteSucceeded: false,
           status: 'NOT_ROUTEABLE',
-          reason: 'POOL_MISSING'
+          reason: 'POOL_MISSING',
+          exactOutputViability: {
+            status: 'POOL_MISSING',
+            targetOutput: requiredOutput,
+            requiredInputForTargetOutput: 0n,
+            availableInput: amountIn,
+            inputDeficit: 0n,
+            inputSlack: amountIn > 0n ? amountIn : 0n,
+            checkedFeeTier: feeTier,
+            reason: 'pool missing'
+          }
         });
         continue;
       }
 
       let quote: { amountOut: bigint; gasEstimate: bigint } | undefined;
+      let exactOutputViability: ExactOutputViability;
       try {
         quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
       } catch (error) {
@@ -118,12 +130,60 @@ export class UniV3RoutePlanner {
           poolExists: true,
           quoteSucceeded: false,
           status: 'QUOTE_FAILED',
-          reason: classifyQuoteFailure(error)
+          reason: classifyQuoteFailure(error),
+          exactOutputViability: {
+            status: 'NOT_CHECKED',
+            targetOutput: requiredOutput,
+            requiredInputForTargetOutput: 0n,
+            availableInput: amountIn,
+            inputDeficit: 0n,
+            inputSlack: amountIn > 0n ? amountIn : 0n,
+            checkedFeeTier: feeTier,
+            reason: 'exact-output viability skipped because exact-input quote failed'
+          }
         });
         continue;
       }
       if (!quote) {
         continue;
+      }
+      try {
+        const exactOutputQuote = await quoteExactOutputSingle(
+          this.context.client,
+          this.context.quoter,
+          tokenIn,
+          tokenOut,
+          feeTier,
+          requiredOutput,
+          0n
+        );
+        const requiredInputForTargetOutput = exactOutputQuote.amountIn;
+        const inputDeficit = requiredInputForTargetOutput > amountIn ? requiredInputForTargetOutput - amountIn : 0n;
+        const inputSlack = amountIn > requiredInputForTargetOutput ? amountIn - requiredInputForTargetOutput : 0n;
+        exactOutputViability = {
+          status: requiredInputForTargetOutput <= amountIn ? 'SATISFIABLE' : 'UNSATISFIABLE',
+          targetOutput: requiredOutput,
+          requiredInputForTargetOutput,
+          availableInput: amountIn,
+          inputDeficit,
+          inputSlack,
+          checkedFeeTier: feeTier,
+          reason:
+            requiredInputForTargetOutput <= amountIn
+              ? 'required output satisfiable with available input'
+              : 'required output unsatisfiable with available input'
+        };
+      } catch (error) {
+        exactOutputViability = {
+          status: 'QUOTE_FAILED',
+          targetOutput: requiredOutput,
+          requiredInputForTargetOutput: 0n,
+          availableInput: amountIn,
+          inputDeficit: 0n,
+          inputSlack: amountIn > 0n ? amountIn : 0n,
+          checkedFeeTier: feeTier,
+          reason: `exact-output quote failed: ${classifyQuoteFailure(error)}`
+        };
       }
 
       quoteCount += 1;
@@ -149,7 +209,8 @@ export class UniV3RoutePlanner {
           minAmountOut: requiredFloor,
           grossEdgeOut: quotedAmountOut - requiredOutput,
           status: 'GAS_NOT_PRICEABLE',
-          reason: 'GAS_CONVERSION_FAILED'
+          reason: 'GAS_CONVERSION_FAILED',
+          exactOutputViability
         });
         continue;
       }
@@ -201,7 +262,8 @@ export class UniV3RoutePlanner {
         status,
         reason,
         constraintReason,
-        constraintBreakdown
+        constraintBreakdown,
+        exactOutputViability
       };
       attempts.push(attemptSummary);
 
@@ -249,6 +311,7 @@ export class UniV3RoutePlanner {
         grossEdgeOut: best.route.grossEdgeOut,
         netEdgeOut: best.route.netEdgeOut,
         selectedFeeTier: best.feeTierAttempt.feeTier,
+        exactOutputViability: best.feeTierAttempt.exactOutputViability,
         feeTierAttempts: attempts,
         quoteCount
       };
@@ -306,6 +369,7 @@ export class UniV3RoutePlanner {
         selectedFeeTier: bestRejected.feeTierAttempt.feeTier,
         constraintReason: bestRejected.constraintReason,
         constraintBreakdown: bestRejected.constraintBreakdown,
+        exactOutputViability: bestRejected.feeTierAttempt.exactOutputViability,
         feeTierAttempts: attempts,
         quoteCount
       };

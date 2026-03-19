@@ -58,6 +58,12 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
         if (param.fee === 3000) return [899n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
         if (param.fee === 10000) return [950n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
+      if (call.functionName === 'quoteExactOutputSingle') {
+        const param = call.args?.[0] as { fee: number; amount: bigint } | undefined;
+        if (!param) throw new Error('missing exact-output quote params');
+        if (param.fee === 3000) return [1_005n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        if (param.fee === 10000) return [995n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
       throw new Error(`unexpected call ${call.functionName}`);
     });
 
@@ -74,6 +80,10 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 500)?.reason).toBe('POOL_MISSING');
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 3000)?.status).toBe('CONSTRAINT_REJECTED');
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 10000)?.status).toBe('ROUTEABLE');
+    const tier10000 = result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 10000);
+    expect(tier10000?.exactOutputViability).toBeDefined();
+    expect(tier10000?.exactOutputViability?.targetOutput).toBe(900n);
+    expect(tier10000?.exactOutputViability?.availableInput).toBe(1_000n);
   });
 
   it('classifies successful but unprofitable quotes as NOT_PROFITABLE (not NOT_ROUTEABLE)', async () => {
@@ -87,6 +97,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       if (call.functionName === 'liquidity') return 1n;
       if (call.functionName === 'slot0') return [1n] as const;
       if (call.functionName === 'quoteExactInputSingle') {
+        return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      if (call.functionName === 'quoteExactOutputSingle') {
         return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
       throw new Error(`unexpected call ${call.functionName}`);
@@ -110,6 +123,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       if (call.functionName === 'quoteExactInputSingle') {
         return [890n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
+      if (call.functionName === 'quoteExactOutputSingle') {
+        return [1_020n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
       throw new Error(`unexpected call ${call.functionName}`);
     });
     const planner = new UniV3RoutePlanner({ client, factory, quoter });
@@ -131,6 +147,8 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.status).toBe('CONSTRAINT_REJECTED');
     expect(result.failure.summary.constraintReason).toBe('REQUIRED_OUTPUT');
     expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
+    expect(result.failure.summary.exactOutputViability?.status).toBe('UNSATISFIABLE');
+    expect((result.failure.summary.exactOutputViability?.inputDeficit ?? 0n) > 0n).toBe(true);
     expect(
       (result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut ?? 0n) >=
         (result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n)
@@ -144,6 +162,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       if (call.functionName === 'slot0') return [1n] as const;
       if (call.functionName === 'quoteExactInputSingle') {
         return [920n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      if (call.functionName === 'quoteExactOutputSingle') {
+        return [890n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
       throw new Error(`unexpected call ${call.functionName}`);
     });
@@ -167,5 +188,6 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.constraintBreakdown?.bindingFloor).toBe('PROFITABILITY_FLOOR');
     expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBe(0n);
     expect(result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
+    expect(result.failure.summary.exactOutputViability?.status).toBe('SATISFIABLE');
   });
 });
