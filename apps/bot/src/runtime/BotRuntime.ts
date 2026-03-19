@@ -1,4 +1,4 @@
-import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
+import { findFirstProfitableBlock, type BlockEvaluation } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep, type HotLaneEntry } from '../scheduler/hotLane.js';
 import type { OrdersPoller } from '../intake/poller.js';
 import type { HybridIngressCoordinator } from '../ingress/hybridIngress.js';
@@ -20,6 +20,7 @@ import type { ExecutionPlan } from '../execution/types.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from '../attribution/routeDecisionAttribution.js';
 import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.js';
+import type { RouteCandidateSummary } from '../routing/venues.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -73,6 +74,70 @@ export class BotRuntime {
 
   private getPolicyInflightCount(): number {
     return this.deps.inflightTracker.getInflightCount();
+  }
+
+  private toJournalRouteSummary(summary: RouteCandidateSummary): {
+    venue: string;
+    eligible: boolean;
+    reason?: string;
+    details?: string;
+    quotedAmountOut?: string;
+    requiredOutput?: string;
+    minAmountOut?: string;
+    netEdgeOut?: string;
+    gasCostOut?: string;
+  } {
+    return {
+      venue: summary.venue,
+      eligible: summary.eligible,
+      reason: summary.reason,
+      details: summary.details,
+      quotedAmountOut: summary.quotedAmountOut?.toString(),
+      requiredOutput: summary.requiredOutput?.toString(),
+      minAmountOut: summary.minAmountOut?.toString(),
+      netEdgeOut: summary.netEdgeOut?.toString(),
+      gasCostOut: summary.gasCostOut?.toString()
+    };
+  }
+
+  private toCompactDroppedEvaluation(evaluation: BlockEvaluation): {
+    block: string;
+    selectionOk: boolean;
+    selectionReason?: string;
+    chosenRouteVenue?: string;
+    requiredOutput: string;
+    quotedAmountOut: string;
+    minAmountOut: string;
+    gasCostOut: string;
+    riskBufferOut: string;
+    profitFloorOut: string;
+    netEdgeOut: string;
+    alternativeRoutes: Array<{
+      venue: string;
+      eligible: boolean;
+      reason?: string;
+      details?: string;
+      quotedAmountOut?: string;
+      requiredOutput?: string;
+      minAmountOut?: string;
+      netEdgeOut?: string;
+      gasCostOut?: string;
+    }>;
+  } {
+    return {
+      block: evaluation.block.toString(),
+      selectionOk: evaluation.selectionOk,
+      selectionReason: evaluation.selectionReason,
+      chosenRouteVenue: evaluation.chosenRouteVenue,
+      requiredOutput: evaluation.requiredOutput.toString(),
+      quotedAmountOut: evaluation.quotedAmountOut.toString(),
+      minAmountOut: evaluation.minAmountOut.toString(),
+      gasCostOut: evaluation.gasCostOut.toString(),
+      riskBufferOut: evaluation.riskBufferOut.toString(),
+      profitFloorOut: evaluation.profitFloorOut.toString(),
+      netEdgeOut: evaluation.netEdgeOut.toString(),
+      alternativeRoutes: evaluation.alternativeRoutes.map((summary) => this.toJournalRouteSummary(summary))
+    };
   }
 
   private assertTradingDependencies(): void {
@@ -204,24 +269,47 @@ export class BotRuntime {
       if (!record?.normalizedOrder) {
         continue;
       }
-        const schedule = await findFirstProfitableBlock({
-          order: record.normalizedOrder.decodedOrder.order,
-          baseEnv: scheduler.resolveEnv,
-          routeBook: scheduler.routeBook,
-          candidateBlocks: this.deps.config.candidateBlocks,
-          threshold: this.deps.config.thresholdOut,
-          competeWindowBlocks: this.deps.config.competeWindowBlocks
+      const scheduleResult = await findFirstProfitableBlock({
+        order: record.normalizedOrder.decodedOrder.order,
+        baseEnv: scheduler.resolveEnv,
+        routeBook: scheduler.routeBook,
+        candidateBlocks: this.deps.config.candidateBlocks,
+        threshold: this.deps.config.thresholdOut,
+        competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
-      if (!schedule) {
+      if (!scheduleResult.ok) {
+        await this.deps.store.transition(orderHash, 'DROPPED', 'SCHEDULER_NO_EDGE');
         this.deps.metrics.increment('orders_dropped_total{reason="SCHEDULER_NO_EDGE"}');
+        this.deps.metrics.increment('scheduler_no_edge_total');
+        if (scheduleResult.bestObservedEvaluation) {
+          this.deps.metrics.observeHistogram(
+            'scheduler_best_observed_net_edge_out',
+            Number(scheduleResult.bestObservedEvaluation.netEdgeOut)
+          );
+        }
+        this.logger.log('info', 'scheduler_no_edge', {
+          orderHash,
+          thresholdOut: this.deps.config.thresholdOut.toString(),
+          bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
+          bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
+          candidateCount: scheduleResult.evaluations.length
+        });
         await this.deps.journal.append({
           type: 'ORDER_DROPPED',
           atMs: Date.now(),
           orderHash,
-          payload: { reason: 'SCHEDULER_NO_EDGE' }
+          payload: {
+            reason: 'SCHEDULER_NO_EDGE',
+            thresholdOut: this.deps.config.thresholdOut.toString(),
+            candidateBlocks: this.deps.config.candidateBlocks.map((block) => block.toString()),
+            bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
+            bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
+            evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
+          }
         });
         continue;
       }
+      const schedule = scheduleResult.schedule;
 
       await this.deps.store.transition(orderHash, 'SCHEDULED');
       this.hotQueue.push({
@@ -280,12 +368,16 @@ export class BotRuntime {
       );
 
       if (policy.mode === 'SKIP') {
+        await this.deps.store.transition(queued.orderHash, 'DROPPED', policy.reason);
         this.deps.metrics.increment(`orders_dropped_total{reason="${policy.reason}"}`);
         await this.deps.journal.append({
           type: 'ORDER_DROPPED',
           atMs: Date.now(),
           orderHash: queued.orderHash,
-          payload: { reason: policy.reason }
+          payload: {
+            reason: policy.reason,
+            netEdgeOut: queued.predictedEdgeOut.toString()
+          }
         });
         this.hotQueue.splice(index, 1);
         continue;
@@ -387,6 +479,7 @@ export class BotRuntime {
       }
 
       if (decision.action === 'NO_SEND') {
+        await this.deps.store.transition(queued.orderHash, 'SIM_OK', 'SHADOW_MODE');
         this.deps.inflightTracker.markResolved(queued.orderHash);
         this.deps.metrics.increment(`send_attempt_total{venue="${decision.chosenRouteVenue}",mode="SHADOW",writer="shadow"}`);
         this.deps.metrics.increment('shadow_would_send_total');
@@ -417,6 +510,12 @@ export class BotRuntime {
 
         const accepted = decision.action === 'WOULD_SEND' && decision.sendResult.accepted;
         if (accepted) {
+          await this.deps.store.transition(
+            queued.orderHash,
+            'SIM_OK',
+            decision.action === 'WOULD_SEND' ? decision.simResult.reason : 'SUPPORTED'
+          );
+          await this.deps.store.transition(queued.orderHash, 'SUBMITTING');
           this.deps.metrics.increment('live_send_total');
           if (this.deps.config.canaryMode) {
             this.deps.metrics.increment('canary_live_send_total');
@@ -449,7 +548,26 @@ export class BotRuntime {
                 : undefined
           }
         });
-      } else if (decision.action === 'DROP') {
+      }
+
+      if (decision.action === 'DROP') {
+        if (decision.simResult && !decision.simResult.ok) {
+          await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
+        } else {
+          await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
+        }
+        this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: Date.now(),
+          orderHash: queued.orderHash,
+          payload: {
+            reason: decision.reason,
+            chosenRouteVenue: decision.chosenRouteVenue,
+            netEdgeOut: queued.predictedEdgeOut.toString(),
+            simReason: decision.simResult?.reason
+          }
+        });
         this.deps.inflightTracker.markResolved(queued.orderHash);
       }
 

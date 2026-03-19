@@ -29,6 +29,13 @@ describe('order state and poller', () => {
     expect(() => assertLegalOrderTransition('DISCOVERED', 'LANDED')).toThrow('Illegal order transition');
   });
 
+  it('allows dropped transitions from scheduler and simulation states', () => {
+    expect(() => assertLegalOrderTransition('SUPPORTED', 'DROPPED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('SCHEDULED', 'DROPPED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('SIM_OK', 'DROPPED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('SIM_FAIL', 'DROPPED')).not.toThrow();
+  });
+
   it('pollOnce returns fetched API payloads for coordinator ingestion', async () => {
     const supported = makeOrderPayload('Dutch_V3');
     const fetchImpl: typeof fetch = async () =>

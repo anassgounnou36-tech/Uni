@@ -2,6 +2,7 @@ export const ORDER_STATES = [
   'DISCOVERED',
   'DECODED',
   'SUPPORTED',
+  'DROPPED',
   'UNSUPPORTED',
   'SCHEDULED',
   'SIM_OK',
@@ -16,16 +17,17 @@ export const ORDER_STATES = [
 
 export type OrderState = (typeof ORDER_STATES)[number];
 
-export type OrderTerminalState = Extract<OrderState, 'UNSUPPORTED' | 'LANDED' | 'LOST' | 'EXPIRED' | 'CANCELED' | 'REVERTED'>;
+export type OrderTerminalState = Extract<OrderState, 'DROPPED' | 'UNSUPPORTED' | 'LANDED' | 'LOST' | 'EXPIRED' | 'CANCELED' | 'REVERTED'>;
 
 const LEGAL_TRANSITIONS: Record<OrderState, ReadonlySet<OrderState>> = {
   DISCOVERED: new Set(['DECODED', 'UNSUPPORTED', 'EXPIRED', 'CANCELED']),
   DECODED: new Set(['SUPPORTED', 'UNSUPPORTED', 'EXPIRED', 'CANCELED']),
-  SUPPORTED: new Set(['SCHEDULED', 'UNSUPPORTED', 'EXPIRED', 'CANCELED']),
+  SUPPORTED: new Set(['SCHEDULED', 'DROPPED', 'UNSUPPORTED', 'EXPIRED', 'CANCELED']),
+  DROPPED: new Set([]),
   UNSUPPORTED: new Set([]),
-  SCHEDULED: new Set(['SIM_OK', 'SIM_FAIL', 'EXPIRED', 'CANCELED', 'LOST']),
-  SIM_OK: new Set(['SUBMITTING', 'SCHEDULED', 'EXPIRED', 'LOST']),
-  SIM_FAIL: new Set(['SCHEDULED', 'EXPIRED', 'CANCELED']),
+  SCHEDULED: new Set(['SIM_OK', 'SIM_FAIL', 'DROPPED', 'EXPIRED', 'CANCELED', 'LOST']),
+  SIM_OK: new Set(['SUBMITTING', 'SCHEDULED', 'DROPPED', 'EXPIRED', 'LOST']),
+  SIM_FAIL: new Set(['SCHEDULED', 'DROPPED', 'EXPIRED', 'CANCELED']),
   SUBMITTING: new Set(['LANDED', 'LOST', 'REVERTED']),
   LANDED: new Set([]),
   LOST: new Set([]),

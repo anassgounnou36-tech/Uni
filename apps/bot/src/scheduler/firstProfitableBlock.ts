@@ -2,6 +2,7 @@ import type { ResolveEnv, ResolvedV3DutchOrder, V3DutchOrder } from '@uni/protoc
 import { resolveAt } from '@uni/protocol';
 import type { RouteBook } from '../routing/routeBook.js';
 import type { HedgeRoutePlan } from '../routing/venues.js';
+import type { RouteCandidateSummary } from '../routing/venues.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -14,7 +15,10 @@ export type BlockEvaluation = {
   profitFloorOut: bigint;
   grossEdgeOut: bigint;
   netEdgeOut: bigint;
-  route?: HedgeRoutePlan;
+  chosenRouteVenue?: HedgeRoutePlan['venue'];
+  selectionOk: boolean;
+  selectionReason?: 'NOT_ROUTEABLE';
+  alternativeRoutes: RouteCandidateSummary[];
 };
 
 export type FirstProfitableSchedule = {
@@ -30,6 +34,19 @@ export type FirstProfitableSchedule = {
   quoteModel: 'MARK_TO_MARKET_AMM';
 };
 
+export type FirstProfitableBlockResult =
+  | {
+      ok: true;
+      schedule: FirstProfitableSchedule;
+      evaluations: BlockEvaluation[];
+    }
+  | {
+      ok: false;
+      reason: 'NO_EDGE';
+      evaluations: BlockEvaluation[];
+      bestObservedEvaluation?: BlockEvaluation;
+    };
+
 export type FirstProfitableBlockParams = {
   order: V3DutchOrder;
   baseEnv: Omit<ResolveEnv, 'blockNumberish'>;
@@ -43,7 +60,7 @@ function totalOutputAmount(resolved: ResolvedV3DutchOrder): bigint {
   return resolved.outputs.reduce((sum, output) => sum + output.amount, 0n);
 }
 
-export async function findFirstProfitableBlock(params: FirstProfitableBlockParams): Promise<FirstProfitableSchedule | undefined> {
+export async function findFirstProfitableBlock(params: FirstProfitableBlockParams): Promise<FirstProfitableBlockResult> {
   const evaluations: BlockEvaluation[] = [];
 
   for (const block of [...params.candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
@@ -64,7 +81,10 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         riskBufferOut: 0n,
         profitFloorOut: 0n,
         grossEdgeOut: 0n,
-        netEdgeOut: -1n
+        netEdgeOut: -1n,
+        selectionOk: false,
+        selectionReason: routeResult.reason,
+        alternativeRoutes: routeResult.alternativeRoutes
       });
       continue;
     }
@@ -83,21 +103,39 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
       profitFloorOut: route.profitFloorOut,
       grossEdgeOut: route.grossEdgeOut,
       netEdgeOut: route.netEdgeOut,
-      route
+      chosenRouteVenue: route.venue,
+      selectionOk: true,
+      alternativeRoutes: routeResult.alternativeRoutes
     };
     evaluations.push(evaluation);
 
     if (route.netEdgeOut >= params.threshold) {
       return {
-        scheduledBlock: block,
-        competeWindowStart: block,
-        competeWindowEnd: block + params.competeWindowBlocks,
-        chosenRoute: evaluation.route!,
+        ok: true,
+        schedule: {
+          scheduledBlock: block,
+          competeWindowStart: block,
+          competeWindowEnd: block + params.competeWindowBlocks,
+          chosenRoute: route,
+          evaluations,
+          quoteModel: 'MARK_TO_MARKET_AMM'
+        },
         evaluations,
-        quoteModel: 'MARK_TO_MARKET_AMM'
       };
     }
   }
 
-  return undefined;
+  let bestObservedEvaluation: BlockEvaluation | undefined;
+  for (const evaluation of evaluations) {
+    if (!bestObservedEvaluation || evaluation.netEdgeOut > bestObservedEvaluation.netEdgeOut) {
+      bestObservedEvaluation = evaluation;
+    }
+  }
+
+  return {
+    ok: false,
+    reason: 'NO_EDGE',
+    evaluations,
+    bestObservedEvaluation
+  };
 }
