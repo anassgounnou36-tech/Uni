@@ -1,4 +1,5 @@
 import type { HedgeVenue } from './venues.js';
+import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -18,6 +19,8 @@ export type FeeTierAttemptSummary = {
   netEdgeOut?: bigint;
   status: RouteAttemptStatus;
   reason: string;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: ConstraintBreakdown;
 };
 
 export type VenueRouteAttemptSummary = {
@@ -32,4 +35,6 @@ export type VenueRouteAttemptSummary = {
   feeTierAttempts?: FeeTierAttemptSummary[];
   quoteCount?: number;
   metadata?: Record<string, string | number | boolean | null | undefined>;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: ConstraintBreakdown;
 };

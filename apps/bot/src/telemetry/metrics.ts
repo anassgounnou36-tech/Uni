@@ -52,6 +52,10 @@ export class BotMetrics {
     this.increment(`route_rejected_total{venue="${venue}",reason="${reason}"}`);
   }
 
+  incrementSchedulerNearMiss(): void {
+    this.increment('scheduler_near_miss_total');
+  }
+
   observeIngestToSendLatency(ms: number): void {
     this.ingestToSendLatencies.push(ms);
   }

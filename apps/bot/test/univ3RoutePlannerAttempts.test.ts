@@ -101,4 +101,71 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.status).toBe('NOT_PROFITABLE');
     expect(result.failure.summary.feeTierAttempts?.every((attempt) => attempt.quoteSucceeded)).toBe(true);
   });
+
+  it('distinguishes REQUIRED_OUTPUT shortfall from minAmountOut floor shortfall', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') {
+        return [890n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        feeTiers: [3000] as const,
+        slippageBufferBps: 0n,
+        gasEstimateWei: 0n,
+        riskBufferBps: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('CONSTRAINT_REJECTED');
+    expect(result.failure.summary.status).toBe('CONSTRAINT_REJECTED');
+    expect(result.failure.summary.constraintReason).toBe('REQUIRED_OUTPUT');
+    expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
+    expect(
+      (result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut ?? 0n) >=
+        (result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n)
+    ).toBe(true);
+  });
+
+  it('distinguishes binding floor rejection when required output is met', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') {
+        return [920n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        feeTiers: [3000] as const,
+        slippageBufferBps: 0n,
+        gasEstimateWei: 0n,
+        riskBufferBps: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 30n
+      }
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('CONSTRAINT_REJECTED');
+    expect(result.failure.summary.constraintReason).toBe('PROFITABILITY_FLOOR');
+    expect(result.failure.summary.constraintBreakdown?.bindingFloor).toBe('PROFITABILITY_FLOOR');
+    expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBe(0n);
+    expect(result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
+  });
 });

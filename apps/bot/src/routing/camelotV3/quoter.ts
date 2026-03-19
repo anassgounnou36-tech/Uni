@@ -4,9 +4,11 @@ import { convertGasWeiToTokenOut } from '../univ3/gasValue.js';
 import type { RoutePlanningPolicy, UniV3FeeTier } from '../univ3/types.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
+import { buildConstraintBreakdown } from '../constraintTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
+const DEFAULT_NEAR_MISS_BPS = 25n;
 
 export type CamelotAmmv3QuoterContext = {
   client: PublicClient;
@@ -155,7 +157,8 @@ export class CamelotAmmv3Quoter {
       gasEstimateWei: params.policy?.gasEstimateWei ?? 0n,
       riskBufferBps: params.policy?.riskBufferBps ?? 10n,
       riskBufferOut: params.policy?.riskBufferOut ?? 0n,
-      profitFloorOut: params.policy?.profitFloorOut ?? 0n
+      profitFloorOut: params.policy?.profitFloorOut ?? 0n,
+      nearMissBps: params.policy?.nearMissBps ?? DEFAULT_NEAR_MISS_BPS
     };
 
     const gasConversion = await convertGasWeiToTokenOut({
@@ -184,11 +187,36 @@ export class CamelotAmmv3Quoter {
     const gasCostOut = gasConversion.gasCostOut;
     const riskBufferOut = policy.riskBufferOut + (quotedAmountOut * policy.riskBufferBps) / 10_000n;
     const profitFloorOut = policy.profitFloorOut;
-    const grossEdgeOut = quotedAmountOut - requiredOutput;
-    const slippageFloorOut = quotedAmountOut - slippageBufferOut;
-    const profitabilityFloorOut = requiredOutput + gasCostOut + riskBufferOut + profitFloorOut;
-    const minAmountOut = slippageFloorOut > profitabilityFloorOut ? slippageFloorOut : profitabilityFloorOut;
-    const netEdgeOut = quotedAmountOut - requiredOutput - slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
+    const breakdown = buildConstraintBreakdown({
+      requiredOutput,
+      quotedAmountOut,
+      slippageBufferOut,
+      gasCostOut,
+      riskBufferOut,
+      profitFloorOut,
+      nearMissBps: policy.nearMissBps
+    });
+    const grossEdgeOut = quotedAmountOut - breakdown.requiredOutput;
+    const minAmountOut = breakdown.minAmountOut;
+    const netEdgeOut =
+      quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
+    if (quotedAmountOut < breakdown.requiredOutput) {
+      return {
+        ok: false,
+        reason: 'CONSTRAINT_REJECTED',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'REQUIRED_OUTPUT',
+          quotedAmountOut,
+          minAmountOut,
+          grossEdgeOut,
+          netEdgeOut,
+          constraintReason: 'REQUIRED_OUTPUT',
+          constraintBreakdown: breakdown
+        }
+      };
+    }
     if (quotedAmountOut < minAmountOut) {
       return {
         ok: false,
@@ -196,11 +224,13 @@ export class CamelotAmmv3Quoter {
         summary: {
           venue: 'CAMELOT_AMMV3',
           status: 'CONSTRAINT_REJECTED',
-          reason: 'MIN_AMOUNT_OUT',
+          reason: breakdown.bindingFloor,
           quotedAmountOut,
           minAmountOut,
           grossEdgeOut,
-          netEdgeOut
+          netEdgeOut,
+          constraintReason: breakdown.bindingFloor,
+          constraintBreakdown: breakdown
         }
       };
     }

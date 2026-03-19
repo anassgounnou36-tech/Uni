@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RouteBook } from '../src/routing/routeBook.js';
 import type { HedgeRoutePlan } from '../src/routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../src/routing/attemptTypes.js';
+import type { ConstraintBreakdown } from '../src/routing/constraintTypes.js';
 
 function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
   return {
@@ -36,6 +37,26 @@ function venueSummary(
     venue,
     status,
     reason: status,
+    ...overrides
+  };
+}
+
+function constraintBreakdown(overrides: Partial<ConstraintBreakdown> = {}): ConstraintBreakdown {
+  return {
+    requiredOutput: 900n,
+    quotedAmountOut: 890n,
+    slippageBufferOut: 1n,
+    gasCostOut: 1n,
+    riskBufferOut: 0n,
+    profitFloorOut: 0n,
+    slippageFloorOut: 889n,
+    profitabilityFloorOut: 901n,
+    minAmountOut: 901n,
+    requiredOutputShortfallOut: 10n,
+    minAmountOutShortfallOut: 11n,
+    bindingFloor: 'PROFITABILITY_FLOOR',
+    nearMiss: false,
+    nearMissBps: 25n,
     ...overrides
   };
 }
@@ -271,5 +292,51 @@ describe('RouteBook', () => {
     if (!selected.ok) {
       expect(selected.reason).toBe('NOT_ROUTEABLE');
     }
+  });
+
+  it('routeBook can fail with CONSTRAINT_REJECTED and preserve breakdown', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            details: 'below required output',
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 890n,
+              minAmountOut: 901n,
+              grossEdgeOut: -10n,
+              netEdgeOut: -12n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown()
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'NOT_ROUTEABLE', { reason: 'POOL_MISSING' })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.reason).toBe('CONSTRAINT_REJECTED');
+    expect(selected.bestRejectedSummary?.constraintReason).toBe('REQUIRED_OUTPUT');
+    expect(selected.bestRejectedSummary?.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
+    expect(selected.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
   });
 });

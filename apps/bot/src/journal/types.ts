@@ -1,5 +1,6 @@
 import type { IngressSource } from '../ingress/types.js';
 import type { ExecutionOutcomeAttribution, RouteDecisionAttribution } from '../attribution/types.js';
+import type { ConstraintBindingFloor, ConstraintRejectReason } from '../routing/constraintTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -19,6 +20,52 @@ export type BaseJournalEvent<TType extends JournalEventType, TPayload extends Re
   atMs: number;
   orderHash?: `0x${string}`;
   payload: TPayload;
+};
+
+type JournalConstraintBreakdown = {
+  requiredOutput: string;
+  quotedAmountOut: string;
+  slippageBufferOut: string;
+  gasCostOut: string;
+  riskBufferOut: string;
+  profitFloorOut: string;
+  slippageFloorOut: string;
+  profitabilityFloorOut: string;
+  minAmountOut: string;
+  requiredOutputShortfallOut: string;
+  minAmountOutShortfallOut: string;
+  bindingFloor: ConstraintBindingFloor;
+  nearMiss: boolean;
+  nearMissBps: string;
+};
+
+type JournalFeeTierAttempt = {
+  feeTier: number;
+  poolExists: boolean;
+  quoteSucceeded: boolean;
+  quotedAmountOut?: string;
+  minAmountOut?: string;
+  grossEdgeOut?: string;
+  netEdgeOut?: string;
+  status: string;
+  reason: string;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: JournalConstraintBreakdown;
+};
+
+type JournalVenueAttempt = {
+  venue: string;
+  status: string;
+  reason: string;
+  quotedAmountOut?: string;
+  minAmountOut?: string;
+  grossEdgeOut?: string;
+  netEdgeOut?: string;
+  selectedFeeTier?: number;
+  quoteCount?: number;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: JournalConstraintBreakdown;
+  feeTierAttempts?: JournalFeeTierAttempt[];
 };
 
 export type OrderSeenEvent = BaseJournalEvent<
@@ -60,17 +107,9 @@ export type DecisionJournalEvent =
           netEdgeOut?: string;
           selectedFeeTier?: number;
           quoteCount?: number;
-          feeTierAttempts?: Array<{
-            feeTier: number;
-            poolExists: boolean;
-            quoteSucceeded: boolean;
-            quotedAmountOut?: string;
-            minAmountOut?: string;
-            grossEdgeOut?: string;
-            netEdgeOut?: string;
-            status: string;
-            reason: string;
-          }>;
+          constraintReason?: ConstraintRejectReason;
+          constraintBreakdown?: JournalConstraintBreakdown;
+          feeTierAttempts?: JournalFeeTierAttempt[];
         };
         evaluations?: Array<{
           block: string;
@@ -84,50 +123,8 @@ export type DecisionJournalEvent =
           riskBufferOut: string;
           profitFloorOut: string;
           netEdgeOut: string;
-          venueAttempts: Array<{
-            venue: string;
-            status: string;
-            reason?: string;
-            quotedAmountOut?: string;
-            minAmountOut?: string;
-            grossEdgeOut?: string;
-            netEdgeOut?: string;
-            selectedFeeTier?: number;
-            quoteCount?: number;
-            feeTierAttempts?: Array<{
-              feeTier: number;
-              poolExists: boolean;
-              quoteSucceeded: boolean;
-              quotedAmountOut?: string;
-              minAmountOut?: string;
-              grossEdgeOut?: string;
-              netEdgeOut?: string;
-              status: string;
-              reason: string;
-            }>;
-          }>;
-          bestRejectedSummary?: {
-            venue: string;
-            status: string;
-            reason: string;
-            quotedAmountOut?: string;
-            minAmountOut?: string;
-            grossEdgeOut?: string;
-            netEdgeOut?: string;
-            selectedFeeTier?: number;
-            quoteCount?: number;
-            feeTierAttempts?: Array<{
-              feeTier: number;
-              poolExists: boolean;
-              quoteSucceeded: boolean;
-              quotedAmountOut?: string;
-              minAmountOut?: string;
-              grossEdgeOut?: string;
-              netEdgeOut?: string;
-              status: string;
-              reason: string;
-            }>;
-          };
+          venueAttempts: JournalVenueAttempt[];
+          bestRejectedSummary?: JournalVenueAttempt;
         }>;
         chosenRouteVenue?: string;
         netEdgeOut?: string;
