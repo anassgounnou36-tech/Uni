@@ -740,6 +740,8 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
 
     const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
     const droppedBestRejected = dropped?.payload.bestRejectedSummary as Record<string, unknown> | undefined;
+    expect(droppedBestRejected?.candidateClass).toBeDefined();
+    expect((droppedBestRejected?.candidateClass as string).length).toBeGreaterThan(0);
     expect(droppedBestRejected?.constraintReason).toBe('REQUIRED_OUTPUT');
     expect((droppedBestRejected?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('UNSATISFIABLE');
     expect((droppedBestRejected?.hedgeGap as Record<string, unknown> | undefined)?.gapClass).toBe('SMALL');

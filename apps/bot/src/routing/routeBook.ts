@@ -4,7 +4,7 @@ import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
 import type { VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
-import { rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -50,7 +50,7 @@ function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandi
     return 'NOT_PROFITABLE';
   }
   if (summary.status === 'CONSTRAINT_REJECTED') {
-    return 'NOT_PROFITABLE';
+    return 'CONSTRAINT_REJECTED';
   }
   if (summary.status === 'QUOTE_FAILED') {
     return 'QUOTE_FAILED';
@@ -237,6 +237,12 @@ export class RouteBook {
 
     if (eligible.length === 0) {
       const bestRejectedSummary = [...venueAttempts].sort(rejectedCandidateSort)[0];
+      const bestRejectedWithClass = bestRejectedSummary
+        ? {
+            ...bestRejectedSummary,
+            candidateClass: bestRejectedSummary.candidateClass ?? deriveRejectedCandidateClass(bestRejectedSummary)
+          }
+        : undefined;
       const statuses = venueAttempts.map((attempt) => attempt.status);
       const allNotRouteableOrQuoteFailed = statuses.every(
         (status) => status === 'NOT_ROUTEABLE' || status === 'QUOTE_FAILED'
@@ -247,9 +253,9 @@ export class RouteBook {
           ? statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
             ? 'QUOTE_FAILED'
             : 'NOT_ROUTEABLE'
-          : bestRejectedSummary?.status === 'CONSTRAINT_REJECTED'
+          : bestRejectedWithClass?.status === 'CONSTRAINT_REJECTED'
             ? 'CONSTRAINT_REJECTED'
-            : bestRejectedSummary?.status === 'NOT_PROFITABLE'
+            : bestRejectedWithClass?.status === 'NOT_PROFITABLE'
               ? 'NOT_PROFITABLE'
               : hasGasNotPriceable
                 ? 'GAS_NOT_PRICEABLE'
@@ -258,7 +264,7 @@ export class RouteBook {
         ok: false,
         reason,
         venueAttempts,
-        bestRejectedSummary,
+        bestRejectedSummary: bestRejectedWithClass,
         alternativeRoutes: alternatives
       };
     }

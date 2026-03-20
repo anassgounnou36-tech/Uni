@@ -34,6 +34,7 @@ export type HedgeRoutePlan = {
 
 export type RouteCandidateFailureReason =
   | 'NOT_ROUTEABLE'
+  | 'CONSTRAINT_REJECTED'
   | 'NO_POOL'
   | 'POOL_DEAD'
   | 'QUOTE_FAILED'

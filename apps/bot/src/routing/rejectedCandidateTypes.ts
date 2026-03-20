@@ -1,5 +1,6 @@
 import type { ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
+import type { VenueRouteAttemptSummary } from './attemptTypes.js';
 
 export type RejectedCandidateClass =
   | 'POLICY_BLOCKED'
@@ -9,6 +10,49 @@ export type RejectedCandidateClass =
   | 'GAS_NOT_PRICEABLE'
   | 'UNKNOWN';
 
+export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary): RejectedCandidateClass {
+  if (summary.status === 'GAS_NOT_PRICEABLE') {
+    return 'GAS_NOT_PRICEABLE';
+  }
+  if (summary.status === 'QUOTE_FAILED') {
+    return 'QUOTE_FAILED';
+  }
+  if (summary.reason === 'POOL_MISSING') {
+    return 'ROUTE_MISSING';
+  }
+
+  const hasQuote = summary.quotedAmountOut !== undefined;
+  const nearSatisfiable = summary.constraintBreakdown?.nearMiss ?? false;
+  const satisfiable = summary.exactOutputViability?.status === 'SATISFIABLE';
+  if (
+    hasQuote
+    && (satisfiable || nearSatisfiable)
+    && (
+      summary.constraintReason === 'PROFITABILITY_FLOOR'
+      || summary.constraintReason === 'SLIPPAGE_FLOOR'
+    )
+  ) {
+    return 'POLICY_BLOCKED';
+  }
+  if (
+    summary.constraintReason === 'REQUIRED_OUTPUT'
+    && summary.exactOutputViability?.status === 'UNSATISFIABLE'
+  ) {
+    return 'LIQUIDITY_BLOCKED';
+  }
+  if (
+    summary.status === 'NOT_ROUTEABLE'
+    && (
+      summary.reason.includes('POOL')
+      || summary.reason.includes('NOT_ROUTEABLE')
+      || summary.reason === 'CAMELOT_DISABLED'
+    )
+  ) {
+    return 'ROUTE_MISSING';
+  }
+  return 'UNKNOWN';
+}
+
 export function classifyRejectedCandidate(params: {
   status: string;
   reason: string;
@@ -16,34 +60,22 @@ export function classifyRejectedCandidate(params: {
   exactOutputViabilityStatus?: ExactOutputViabilityStatus;
   quotedAmountOut?: bigint;
 }): RejectedCandidateClass {
-  if (params.status === 'GAS_NOT_PRICEABLE') {
-    return 'GAS_NOT_PRICEABLE';
-  }
-  if (params.status === 'QUOTE_FAILED') {
-    return 'QUOTE_FAILED';
-  }
-  if (params.reason === 'POOL_MISSING') {
-    return 'ROUTE_MISSING';
-  }
-  if (
-    params.constraintReason === 'PROFITABILITY_FLOOR'
-    || params.constraintReason === 'SLIPPAGE_FLOOR'
-  ) {
-    return 'POLICY_BLOCKED';
-  }
-  if (
-    params.constraintReason === 'REQUIRED_OUTPUT'
-    && params.exactOutputViabilityStatus === 'UNSATISFIABLE'
-  ) {
-    return 'LIQUIDITY_BLOCKED';
-  }
-  if (params.status === 'NOT_ROUTEABLE' && params.reason.includes('POOL')) {
-    return 'ROUTE_MISSING';
-  }
-  if (params.status === 'CONSTRAINT_REJECTED' && params.quotedAmountOut !== undefined) {
-    return 'POLICY_BLOCKED';
-  }
-  return 'UNKNOWN';
+  return deriveRejectedCandidateClass({
+    venue: 'UNISWAP_V3',
+    status: params.status as VenueRouteAttemptSummary['status'],
+    reason: params.reason,
+    quotedAmountOut: params.quotedAmountOut,
+    constraintReason: params.constraintReason,
+    exactOutputViability: params.exactOutputViabilityStatus
+      ? {
+          status: params.exactOutputViabilityStatus,
+          targetOutput: 0n,
+          requiredInputForTargetOutput: 0n,
+          availableInput: 0n,
+          reason: 'derived from classifyRejectedCandidate compatibility helper'
+        }
+      : undefined
+  });
 }
 
 export function rejectedCandidateClassPriority(candidateClass: RejectedCandidateClass): number {

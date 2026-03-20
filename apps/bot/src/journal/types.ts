@@ -107,6 +107,8 @@ export type OrderSeenEvent = BaseJournalEvent<
     source: IngressSource;
     receivedAtMs: number;
     createdAtMs?: number;
+    encodedOrder?: string;
+    signature?: string;
     deduped: boolean;
     validation: 'ACCEPTED' | 'REJECTED';
     reason?: string;
@@ -140,7 +142,7 @@ export type DecisionJournalEvent =
           netEdgeOut?: string;
           selectedFeeTier?: number;
           quoteCount?: number;
-          candidateClass?: RejectedCandidateClass;
+          candidateClass: RejectedCandidateClass;
           constraintReason?: ConstraintRejectReason;
           constraintBreakdown?: JournalConstraintBreakdown;
           exactOutputViability?: JournalExactOutputViability;
