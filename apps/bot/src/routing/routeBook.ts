@@ -3,6 +3,7 @@ import type { UniV3RoutePlanner } from './univ3/routePlanner.js';
 import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
 import type { VenueRouteAttemptSummary } from './attemptTypes.js';
+import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -72,6 +73,65 @@ function sortByBestEdge(routes: HedgeRoutePlan[]): HedgeRoutePlan[] {
     }
     return venueTieBreak(a.venue, b.venue);
   });
+}
+
+function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): number {
+  if (status === 'SATISFIABLE') return 0;
+  if (status === 'UNSATISFIABLE') return 1;
+  if (status === 'NOT_CHECKED') return 2;
+  return 3;
+}
+
+function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
+  const aHasQuote = a.quotedAmountOut !== undefined;
+  const bHasQuote = b.quotedAmountOut !== undefined;
+  if (aHasQuote !== bHasQuote) {
+    return aHasQuote ? -1 : 1;
+  }
+
+  const aRequiredOutput = a.constraintReason === 'REQUIRED_OUTPUT';
+  const bRequiredOutput = b.constraintReason === 'REQUIRED_OUTPUT';
+  if (aRequiredOutput && bRequiredOutput) {
+    const aStatusRank = exactOutputStatusRank(a.exactOutputViability?.status);
+    const bStatusRank = exactOutputStatusRank(b.exactOutputViability?.status);
+    if (aStatusRank !== bStatusRank) {
+      return aStatusRank - bStatusRank;
+    }
+
+    const aInputDeficit = a.hedgeGap?.inputDeficit ?? a.exactOutputViability?.inputDeficit;
+    const bInputDeficit = b.hedgeGap?.inputDeficit ?? b.exactOutputViability?.inputDeficit;
+    if (aInputDeficit !== undefined && bInputDeficit !== undefined && aInputDeficit !== bInputDeficit) {
+      return aInputDeficit < bInputDeficit ? -1 : 1;
+    }
+    if ((aInputDeficit !== undefined) !== (bInputDeficit !== undefined)) {
+      return aInputDeficit !== undefined ? -1 : 1;
+    }
+
+    const aCoverage = a.hedgeGap?.outputCoverageBps;
+    const bCoverage = b.hedgeGap?.outputCoverageBps;
+    if (aCoverage !== undefined && bCoverage !== undefined && aCoverage !== bCoverage) {
+      return aCoverage > bCoverage ? -1 : 1;
+    }
+
+    const aRequiredShortfall = a.hedgeGap?.requiredOutputShortfallOut ?? a.constraintBreakdown?.requiredOutputShortfallOut;
+    const bRequiredShortfall = b.hedgeGap?.requiredOutputShortfallOut ?? b.constraintBreakdown?.requiredOutputShortfallOut;
+    if (aRequiredShortfall !== undefined && bRequiredShortfall !== undefined && aRequiredShortfall !== bRequiredShortfall) {
+      return aRequiredShortfall < bRequiredShortfall ? -1 : 1;
+    }
+
+    const aQuoted = a.quotedAmountOut ?? -1n;
+    const bQuoted = b.quotedAmountOut ?? -1n;
+    if (aQuoted !== bQuoted) {
+      return aQuoted > bQuoted ? -1 : 1;
+    }
+  }
+
+  const aEdge = a.netEdgeOut ?? -1n;
+  const bEdge = b.netEdgeOut ?? -1n;
+  if (aEdge !== bEdge) {
+    return aEdge > bEdge ? -1 : 1;
+  }
+  return venueTieBreak(a.venue, b.venue);
 }
 
 export class RouteBook {
@@ -153,20 +213,7 @@ export class RouteBook {
     }
 
     if (eligible.length === 0) {
-      const bestRejectedSummary = [...venueAttempts]
-        .sort((a, b) => {
-          const aHasQuote = a.quotedAmountOut !== undefined;
-          const bHasQuote = b.quotedAmountOut !== undefined;
-          if (aHasQuote !== bHasQuote) {
-            return aHasQuote ? -1 : 1;
-          }
-          const aEdge = a.netEdgeOut ?? -1n;
-          const bEdge = b.netEdgeOut ?? -1n;
-          if (aEdge !== bEdge) {
-            return aEdge > bEdge ? -1 : 1;
-          }
-          return venueTieBreak(a.venue, b.venue);
-        })[0];
+      const bestRejectedSummary = [...venueAttempts].sort(rejectedCandidateSort)[0];
       const statuses = venueAttempts.map((attempt) => attempt.status);
       const allNotRouteableOrQuoteFailed = statuses.every(
         (status) => status === 'NOT_ROUTEABLE' || status === 'QUOTE_FAILED'

@@ -72,6 +72,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
 
     const routeResult = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
     if (!routeResult.ok) {
+      const bestRejectedSummary = routeResult.bestRejectedSummary;
       evaluations.push({
         block,
         requiredOutput: totalOutputAmount(resolved),
@@ -86,7 +87,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         selectionOk: false,
         selectionReason: routeResult.reason,
         venueAttempts: routeResult.venueAttempts,
-        bestRejectedSummary: routeResult.bestRejectedSummary
+        bestRejectedSummary
       });
       continue;
     }

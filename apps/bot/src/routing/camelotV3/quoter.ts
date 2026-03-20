@@ -6,6 +6,7 @@ import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
+import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -192,6 +193,7 @@ export class CamelotAmmv3Quoter {
       supportedFeeTiers: DEFAULT_UNIV3_GAS_FEE_TIERS
     });
     if (!gasConversion.ok) {
+      const exactOutputViability = camelotExactOutputNotChecked(requiredOutput, params.amountIn);
       return {
         ok: false,
         reason: 'GAS_NOT_PRICEABLE',
@@ -201,7 +203,14 @@ export class CamelotAmmv3Quoter {
           reason: 'GAS_CONVERSION_FAILED',
           quotedAmountOut,
           grossEdgeOut: quotedAmountOut - requiredOutput,
-          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+          exactOutputViability,
+          hedgeGap: buildHedgeGapSummary({
+            requiredOutput,
+            quotedAmountOut,
+            exactOutputViability,
+            nearMiss: false,
+            nearMissBps: policy.nearMissBps
+          })
         }
       };
     }
@@ -223,6 +232,15 @@ export class CamelotAmmv3Quoter {
     const minAmountOut = breakdown.minAmountOut;
     const netEdgeOut =
       quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
+    const exactOutputViability = camelotExactOutputNotChecked(requiredOutput, params.amountIn);
+    const hedgeGap = buildHedgeGapSummary({
+      requiredOutput,
+      quotedAmountOut,
+      minAmountOut,
+      exactOutputViability,
+      nearMiss: breakdown.nearMiss,
+      nearMissBps: breakdown.nearMissBps
+    });
     if (quotedAmountOut < breakdown.requiredOutput) {
       return {
         ok: false,
@@ -237,7 +255,8 @@ export class CamelotAmmv3Quoter {
           netEdgeOut,
           constraintReason: 'REQUIRED_OUTPUT',
           constraintBreakdown: breakdown,
-          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+          exactOutputViability,
+          hedgeGap
         }
       };
     }
@@ -255,7 +274,8 @@ export class CamelotAmmv3Quoter {
           netEdgeOut,
           constraintReason: breakdown.bindingFloor,
           constraintBreakdown: breakdown,
-          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+          exactOutputViability,
+          hedgeGap
         }
       };
     }
@@ -271,7 +291,8 @@ export class CamelotAmmv3Quoter {
           minAmountOut,
           grossEdgeOut,
           netEdgeOut,
-          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+          exactOutputViability,
+          hedgeGap
         }
       };
     }
@@ -306,7 +327,8 @@ export class CamelotAmmv3Quoter {
         minAmountOut,
         grossEdgeOut,
         netEdgeOut,
-        exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+        exactOutputViability,
+        hedgeGap
       }
     };
   }

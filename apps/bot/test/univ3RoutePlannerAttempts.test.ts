@@ -84,6 +84,10 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(tier10000?.exactOutputViability).toBeDefined();
     expect(tier10000?.exactOutputViability?.targetOutput).toBe(900n);
     expect(tier10000?.exactOutputViability?.availableInput).toBe(1_000n);
+    expect(tier10000?.hedgeGap).toBeDefined();
+    expect(tier10000?.hedgeGap?.outputCoverageBps).toBe(10_555n);
+    expect(tier10000?.hedgeGap?.requiredOutputShortfallOut).toBe(0n);
+    expect(tier10000?.hedgeGap?.gapClass).toBe('EXACT');
   });
 
   it('classifies successful but unprofitable quotes as NOT_PROFITABLE (not NOT_ROUTEABLE)', async () => {
@@ -149,6 +153,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
     expect(result.failure.summary.exactOutputViability?.status).toBe('UNSATISFIABLE');
     expect((result.failure.summary.exactOutputViability?.inputDeficit ?? 0n) > 0n).toBe(true);
+    expect(result.failure.summary.hedgeGap?.outputCoverageBps).toBe(9_888n);
+    expect(result.failure.summary.hedgeGap?.requiredOutputShortfallOut).toBe(10n);
+    expect(result.failure.summary.hedgeGap?.gapClass).toBe('MEDIUM');
     expect(
       (result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut ?? 0n) >=
         (result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n)

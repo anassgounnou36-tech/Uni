@@ -1,3 +1,5 @@
+import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
+
 export type Quantiles = {
   p50: number;
   p95: number;
@@ -62,6 +64,14 @@ export class BotMetrics {
 
   incrementSchedulerRequiredOutputNearMiss(): void {
     this.increment('scheduler_required_output_near_miss_total');
+  }
+
+  incrementSchedulerGapClass(gapClass: HedgeGapClass): void {
+    this.increment(`scheduler_gap_class_total{gap_class="${gapClass}"}`);
+  }
+
+  incrementSchedulerRequiredOutputSatisfiable(): void {
+    this.increment('scheduler_required_output_satisfiable_total');
   }
 
   observeIngestToSendLatency(ms: number): void {

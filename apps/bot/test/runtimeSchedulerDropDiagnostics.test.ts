@@ -299,6 +299,18 @@ function noEdgeNearMissRouteBook(): RouteBook {
             inputSlack: 1_000n,
             checkedFeeTier: 500,
             reason: 'exact-output diagnostic not implemented for camelot in this pr'
+          },
+          hedgeGap: {
+            requiredOutput: 900n,
+            quotedAmountOut: 998n,
+            outputCoverageBps: 11_088n,
+            requiredOutputShortfallOut: 0n,
+            minAmountOutShortfallOut: 2n,
+            inputDeficit: 0n,
+            inputSlack: 1_000n,
+            gapClass: 'EXACT',
+            nearMiss: true,
+            nearMissBps: 25n
           }
         }
       ],
@@ -336,6 +348,18 @@ function noEdgeNearMissRouteBook(): RouteBook {
           inputSlack: 0n,
           checkedFeeTier: 500,
           reason: 'required output unsatisfiable with available input'
+        },
+        hedgeGap: {
+          requiredOutput: 900n,
+          quotedAmountOut: 898n,
+          outputCoverageBps: 9_977n,
+          requiredOutputShortfallOut: 2n,
+          minAmountOutShortfallOut: 2n,
+          inputDeficit: 1n,
+          inputSlack: 0n,
+          gapClass: 'SMALL',
+          nearMiss: true,
+          nearMissBps: 25n
         }
       },
       alternativeRoutes: [
@@ -346,6 +370,82 @@ function noEdgeNearMissRouteBook(): RouteBook {
           details: 'Near miss'
         }
       ]
+    })
+  } as RouteBook;
+}
+
+function noEdgeRequiredOutputSatisfiableRouteBook(): RouteBook {
+  return {
+    selectBestRoute: async () => ({
+      ok: false,
+      reason: 'CONSTRAINT_REJECTED',
+      venueAttempts: [
+        {
+          venue: 'UNISWAP_V3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'REQUIRED_OUTPUT',
+          quotedAmountOut: 899n,
+          minAmountOut: 901n,
+          grossEdgeOut: -1n,
+          netEdgeOut: -1n,
+          constraintReason: 'REQUIRED_OUTPUT',
+          exactOutputViability: {
+            status: 'SATISFIABLE',
+            targetOutput: 900n,
+            requiredInputForTargetOutput: 999n,
+            availableInput: 1_000n,
+            inputDeficit: 0n,
+            inputSlack: 1n,
+            checkedFeeTier: 500,
+            reason: 'required output satisfiable with available input'
+          },
+          hedgeGap: {
+            requiredOutput: 900n,
+            quotedAmountOut: 899n,
+            outputCoverageBps: 9_988n,
+            requiredOutputShortfallOut: 1n,
+            minAmountOutShortfallOut: 2n,
+            inputDeficit: 0n,
+            inputSlack: 1n,
+            gapClass: 'MEDIUM',
+            nearMiss: true,
+            nearMissBps: 25n
+          }
+        }
+      ],
+      bestRejectedSummary: {
+        venue: 'UNISWAP_V3',
+        status: 'CONSTRAINT_REJECTED',
+        reason: 'REQUIRED_OUTPUT',
+        quotedAmountOut: 899n,
+        minAmountOut: 901n,
+        grossEdgeOut: -1n,
+        netEdgeOut: -1n,
+        constraintReason: 'REQUIRED_OUTPUT',
+        exactOutputViability: {
+          status: 'SATISFIABLE',
+          targetOutput: 900n,
+          requiredInputForTargetOutput: 999n,
+          availableInput: 1_000n,
+          inputDeficit: 0n,
+          inputSlack: 1n,
+          checkedFeeTier: 500,
+          reason: 'required output satisfiable with available input'
+        },
+        hedgeGap: {
+          requiredOutput: 900n,
+          quotedAmountOut: 899n,
+          outputCoverageBps: 9_988n,
+          requiredOutputShortfallOut: 1n,
+          minAmountOutShortfallOut: 2n,
+          inputDeficit: 0n,
+          inputSlack: 1n,
+          gapClass: 'MEDIUM',
+          nearMiss: true,
+          nearMissBps: 25n
+        }
+      },
+      alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: false, reason: 'NOT_PROFITABLE', details: 'No edge' }]
     })
   } as RouteBook;
 }
@@ -559,6 +659,9 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(summaryRecord?.fields?.bestRejectedShortfallOut).toBe('2');
     expect(summaryRecord?.fields?.bestRejectedExactOutputStatus).toBe('UNSATISFIABLE');
     expect(summaryRecord?.fields?.bestRejectedInputDeficit).toBe('1');
+    expect(summaryRecord?.fields?.bestRejectedGapClass).toBe('SMALL');
+    expect(summaryRecord?.fields?.bestRejectedOutputCoverageBps).toBe('9977');
+    expect(summaryRecord?.fields?.bestRejectedRequiredOutputShortfallOut).toBe('2');
     expect(summaryRecord?.fields?.bestRejectedInputSlack).toBe('0');
     expect(summaryRecord?.fields?.bestRejectedCheckedFeeTier).toBe(500);
 
@@ -566,6 +669,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const droppedBestRejected = dropped?.payload.bestRejectedSummary as Record<string, unknown> | undefined;
     expect(droppedBestRejected?.constraintReason).toBe('REQUIRED_OUTPUT');
     expect((droppedBestRejected?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('UNSATISFIABLE');
+    expect((droppedBestRejected?.hedgeGap as Record<string, unknown> | undefined)?.gapClass).toBe('SMALL');
     const breakdown = droppedBestRejected?.constraintBreakdown as Record<string, unknown> | undefined;
     expect(breakdown?.nearMiss).toBe(true);
     expect(breakdown?.nearMissBps).toBe('25');
@@ -573,8 +677,26 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const firstVenueAttempt = ((firstEvaluation.venueAttempts as Array<Record<string, unknown>> | undefined) ?? [])[0];
     expect(firstVenueAttempt?.constraintBreakdown).toBeDefined();
     expect((firstVenueAttempt?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('NOT_CHECKED');
+    expect((firstVenueAttempt?.hedgeGap as Record<string, unknown> | undefined)?.gapClass).toBe('EXACT');
     expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBe(1);
     expect(metrics.snapshot().counters.scheduler_required_output_near_miss_total).toBe(1);
+    expect(metrics.snapshot().counters['scheduler_gap_class_total{gap_class="SMALL"}']).toBe(1);
+    expect(metrics.snapshot().counters.scheduler_required_output_satisfiable_total).toBeUndefined();
+  });
+
+  it('increments satisfiable-required-output counter only when best rejected viability is SATISFIABLE', async () => {
+    const payload = makePayload();
+    const { runtime, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeRequiredOutputSatisfiableRouteBook()
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    expect(metrics.snapshot().counters.scheduler_required_output_satisfiable_total).toBe(1);
+    expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBeUndefined();
+    expect(metrics.snapshot().counters['scheduler_gap_class_total{gap_class="MEDIUM"}']).toBe(1);
   });
 
   it('hot-lane SKIP transitions order to DROPPED with skip reason and dropped journal event', async () => {
