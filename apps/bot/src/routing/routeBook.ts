@@ -76,10 +76,14 @@ function sortByBestEdge(routes: HedgeRoutePlan[]): HedgeRoutePlan[] {
 }
 
 function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): number {
+  // REQUIRED_OUTPUT rejected-candidate ordering prioritizes known exact-output satisfiability
+  // before output-side shortfall heuristics so cross-venue comparisons stay symmetric.
   if (status === 'SATISFIABLE') return 0;
   if (status === 'UNSATISFIABLE') return 1;
-  if (status === 'NOT_CHECKED') return 2;
-  return 3;
+  if (status === 'QUOTE_FAILED') return 2;
+  if (status === 'NOT_CHECKED') return 3;
+  if (status === 'POOL_MISSING') return 4;
+  return 5;
 }
 
 function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
@@ -198,11 +202,9 @@ export class RouteBook {
         exactOutputViability: {
           status: 'NOT_CHECKED',
           targetOutput: requiredOutput,
-          requiredInputForTargetOutput: 0n,
+          requiredInputForTargetOutput: input.resolvedOrder.input.amount,
           availableInput: input.resolvedOrder.input.amount,
-          inputDeficit: 0n,
-          inputSlack: input.resolvedOrder.input.amount,
-          reason: 'exact-output diagnostic not implemented for camelot in this pr'
+          reason: 'camelot disabled'
         }
       });
       alternatives.push({

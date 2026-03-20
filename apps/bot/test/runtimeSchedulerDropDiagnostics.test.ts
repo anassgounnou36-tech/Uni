@@ -201,11 +201,9 @@ function routeBookWithNetEdge(netEdgeOut: bigint): RouteBook {
           exactOutputViability: {
             status: 'NOT_CHECKED',
             targetOutput: 100n,
-            requiredInputForTargetOutput: 0n,
+            requiredInputForTargetOutput: 1_000n,
             availableInput: 1_000n,
-            inputDeficit: 0n,
-            inputSlack: 1_000n,
-            reason: 'exact-output diagnostic not implemented for camelot in this pr'
+            reason: 'exact-output viability skipped'
           }
         }
       ],
@@ -293,12 +291,10 @@ function noEdgeNearMissRouteBook(): RouteBook {
           exactOutputViability: {
             status: 'NOT_CHECKED',
             targetOutput: 900n,
-            requiredInputForTargetOutput: 0n,
+            requiredInputForTargetOutput: 1_000n,
             availableInput: 1_000n,
-            inputDeficit: 0n,
-            inputSlack: 1_000n,
             checkedFeeTier: 500,
-            reason: 'exact-output diagnostic not implemented for camelot in this pr'
+            reason: 'exact-output viability skipped'
           },
           hedgeGap: {
             requiredOutput: 900n,
@@ -306,8 +302,6 @@ function noEdgeNearMissRouteBook(): RouteBook {
             outputCoverageBps: 11_088n,
             requiredOutputShortfallOut: 0n,
             minAmountOutShortfallOut: 2n,
-            inputDeficit: 0n,
-            inputSlack: 1_000n,
             gapClass: 'EXACT',
             nearMiss: true,
             nearMissBps: 25n
@@ -446,6 +440,80 @@ function noEdgeRequiredOutputSatisfiableRouteBook(): RouteBook {
         }
       },
       alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: false, reason: 'NOT_PROFITABLE', details: 'No edge' }]
+    })
+  } as RouteBook;
+}
+
+function noEdgeCamelotUnsatisfiableRouteBook(): RouteBook {
+  return {
+    selectBestRoute: async () => ({
+      ok: false,
+      reason: 'CONSTRAINT_REJECTED',
+      venueAttempts: [
+        {
+          venue: 'CAMELOT_AMMV3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'REQUIRED_OUTPUT',
+          quotedAmountOut: 899n,
+          minAmountOut: 901n,
+          grossEdgeOut: -1n,
+          netEdgeOut: -1n,
+          constraintReason: 'REQUIRED_OUTPUT',
+          exactOutputViability: {
+            status: 'UNSATISFIABLE',
+            targetOutput: 900n,
+            requiredInputForTargetOutput: 1_001n,
+            availableInput: 1_000n,
+            inputDeficit: 1n,
+            inputSlack: 0n,
+            reason: 'required output unsatisfiable with available input'
+          },
+          hedgeGap: {
+            requiredOutput: 900n,
+            quotedAmountOut: 899n,
+            outputCoverageBps: 9_988n,
+            requiredOutputShortfallOut: 1n,
+            minAmountOutShortfallOut: 2n,
+            inputDeficit: 1n,
+            inputSlack: 0n,
+            gapClass: 'MEDIUM',
+            nearMiss: true,
+            nearMissBps: 25n
+          }
+        }
+      ],
+      bestRejectedSummary: {
+        venue: 'CAMELOT_AMMV3',
+        status: 'CONSTRAINT_REJECTED',
+        reason: 'REQUIRED_OUTPUT',
+        quotedAmountOut: 899n,
+        minAmountOut: 901n,
+        grossEdgeOut: -1n,
+        netEdgeOut: -1n,
+        constraintReason: 'REQUIRED_OUTPUT',
+        exactOutputViability: {
+          status: 'UNSATISFIABLE',
+          targetOutput: 900n,
+          requiredInputForTargetOutput: 1_001n,
+          availableInput: 1_000n,
+          inputDeficit: 1n,
+          inputSlack: 0n,
+          reason: 'required output unsatisfiable with available input'
+        },
+        hedgeGap: {
+          requiredOutput: 900n,
+          quotedAmountOut: 899n,
+          outputCoverageBps: 9_988n,
+          requiredOutputShortfallOut: 1n,
+          minAmountOutShortfallOut: 2n,
+          inputDeficit: 1n,
+          inputSlack: 0n,
+          gapClass: 'MEDIUM',
+          nearMiss: true,
+          nearMissBps: 25n
+        }
+      },
+      alternativeRoutes: [{ venue: 'CAMELOT_AMMV3', eligible: false, reason: 'NOT_PROFITABLE', details: 'No edge' }]
     })
   } as RouteBook;
 }
@@ -697,6 +765,20 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(metrics.snapshot().counters.scheduler_required_output_satisfiable_total).toBe(1);
     expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBeUndefined();
     expect(metrics.snapshot().counters['scheduler_gap_class_total{gap_class="MEDIUM"}']).toBe(1);
+  });
+
+  it('increments camelot unsatisfiable counter when camelot is best REQUIRED_OUTPUT rejected', async () => {
+    const payload = makePayload();
+    const { runtime, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeCamelotUnsatisfiableRouteBook()
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBe(1);
+    expect(metrics.snapshot().counters.scheduler_camelot_required_output_unsatisfiable_total).toBe(1);
   });
 
   it('hot-lane SKIP transitions order to DROPPED with skip reason and dropped journal event', async () => {
