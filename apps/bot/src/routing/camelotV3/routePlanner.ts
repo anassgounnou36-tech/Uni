@@ -68,6 +68,6 @@ export class CamelotAmmv3RoutePlanner {
       return { ok: false, failure: { reason: quote.reason, details: quote.details, summary: quote.summary } };
     }
 
-    return { ok: true, route: quote.route, summary: { ...quote.summary, hedgeGap: quote.summary.hedgeGap } };
+    return { ok: true, route: quote.route, summary: quote.summary };
   }
 }

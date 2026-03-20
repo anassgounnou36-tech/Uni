@@ -137,12 +137,12 @@ export type DecisionJournalEvent =
           netEdgeOut?: string;
           selectedFeeTier?: number;
           quoteCount?: number;
-           constraintReason?: ConstraintRejectReason;
-           constraintBreakdown?: JournalConstraintBreakdown;
-           exactOutputViability?: JournalExactOutputViability;
-           hedgeGap?: JournalHedgeGapSummary;
-           feeTierAttempts?: JournalFeeTierAttempt[];
-         };
+          constraintReason?: ConstraintRejectReason;
+          constraintBreakdown?: JournalConstraintBreakdown;
+          exactOutputViability?: JournalExactOutputViability;
+          hedgeGap?: JournalHedgeGapSummary;
+          feeTierAttempts?: JournalFeeTierAttempt[];
+        };
         evaluations?: Array<{
           block: string;
           selectionOk: boolean;
