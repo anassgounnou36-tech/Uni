@@ -23,6 +23,7 @@ import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.j
 import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
+import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -115,6 +116,18 @@ export class BotRuntime {
       checkedFeeTier?: number;
       reason: string;
     };
+    hedgeGap?: {
+      requiredOutput: string;
+      quotedAmountOut: string;
+      outputCoverageBps: string;
+      requiredOutputShortfallOut: string;
+      minAmountOutShortfallOut?: string;
+      inputDeficit?: string;
+      inputSlack?: string;
+      gapClass: HedgeGapClass;
+      nearMiss: boolean;
+      nearMissBps: string;
+    };
   } {
     return {
       feeTier: summary.feeTier,
@@ -128,7 +141,8 @@ export class BotRuntime {
       reason: summary.reason,
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
-      exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined
+      exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
+      hedgeGap: summary.hedgeGap ? this.toJournalHedgeGap(summary.hedgeGap) : undefined
     };
   }
 
@@ -151,6 +165,32 @@ export class BotRuntime {
       inputSlack: viability.inputSlack.toString(),
       checkedFeeTier: viability.checkedFeeTier,
       reason: viability.reason
+    };
+  }
+
+  private toJournalHedgeGap(summary: HedgeGapSummary): {
+    requiredOutput: string;
+    quotedAmountOut: string;
+    outputCoverageBps: string;
+    requiredOutputShortfallOut: string;
+    minAmountOutShortfallOut?: string;
+    inputDeficit?: string;
+    inputSlack?: string;
+    gapClass: HedgeGapClass;
+    nearMiss: boolean;
+    nearMissBps: string;
+  } {
+    return {
+      requiredOutput: summary.requiredOutput.toString(),
+      quotedAmountOut: summary.quotedAmountOut.toString(),
+      outputCoverageBps: summary.outputCoverageBps.toString(),
+      requiredOutputShortfallOut: summary.requiredOutputShortfallOut.toString(),
+      minAmountOutShortfallOut: summary.minAmountOutShortfallOut?.toString(),
+      inputDeficit: summary.inputDeficit?.toString(),
+      inputSlack: summary.inputSlack?.toString(),
+      gapClass: summary.gapClass,
+      nearMiss: summary.nearMiss,
+      nearMissBps: summary.nearMissBps.toString()
     };
   }
 
@@ -225,6 +265,18 @@ export class BotRuntime {
       checkedFeeTier?: number;
       reason: string;
     };
+    hedgeGap?: {
+      requiredOutput: string;
+      quotedAmountOut: string;
+      outputCoverageBps: string;
+      requiredOutputShortfallOut: string;
+      minAmountOutShortfallOut?: string;
+      inputDeficit?: string;
+      inputSlack?: string;
+      gapClass: HedgeGapClass;
+      nearMiss: boolean;
+      nearMissBps: string;
+    };
     feeTierAttempts?: Array<{
       feeTier: number;
       poolExists: boolean;
@@ -262,6 +314,18 @@ export class BotRuntime {
         checkedFeeTier?: number;
         reason: string;
       };
+      hedgeGap?: {
+        requiredOutput: string;
+        quotedAmountOut: string;
+        outputCoverageBps: string;
+        requiredOutputShortfallOut: string;
+        minAmountOutShortfallOut?: string;
+        inputDeficit?: string;
+        inputSlack?: string;
+        gapClass: HedgeGapClass;
+        nearMiss: boolean;
+        nearMissBps: string;
+      };
     }>;
   } {
     return {
@@ -277,6 +341,7 @@ export class BotRuntime {
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
       exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
+      hedgeGap: summary.hedgeGap ? this.toJournalHedgeGap(summary.hedgeGap) : undefined,
       feeTierAttempts: summary.feeTierAttempts?.map((attempt) => this.toJournalFeeTierAttempt(attempt))
     };
   }
@@ -515,6 +580,17 @@ export class BotRuntime {
             this.deps.metrics.incrementSchedulerRequiredOutputNearMiss();
           }
         }
+        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap) {
+          this.deps.metrics.incrementSchedulerGapClass(
+            scheduleResult.bestObservedEvaluation.bestRejectedSummary.hedgeGap.gapClass
+          );
+        }
+        if (
+          scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT'
+          && scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'SATISFIABLE'
+        ) {
+          this.deps.metrics.incrementSchedulerRequiredOutputSatisfiable();
+        }
         this.logger.log('info', 'scheduler_no_edge', {
           orderHash,
           thresholdOut: this.deps.config.thresholdOut.toString(),
@@ -532,8 +608,15 @@ export class BotRuntime {
           bestRejectedNearMiss: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss,
           bestRejectedShortfallOut: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
           bestRejectedExactOutputStatus: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.status,
-          bestRejectedInputDeficit: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit.toString(),
+          bestRejectedInputDeficit:
+            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputDeficit?.toString()
+            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit.toString(),
           bestRejectedInputSlack: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack.toString(),
+          bestRejectedGapClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.gapClass,
+          bestRejectedOutputCoverageBps:
+            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),
+          bestRejectedRequiredOutputShortfallOut:
+            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.requiredOutputShortfallOut.toString(),
           bestRejectedCheckedFeeTier: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.checkedFeeTier,
           venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
             venue: attempt.venue,

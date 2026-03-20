@@ -2,6 +2,7 @@ import type { IngressSource } from '../ingress/types.js';
 import type { ExecutionOutcomeAttribution, RouteDecisionAttribution } from '../attribution/types.js';
 import type { ConstraintBindingFloor, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
+import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -51,6 +52,19 @@ type JournalExactOutputViability = {
   reason: string;
 };
 
+type JournalHedgeGapSummary = {
+  requiredOutput: string;
+  quotedAmountOut: string;
+  outputCoverageBps: string;
+  requiredOutputShortfallOut: string;
+  minAmountOutShortfallOut?: string;
+  inputDeficit?: string;
+  inputSlack?: string;
+  gapClass: HedgeGapClass;
+  nearMiss: boolean;
+  nearMissBps: string;
+};
+
 type JournalFeeTierAttempt = {
   feeTier: number;
   poolExists: boolean;
@@ -64,6 +78,7 @@ type JournalFeeTierAttempt = {
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: JournalConstraintBreakdown;
   exactOutputViability?: JournalExactOutputViability;
+  hedgeGap?: JournalHedgeGapSummary;
 };
 
 type JournalVenueAttempt = {
@@ -79,6 +94,7 @@ type JournalVenueAttempt = {
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: JournalConstraintBreakdown;
   exactOutputViability?: JournalExactOutputViability;
+  hedgeGap?: JournalHedgeGapSummary;
   feeTierAttempts?: JournalFeeTierAttempt[];
 };
 
@@ -124,6 +140,7 @@ export type DecisionJournalEvent =
           constraintReason?: ConstraintRejectReason;
           constraintBreakdown?: JournalConstraintBreakdown;
           exactOutputViability?: JournalExactOutputViability;
+          hedgeGap?: JournalHedgeGapSummary;
           feeTierAttempts?: JournalFeeTierAttempt[];
         };
         evaluations?: Array<{

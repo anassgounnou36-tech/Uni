@@ -339,4 +339,162 @@ describe('RouteBook', () => {
     expect(selected.bestRejectedSummary?.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
     expect(selected.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
   });
+
+  it('selects REQUIRED_OUTPUT best rejected with smallest input deficit', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 890n,
+              minAmountOut: 901n,
+              netEdgeOut: -1n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ requiredOutputShortfallOut: 10n }),
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_010n,
+                availableInput: 1_000n,
+                inputDeficit: 10n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 890n,
+                outputCoverageBps: 9_888n,
+                requiredOutputShortfallOut: 10n,
+                minAmountOutShortfallOut: 11n,
+                inputDeficit: 10n,
+                inputSlack: 0n,
+                gapClass: 'MEDIUM',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 895n,
+              minAmountOut: 901n,
+              netEdgeOut: -2n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ quotedAmountOut: 895n, requiredOutputShortfallOut: 5n }),
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_002n,
+                availableInput: 1_000n,
+                inputDeficit: 2n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 895n,
+                outputCoverageBps: 9_944n,
+                requiredOutputShortfallOut: 5n,
+                minAmountOutShortfallOut: 6n,
+                inputDeficit: 2n,
+                inputSlack: 0n,
+                gapClass: 'MEDIUM',
+                nearMiss: true,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('CAMELOT_AMMV3');
+    expect(selected.bestRejectedSummary?.hedgeGap?.inputDeficit).toBe(2n);
+  });
+
+  it('prefers REQUIRED_OUTPUT SATISFIABLE over UNSATISFIABLE for best rejected', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 899n,
+              netEdgeOut: -1n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ quotedAmountOut: 899n, requiredOutputShortfallOut: 1n }),
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 898n,
+              netEdgeOut: -2n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ quotedAmountOut: 898n, requiredOutputShortfallOut: 2n }),
+              exactOutputViability: {
+                status: 'SATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 999n,
+                availableInput: 1_000n,
+                inputDeficit: 0n,
+                inputSlack: 1n,
+                reason: 'required output satisfiable'
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('CAMELOT_AMMV3');
+    expect(selected.bestRejectedSummary?.exactOutputViability?.status).toBe('SATISFIABLE');
+  });
 });

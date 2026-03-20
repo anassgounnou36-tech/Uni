@@ -13,6 +13,7 @@ import type {
 import type { FeeTierAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintRejectReason } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
+import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
@@ -210,7 +211,15 @@ export class UniV3RoutePlanner {
           grossEdgeOut: quotedAmountOut - requiredOutput,
           status: 'GAS_NOT_PRICEABLE',
           reason: 'GAS_CONVERSION_FAILED',
-          exactOutputViability
+          exactOutputViability,
+          hedgeGap: buildHedgeGapSummary({
+            requiredOutput,
+            quotedAmountOut,
+            minAmountOut: requiredFloor,
+            exactOutputViability,
+            nearMiss: false,
+            nearMissBps: policy.nearMissBps
+          })
         });
         continue;
       }
@@ -263,7 +272,15 @@ export class UniV3RoutePlanner {
         reason,
         constraintReason,
         constraintBreakdown,
-        exactOutputViability
+        exactOutputViability,
+        hedgeGap: buildHedgeGapSummary({
+          requiredOutput,
+          quotedAmountOut,
+          minAmountOut,
+          exactOutputViability,
+          nearMiss: breakdown.nearMiss,
+          nearMissBps: breakdown.nearMissBps
+        })
       };
       attempts.push(attemptSummary);
 
@@ -312,6 +329,7 @@ export class UniV3RoutePlanner {
         netEdgeOut: best.route.netEdgeOut,
         selectedFeeTier: best.feeTierAttempt.feeTier,
         exactOutputViability: best.feeTierAttempt.exactOutputViability,
+        hedgeGap: best.feeTierAttempt.hedgeGap,
         feeTierAttempts: attempts,
         quoteCount
       };
@@ -342,6 +360,40 @@ export class UniV3RoutePlanner {
             .sort((a, b) => {
               const aBreakdown = a.constraintBreakdown!;
               const bBreakdown = b.constraintBreakdown!;
+              const aIsRequiredOutput = a.constraintReason === 'REQUIRED_OUTPUT';
+              const bIsRequiredOutput = b.constraintReason === 'REQUIRED_OUTPUT';
+              if (aIsRequiredOutput !== bIsRequiredOutput) {
+                return aIsRequiredOutput ? -1 : 1;
+              }
+              if (aIsRequiredOutput && bIsRequiredOutput) {
+                const viabilityStatusRank = (status: ExactOutputViability['status'] | undefined): number => {
+                  if (status === 'SATISFIABLE') return 0;
+                  if (status === 'UNSATISFIABLE') return 1;
+                  if (status === 'NOT_CHECKED') return 2;
+                  return 3;
+                };
+                const aStatusRank = viabilityStatusRank(a.feeTierAttempt.exactOutputViability?.status);
+                const bStatusRank = viabilityStatusRank(b.feeTierAttempt.exactOutputViability?.status);
+                if (aStatusRank !== bStatusRank) {
+                  return aStatusRank - bStatusRank;
+                }
+                const aInputDeficit = a.feeTierAttempt.hedgeGap?.inputDeficit ?? a.feeTierAttempt.exactOutputViability?.inputDeficit;
+                const bInputDeficit = b.feeTierAttempt.hedgeGap?.inputDeficit ?? b.feeTierAttempt.exactOutputViability?.inputDeficit;
+                if (aInputDeficit !== undefined && bInputDeficit !== undefined && aInputDeficit !== bInputDeficit) {
+                  return aInputDeficit < bInputDeficit ? -1 : 1;
+                }
+                if ((aInputDeficit !== undefined) !== (bInputDeficit !== undefined)) {
+                  return aInputDeficit !== undefined ? -1 : 1;
+                }
+                const aCoverage = a.feeTierAttempt.hedgeGap?.outputCoverageBps;
+                const bCoverage = b.feeTierAttempt.hedgeGap?.outputCoverageBps;
+                if (aCoverage !== undefined && bCoverage !== undefined && aCoverage !== bCoverage) {
+                  return aCoverage > bCoverage ? -1 : 1;
+                }
+                if (aBreakdown.requiredOutputShortfallOut !== bBreakdown.requiredOutputShortfallOut) {
+                  return aBreakdown.requiredOutputShortfallOut < bBreakdown.requiredOutputShortfallOut ? -1 : 1;
+                }
+              }
               if (aBreakdown.minAmountOutShortfallOut !== bBreakdown.minAmountOutShortfallOut) {
                 return aBreakdown.minAmountOutShortfallOut < bBreakdown.minAmountOutShortfallOut ? -1 : 1;
               }
@@ -370,6 +422,7 @@ export class UniV3RoutePlanner {
         constraintReason: bestRejected.constraintReason,
         constraintBreakdown: bestRejected.constraintBreakdown,
         exactOutputViability: bestRejected.feeTierAttempt.exactOutputViability,
+        hedgeGap: bestRejected.feeTierAttempt.hedgeGap,
         feeTierAttempts: attempts,
         quoteCount
       };
