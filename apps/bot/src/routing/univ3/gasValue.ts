@@ -10,7 +10,8 @@ export type GasConversionParams = {
   factory: Address;
   quoter: Address;
   tokenOut: Address;
-  gasWei: bigint;
+  gasCostWei: bigint;
+  gasWei?: bigint;
   supportedFeeTiers: readonly UniV3FeeTier[];
 };
 
@@ -19,12 +20,13 @@ export type GasConversionResult =
   | { ok: false; reason: 'NOT_PRICEABLE_GAS' };
 
 export async function convertGasWeiToTokenOut(params: GasConversionParams): Promise<GasConversionResult> {
-  if (params.gasWei <= 0n) {
+  const gasCostWei = (params.gasCostWei > 0n ? params.gasCostWei : params.gasWei) ?? 0n;
+  if (gasCostWei <= 0n) {
     return { ok: true, gasCostOut: 0n };
   }
 
   if (params.tokenOut.toLowerCase() === ARBITRUM_WETH.toLowerCase()) {
-    return { ok: true, gasCostOut: params.gasWei };
+    return { ok: true, gasCostOut: gasCostWei };
   }
 
   let best: { amountOut: bigint; feeTier: UniV3FeeTier } | undefined;
@@ -41,7 +43,7 @@ export async function convertGasWeiToTokenOut(params: GasConversionParams): Prom
         ARBITRUM_WETH,
         params.tokenOut,
         feeTier,
-        params.gasWei
+        gasCostWei
       );
       if (!best || quote.amountOut > best.amountOut) {
         best = { amountOut: quote.amountOut, feeTier };

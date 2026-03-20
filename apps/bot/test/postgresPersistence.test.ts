@@ -32,6 +32,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     schedulerCadenceMs: 100,
     hotLaneCadenceMs: 100,
     candidateBlocks: [1000n],
+    candidateBlockOffsets: [0n],
     competeWindowBlocks: 2n,
     thresholdOut: 1n,
     shadowMode: false,

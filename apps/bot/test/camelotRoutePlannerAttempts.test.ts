@@ -32,7 +32,7 @@ function routeInput(profitFloorOut = 0n) {
     } as never,
     policy: {
       slippageBufferBps: 0n,
-      gasEstimateWei: 0n,
+      effectiveGasPriceWei: 0n,
       riskBufferBps: 0n,
       riskBufferOut: 0n,
       profitFloorOut

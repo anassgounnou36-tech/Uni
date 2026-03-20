@@ -4,6 +4,7 @@ import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
 import type { VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
+import { rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -87,6 +88,11 @@ function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): 
 }
 
 function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
+  const aClassPriority = rejectedCandidateClassPriority(a.candidateClass ?? 'UNKNOWN');
+  const bClassPriority = rejectedCandidateClassPriority(b.candidateClass ?? 'UNKNOWN');
+  if (aClassPriority !== bClassPriority) {
+    return aClassPriority - bClassPriority;
+  }
   const aHasQuote = a.quotedAmountOut !== undefined;
   const bHasQuote = b.quotedAmountOut !== undefined;
   if (aHasQuote !== bHasQuote) {
@@ -96,10 +102,20 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
   const aRequiredOutput = a.constraintReason === 'REQUIRED_OUTPUT';
   const bRequiredOutput = b.constraintReason === 'REQUIRED_OUTPUT';
   if (aRequiredOutput && bRequiredOutput) {
+    const aNearMiss = a.constraintBreakdown?.nearMiss ?? false;
+    const bNearMiss = b.constraintBreakdown?.nearMiss ?? false;
+    if (aNearMiss !== bNearMiss) {
+      return aNearMiss ? -1 : 1;
+    }
     const aStatusRank = exactOutputStatusRank(a.exactOutputViability?.status);
     const bStatusRank = exactOutputStatusRank(b.exactOutputViability?.status);
     if (aStatusRank !== bStatusRank) {
       return aStatusRank - bStatusRank;
+    }
+    const aFloorShortfall = a.constraintBreakdown?.minAmountOutShortfallOut ?? a.constraintBreakdown?.requiredOutputShortfallOut;
+    const bFloorShortfall = b.constraintBreakdown?.minAmountOutShortfallOut ?? b.constraintBreakdown?.requiredOutputShortfallOut;
+    if (aFloorShortfall !== undefined && bFloorShortfall !== undefined && aFloorShortfall !== bFloorShortfall) {
+      return aFloorShortfall < bFloorShortfall ? -1 : 1;
     }
 
     const aInputDeficit = a.hedgeGap?.inputDeficit ?? a.exactOutputViability?.inputDeficit;
@@ -127,6 +143,11 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
     const bQuoted = b.quotedAmountOut ?? -1n;
     if (aQuoted !== bQuoted) {
       return aQuoted > bQuoted ? -1 : 1;
+    }
+    const aGasCostOut = a.constraintBreakdown?.gasCostOut ?? 0n;
+    const bGasCostOut = b.constraintBreakdown?.gasCostOut ?? 0n;
+    if (aGasCostOut !== bGasCostOut) {
+      return aGasCostOut < bGasCostOut ? -1 : 1;
     }
   }
 

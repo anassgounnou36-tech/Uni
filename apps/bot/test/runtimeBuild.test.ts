@@ -18,6 +18,7 @@ import type { ForkSimService } from '../src/sim/forkSimService.js';
 import type { SequencerClient } from '../src/send/sequencerClient.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { RouteBook } from '../src/routing/routeBook.js';
+import type { ResolveEnvProvider } from '../src/runtime/resolveEnvProvider.js';
 
 function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
   return {
@@ -41,6 +42,7 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     schedulerCadenceMs: 100,
     hotLaneCadenceMs: 100,
     candidateBlocks: [1000n, 1001n],
+    candidateBlockOffsets: [0n, 1n],
     competeWindowBlocks: 2n,
     thresholdOut: 1n,
 
@@ -189,6 +191,9 @@ describe('runtime build composition', () => {
       requireTradingDeps: true,
       schedulerContext: {
         routeBook: routeBookWithEdge(10n),
+        resolveEnvProvider: {
+          getCurrent: async () => ({ chainId: 42161n, blockNumber: 1000n, blockNumberish: 1000n, timestamp: 1_900_000_000n, baseFeePerGas: 1n, sampledAtMs: 1 })
+        } as ResolveEnvProvider,
         resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
       },
       hotLaneContext: {

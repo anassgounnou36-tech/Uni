@@ -24,13 +24,17 @@ import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
+import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
-  resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  resolveEnvProvider?: ResolveEnvProvider;
+  resolveEnv?: Omit<ResolveEnv, 'blockNumberish'>;
 };
 
 export type HotLaneContext = SchedulerContext & {
+  resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   conditionalEnvelope: ConditionalEnvelope;
   executor: `0x${string}`;
   simService: ForkSimService;
@@ -90,6 +94,7 @@ export class BotRuntime {
     status: string;
     reason: string;
     constraintReason?: ConstraintRejectReason;
+    candidateClass?: RejectedCandidateClass;
     constraintBreakdown?: {
       requiredOutput: string;
       quotedAmountOut: string;
@@ -238,6 +243,7 @@ export class BotRuntime {
     netEdgeOut?: string;
     selectedFeeTier?: number;
     quoteCount?: number;
+    candidateClass?: RejectedCandidateClass;
     constraintReason?: ConstraintRejectReason;
     constraintBreakdown?: {
       requiredOutput: string;
@@ -288,6 +294,7 @@ export class BotRuntime {
       status: string;
       reason: string;
       constraintReason?: ConstraintRejectReason;
+      candidateClass?: RejectedCandidateClass;
       constraintBreakdown?: {
         requiredOutput: string;
         quotedAmountOut: string;
@@ -338,6 +345,7 @@ export class BotRuntime {
       netEdgeOut: summary.netEdgeOut?.toString(),
       selectedFeeTier: summary.selectedFeeTier,
       quoteCount: summary.quoteCount,
+      candidateClass: summary.candidateClass,
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
       exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
@@ -426,6 +434,9 @@ export class BotRuntime {
     if (!this.deps.schedulerContext || !this.deps.hotLaneContext) {
       throw new Error('runtime trading dependencies are required (schedulerContext/hotLaneContext)');
     }
+    if (!this.deps.schedulerContext.resolveEnvProvider && !this.deps.schedulerContext.resolveEnv) {
+      throw new Error('runtime trading dependency resolve environment is required (resolveEnvProvider or resolveEnv)');
+    }
     if (!this.deps.hotLaneContext.executionPreparer) {
       throw new Error('runtime trading dependency executionPreparer is required');
     }
@@ -455,6 +466,16 @@ export class BotRuntime {
       this.logger.log('info', 'metrics_server_started', {
         host: this.deps.config.metricsHost,
         port: this.deps.config.metricsPort
+      });
+    }
+    if (this.deps.schedulerContext?.resolveEnvProvider) {
+      const snapshot = await this.deps.schedulerContext.resolveEnvProvider.getCurrent();
+      this.logger.log('info', 'resolve_env_snapshot', {
+        chainId: snapshot.chainId.toString(),
+        blockNumber: snapshot.blockNumber.toString(),
+        blockNumberish: snapshot.blockNumberish.toString(),
+        timestamp: snapshot.timestamp.toString(),
+        baseFeePerGas: snapshot.baseFeePerGas.toString()
       });
     }
 
@@ -553,9 +574,10 @@ export class BotRuntime {
       }
       const scheduleResult = await findFirstProfitableBlock({
         order: record.normalizedOrder.decodedOrder.order,
+        resolveEnvProvider: scheduler.resolveEnvProvider,
         baseEnv: scheduler.resolveEnv,
         routeBook: scheduler.routeBook,
-        candidateBlocks: this.deps.config.candidateBlocks,
+        candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
         threshold: this.deps.config.thresholdOut,
         competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
@@ -571,6 +593,17 @@ export class BotRuntime {
         }
         if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss) {
           this.deps.metrics.incrementSchedulerNearMiss();
+        }
+        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.candidateClass) {
+          this.deps.metrics.incrementSchedulerBestRejectedCandidateClass(
+            scheduleResult.bestObservedEvaluation.bestRejectedSummary.candidateClass
+          );
+          if (
+            scheduleResult.bestObservedEvaluation.bestRejectedSummary.candidateClass === 'POLICY_BLOCKED'
+            && scheduleResult.bestObservedEvaluation.bestRejectedSummary.constraintBreakdown?.nearMiss
+          ) {
+            this.deps.metrics.incrementSchedulerPolicyBlockedNearMiss();
+          }
         }
         if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT') {
           if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'UNSATISFIABLE') {
@@ -606,18 +639,19 @@ export class BotRuntime {
           thresholdOut: this.deps.config.thresholdOut.toString(),
           bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
           bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
+          bestRejectedCandidateClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.candidateClass,
           bestRejectedReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.reason,
           bestRejectedConstraintReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason,
           bestRejectedNearMiss: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss,
           bestRejectedShortfallOut: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
           bestRejectedExactOutputStatus: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.status,
+          bestRejectedGapClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.gapClass,
           bestRejectedInputDeficit:
             scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputDeficit?.toString()
             ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit?.toString(),
           bestRejectedInputSlack:
             scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputSlack?.toString()
             ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack?.toString(),
-          bestRejectedGapClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.gapClass,
           bestRejectedOutputCoverageBps:
             scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),
           bestRejectedRequiredOutputShortfallOut:
@@ -636,7 +670,7 @@ export class BotRuntime {
           payload: {
             reason: 'SCHEDULER_NO_EDGE',
             thresholdOut: this.deps.config.thresholdOut.toString(),
-            candidateBlocks: this.deps.config.candidateBlocks.map((block) => block.toString()),
+            candidateBlockOffsets: this.deps.config.candidateBlockOffsets.map((offset) => offset.toString()),
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
             bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
             bestRejectedSummary: scheduleResult.bestObservedEvaluation?.bestRejectedSummary
