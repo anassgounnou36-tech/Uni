@@ -46,8 +46,8 @@ type JournalExactOutputViability = {
   targetOutput: string;
   requiredInputForTargetOutput: string;
   availableInput: string;
-  inputDeficit: string;
-  inputSlack: string;
+  inputDeficit?: string;
+  inputSlack?: string;
   checkedFeeTier?: number;
   reason: string;
 };

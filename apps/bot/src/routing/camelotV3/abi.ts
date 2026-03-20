@@ -5,7 +5,8 @@ export const CAMELOT_AMMV3_FACTORY_ABI = parseAbi([
 ]);
 
 export const CAMELOT_AMMV3_QUOTER_ABI = parseAbi([
-  'function quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice) returns (uint256 amountOut, uint16 observedFee)'
+  'function quoteExactInputSingle(address tokenIn, address tokenOut, uint256 amountIn, uint160 limitSqrtPrice) returns (uint256 amountOut, uint16 observedFee)',
+  'function quoteExactOutputSingle(address tokenIn, address tokenOut, uint256 amountOut, uint160 limitSqrtPrice) returns (uint256 amountIn, uint16 observedFee)'
 ]);
 
 export const CAMELOT_AMMV3_ROUTER_ABI = parseAbi([

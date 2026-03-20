@@ -10,8 +10,8 @@ export type ExactOutputViability = {
   targetOutput: bigint;
   requiredInputForTargetOutput: bigint;
   availableInput: bigint;
-  inputDeficit: bigint;
-  inputSlack: bigint;
+  inputDeficit?: bigint;
+  inputSlack?: bigint;
   checkedFeeTier?: number;
   reason: string;
 };

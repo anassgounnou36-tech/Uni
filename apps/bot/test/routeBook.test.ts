@@ -497,4 +497,70 @@ describe('RouteBook', () => {
     expect(selected.bestRejectedSummary?.venue).toBe('CAMELOT_AMMV3');
     expect(selected.bestRejectedSummary?.exactOutputViability?.status).toBe('SATISFIABLE');
   });
+
+  it('prefers REQUIRED_OUTPUT SATISFIABLE venue regardless of quoted amount ordering', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 898n,
+              netEdgeOut: -2n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ quotedAmountOut: 898n, requiredOutputShortfallOut: 2n }),
+              exactOutputViability: {
+                status: 'SATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 999n,
+                availableInput: 1_000n,
+                inputDeficit: 0n,
+                inputSlack: 1n,
+                reason: 'required output satisfiable'
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 899n,
+              netEdgeOut: -1n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ quotedAmountOut: 899n, requiredOutputShortfallOut: 1n }),
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('UNISWAP_V3');
+    expect(selected.bestRejectedSummary?.exactOutputViability?.status).toBe('SATISFIABLE');
+  });
 });

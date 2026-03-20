@@ -62,6 +62,10 @@ export class BotMetrics {
     this.increment('scheduler_required_output_unsatisfiable_total');
   }
 
+  incrementSchedulerCamelotRequiredOutputUnsatisfiable(): void {
+    this.increment('scheduler_camelot_required_output_unsatisfiable_total');
+  }
+
   incrementSchedulerRequiredOutputNearMiss(): void {
     this.increment('scheduler_required_output_near_miss_total');
   }

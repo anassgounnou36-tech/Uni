@@ -111,8 +111,8 @@ export class BotRuntime {
       targetOutput: string;
       requiredInputForTargetOutput: string;
       availableInput: string;
-      inputDeficit: string;
-      inputSlack: string;
+      inputDeficit?: string;
+      inputSlack?: string;
       checkedFeeTier?: number;
       reason: string;
     };
@@ -151,8 +151,8 @@ export class BotRuntime {
     targetOutput: string;
     requiredInputForTargetOutput: string;
     availableInput: string;
-    inputDeficit: string;
-    inputSlack: string;
+    inputDeficit?: string;
+    inputSlack?: string;
     checkedFeeTier?: number;
     reason: string;
   } {
@@ -161,8 +161,8 @@ export class BotRuntime {
       targetOutput: viability.targetOutput.toString(),
       requiredInputForTargetOutput: viability.requiredInputForTargetOutput.toString(),
       availableInput: viability.availableInput.toString(),
-      inputDeficit: viability.inputDeficit.toString(),
-      inputSlack: viability.inputSlack.toString(),
+      inputDeficit: viability.inputDeficit?.toString(),
+      inputSlack: viability.inputSlack?.toString(),
       checkedFeeTier: viability.checkedFeeTier,
       reason: viability.reason
     };
@@ -260,8 +260,8 @@ export class BotRuntime {
       targetOutput: string;
       requiredInputForTargetOutput: string;
       availableInput: string;
-      inputDeficit: string;
-      inputSlack: string;
+      inputDeficit?: string;
+      inputSlack?: string;
       checkedFeeTier?: number;
       reason: string;
     };
@@ -309,8 +309,8 @@ export class BotRuntime {
         targetOutput: string;
         requiredInputForTargetOutput: string;
         availableInput: string;
-        inputDeficit: string;
-        inputSlack: string;
+        inputDeficit?: string;
+        inputSlack?: string;
         checkedFeeTier?: number;
         reason: string;
       };
@@ -575,6 +575,9 @@ export class BotRuntime {
         if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT') {
           if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'UNSATISFIABLE') {
             this.deps.metrics.incrementSchedulerRequiredOutputUnsatisfiable();
+            if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.venue === 'CAMELOT_AMMV3') {
+              this.deps.metrics.incrementSchedulerCamelotRequiredOutputUnsatisfiable();
+            }
           }
           if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.constraintBreakdown?.nearMiss) {
             this.deps.metrics.incrementSchedulerRequiredOutputNearMiss();
@@ -610,8 +613,10 @@ export class BotRuntime {
           bestRejectedExactOutputStatus: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.status,
           bestRejectedInputDeficit:
             scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputDeficit?.toString()
-            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit.toString(),
-          bestRejectedInputSlack: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack.toString(),
+            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit?.toString(),
+          bestRejectedInputSlack:
+            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputSlack?.toString()
+            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack?.toString(),
           bestRejectedGapClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.gapClass,
           bestRejectedOutputCoverageBps:
             scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),

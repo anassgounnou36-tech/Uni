@@ -1,6 +1,7 @@
 import type { Address, PublicClient } from 'viem';
 import { CAMELOT_AMMV3_FACTORY_ABI, CAMELOT_AMMV3_QUOTER_ABI } from './abi.js';
 import { convertGasWeiToTokenOut } from '../univ3/gasValue.js';
+import { classifyQuoteFailure } from '../univ3/quoter.js';
 import type { RoutePlanningPolicy, UniV3FeeTier } from '../univ3/types.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
@@ -52,11 +53,38 @@ function camelotExactOutputNotChecked(requiredOutput: bigint, availableInput: bi
   return {
     status: 'NOT_CHECKED',
     targetOutput: requiredOutput,
-    requiredInputForTargetOutput: 0n,
+    requiredInputForTargetOutput: availableInput,
     availableInput,
-    inputDeficit: 0n,
-    inputSlack: availableInput > 0n ? availableInput : 0n,
-    reason: 'exact-output diagnostic not implemented for camelot in this pr'
+    reason: 'exact-output viability skipped'
+  };
+}
+
+async function quoteExactOutputSingle(
+  client: PublicClient,
+  quoter: Address,
+  tokenIn: Address,
+  tokenOut: Address,
+  amountOut: bigint,
+  limitSqrtPriceX96: bigint
+): Promise<{ amountIn: bigint; observedFee?: number }> {
+  const quoteResult = await client.readContract({
+    address: quoter,
+    abi: CAMELOT_AMMV3_QUOTER_ABI,
+    functionName: 'quoteExactOutputSingle',
+    args: [tokenIn, tokenOut, amountOut, limitSqrtPriceX96]
+  });
+  if (!Array.isArray(quoteResult)) {
+    if (typeof quoteResult !== 'bigint') {
+      throw new Error('unexpected Camelot exact-output quote scalar result');
+    }
+    return { amountIn: quoteResult };
+  }
+  if (typeof quoteResult[0] !== 'bigint') {
+    throw new Error('unexpected Camelot exact-output quote shape');
+  }
+  return {
+    amountIn: quoteResult[0],
+    observedFee: quoteResult[1] === undefined ? undefined : Number(quoteResult[1])
   };
 }
 
@@ -232,7 +260,40 @@ export class CamelotAmmv3Quoter {
     const minAmountOut = breakdown.minAmountOut;
     const netEdgeOut =
       quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
-    const exactOutputViability = camelotExactOutputNotChecked(requiredOutput, params.amountIn);
+    let exactOutputViability: ExactOutputViability;
+    try {
+      const exactOutputQuote = await quoteExactOutputSingle(
+        this.context.client,
+        this.context.quoter,
+        params.tokenIn,
+        params.tokenOut,
+        requiredOutput,
+        0n
+      );
+      const requiredInputForTargetOutput = exactOutputQuote.amountIn;
+      const inputDeficit = requiredInputForTargetOutput > params.amountIn ? requiredInputForTargetOutput - params.amountIn : 0n;
+      const inputSlack = params.amountIn > requiredInputForTargetOutput ? params.amountIn - requiredInputForTargetOutput : 0n;
+      exactOutputViability = {
+        status: requiredInputForTargetOutput <= params.amountIn ? 'SATISFIABLE' : 'UNSATISFIABLE',
+        targetOutput: requiredOutput,
+        requiredInputForTargetOutput,
+        availableInput: params.amountIn,
+        inputDeficit,
+        inputSlack,
+        reason:
+          requiredInputForTargetOutput <= params.amountIn
+            ? 'required output satisfiable with available input'
+            : 'required output unsatisfiable with available input'
+      };
+    } catch (error) {
+      exactOutputViability = {
+        status: classifyQuoteFailure(error) === 'POOL_MISSING' ? 'POOL_MISSING' : 'QUOTE_FAILED',
+        targetOutput: requiredOutput,
+        requiredInputForTargetOutput: params.amountIn,
+        availableInput: params.amountIn,
+        reason: `exact-output quote failed: ${classifyQuoteFailure(error)}`
+      };
+    }
     const hedgeGap = buildHedgeGapSummary({
       requiredOutput,
       quotedAmountOut,
