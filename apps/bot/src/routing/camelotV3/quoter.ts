@@ -5,6 +5,7 @@ import type { RoutePlanningPolicy, UniV3FeeTier } from '../univ3/types.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown } from '../constraintTypes.js';
+import type { ExactOutputViability } from '../exactOutputTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -46,6 +47,18 @@ function sumRequiredOutput(outputs: ReadonlyArray<{ token: Address; amount: bigi
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
 }
 
+function camelotExactOutputNotChecked(requiredOutput: bigint, availableInput: bigint): ExactOutputViability {
+  return {
+    status: 'NOT_CHECKED',
+    targetOutput: requiredOutput,
+    requiredInputForTargetOutput: 0n,
+    availableInput,
+    inputDeficit: 0n,
+    inputSlack: availableInput > 0n ? availableInput : 0n,
+    reason: 'exact-output diagnostic not implemented for camelot in this pr'
+  };
+}
+
 export class CamelotAmmv3Quoter {
   constructor(private readonly context: CamelotAmmv3QuoterContext) {}
 
@@ -57,13 +70,15 @@ export class CamelotAmmv3Quoter {
     policy?: RoutePlanningPolicy;
   }): Promise<CamelotAmmv3QuoteResult> {
     if (!this.context.enabled) {
+      const requiredOutput = sumRequiredOutput(params.outputs);
       return {
         ok: false,
         reason: 'NOT_ROUTEABLE',
         summary: {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
-          reason: 'CAMELOT_DISABLED'
+          reason: 'CAMELOT_DISABLED',
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -77,24 +92,28 @@ export class CamelotAmmv3Quoter {
         args: [params.tokenIn, params.tokenOut]
       });
     } catch {
+      const requiredOutput = sumRequiredOutput(params.outputs);
       return {
         ok: false,
         reason: 'NOT_ROUTEABLE',
         summary: {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
-          reason: 'POOL_LOOKUP_FAILED'
+          reason: 'POOL_LOOKUP_FAILED',
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
     if (discoveredPool.toLowerCase() === ZERO_ADDRESS) {
+      const requiredOutput = sumRequiredOutput(params.outputs);
       return {
         ok: false,
         reason: 'NOT_ROUTEABLE',
         summary: {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
-          reason: 'POOL_MISSING'
+          reason: 'POOL_MISSING',
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -117,7 +136,8 @@ export class CamelotAmmv3Quoter {
             summary: {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
-              reason: 'UNEXPECTED_QUOTE_SHAPE'
+              reason: 'UNEXPECTED_QUOTE_SHAPE',
+              exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
         }
@@ -132,7 +152,8 @@ export class CamelotAmmv3Quoter {
             summary: {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
-              reason: 'UNEXPECTED_QUOTE_SCALAR'
+              reason: 'UNEXPECTED_QUOTE_SCALAR',
+              exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
         }
@@ -146,7 +167,8 @@ export class CamelotAmmv3Quoter {
         summary: {
           venue: 'CAMELOT_AMMV3',
           status: 'QUOTE_FAILED',
-          reason: 'QUOTE_CALL_FAILED'
+          reason: 'QUOTE_CALL_FAILED',
+          exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
         }
       };
     }
@@ -178,7 +200,8 @@ export class CamelotAmmv3Quoter {
           status: 'GAS_NOT_PRICEABLE',
           reason: 'GAS_CONVERSION_FAILED',
           quotedAmountOut,
-          grossEdgeOut: quotedAmountOut - requiredOutput
+          grossEdgeOut: quotedAmountOut - requiredOutput,
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -213,7 +236,8 @@ export class CamelotAmmv3Quoter {
           grossEdgeOut,
           netEdgeOut,
           constraintReason: 'REQUIRED_OUTPUT',
-          constraintBreakdown: breakdown
+          constraintBreakdown: breakdown,
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -230,7 +254,8 @@ export class CamelotAmmv3Quoter {
           grossEdgeOut,
           netEdgeOut,
           constraintReason: breakdown.bindingFloor,
-          constraintBreakdown: breakdown
+          constraintBreakdown: breakdown,
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -245,7 +270,8 @@ export class CamelotAmmv3Quoter {
           quotedAmountOut,
           minAmountOut,
           grossEdgeOut,
-          netEdgeOut
+          netEdgeOut,
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
     }
@@ -279,7 +305,8 @@ export class CamelotAmmv3Quoter {
         quotedAmountOut,
         minAmountOut,
         grossEdgeOut,
-        netEdgeOut
+        netEdgeOut,
+        exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
       }
     };
   }

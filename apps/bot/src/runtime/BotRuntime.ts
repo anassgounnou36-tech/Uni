@@ -22,6 +22,7 @@ import { buildExecutionOutcomeAttribution, buildRouteDecisionAttribution } from 
 import { JsonConsoleLogger, type StructuredLogger } from '../telemetry/logging.js';
 import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
+import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -104,6 +105,16 @@ export class BotRuntime {
       nearMiss: boolean;
       nearMissBps: string;
     };
+    exactOutputViability?: {
+      status: ExactOutputViabilityStatus;
+      targetOutput: string;
+      requiredInputForTargetOutput: string;
+      availableInput: string;
+      inputDeficit: string;
+      inputSlack: string;
+      checkedFeeTier?: number;
+      reason: string;
+    };
   } {
     return {
       feeTier: summary.feeTier,
@@ -116,7 +127,30 @@ export class BotRuntime {
       status: summary.status,
       reason: summary.reason,
       constraintReason: summary.constraintReason,
-      constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined
+      constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
+      exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined
+    };
+  }
+
+  private toJournalExactOutputViability(viability: ExactOutputViability): {
+    status: ExactOutputViabilityStatus;
+    targetOutput: string;
+    requiredInputForTargetOutput: string;
+    availableInput: string;
+    inputDeficit: string;
+    inputSlack: string;
+    checkedFeeTier?: number;
+    reason: string;
+  } {
+    return {
+      status: viability.status,
+      targetOutput: viability.targetOutput.toString(),
+      requiredInputForTargetOutput: viability.requiredInputForTargetOutput.toString(),
+      availableInput: viability.availableInput.toString(),
+      inputDeficit: viability.inputDeficit.toString(),
+      inputSlack: viability.inputSlack.toString(),
+      checkedFeeTier: viability.checkedFeeTier,
+      reason: viability.reason
     };
   }
 
@@ -181,6 +215,16 @@ export class BotRuntime {
       nearMiss: boolean;
       nearMissBps: string;
     };
+    exactOutputViability?: {
+      status: ExactOutputViabilityStatus;
+      targetOutput: string;
+      requiredInputForTargetOutput: string;
+      availableInput: string;
+      inputDeficit: string;
+      inputSlack: string;
+      checkedFeeTier?: number;
+      reason: string;
+    };
     feeTierAttempts?: Array<{
       feeTier: number;
       poolExists: boolean;
@@ -208,6 +252,16 @@ export class BotRuntime {
         nearMiss: boolean;
         nearMissBps: string;
       };
+      exactOutputViability?: {
+        status: ExactOutputViabilityStatus;
+        targetOutput: string;
+        requiredInputForTargetOutput: string;
+        availableInput: string;
+        inputDeficit: string;
+        inputSlack: string;
+        checkedFeeTier?: number;
+        reason: string;
+      };
     }>;
   } {
     return {
@@ -222,6 +276,7 @@ export class BotRuntime {
       quoteCount: summary.quoteCount,
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
+      exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
       feeTierAttempts: summary.feeTierAttempts?.map((attempt) => this.toJournalFeeTierAttempt(attempt))
     };
   }
@@ -452,6 +507,14 @@ export class BotRuntime {
         if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss) {
           this.deps.metrics.incrementSchedulerNearMiss();
         }
+        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT') {
+          if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'UNSATISFIABLE') {
+            this.deps.metrics.incrementSchedulerRequiredOutputUnsatisfiable();
+          }
+          if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.constraintBreakdown?.nearMiss) {
+            this.deps.metrics.incrementSchedulerRequiredOutputNearMiss();
+          }
+        }
         this.logger.log('info', 'scheduler_no_edge', {
           orderHash,
           thresholdOut: this.deps.config.thresholdOut.toString(),
@@ -468,6 +531,10 @@ export class BotRuntime {
           bestRejectedConstraintReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason,
           bestRejectedNearMiss: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss,
           bestRejectedShortfallOut: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
+          bestRejectedExactOutputStatus: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.status,
+          bestRejectedInputDeficit: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit.toString(),
+          bestRejectedInputSlack: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack.toString(),
+          bestRejectedCheckedFeeTier: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.checkedFeeTier,
           venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
             venue: attempt.venue,
             status: attempt.status,

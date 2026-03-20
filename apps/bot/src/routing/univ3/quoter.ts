@@ -7,6 +7,11 @@ export type QuotedExactInputSingle = {
   gasEstimate: bigint;
 };
 
+export type QuotedExactOutputSingle = {
+  amountIn: bigint;
+  gasEstimate: bigint;
+};
+
 export function classifyQuoteFailure(error: unknown): string {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
@@ -47,6 +52,36 @@ export async function quoteExactInputSingle(
 
   return {
     amountOut,
+    gasEstimate
+  };
+}
+
+export async function quoteExactOutputSingle(
+  client: PublicClient,
+  quoter: Address,
+  tokenIn: Address,
+  tokenOut: Address,
+  feeTier: UniV3FeeTier,
+  amountOut: bigint,
+  limitSqrtPriceX96: bigint = 0n
+): Promise<QuotedExactOutputSingle> {
+  const result = (await client.readContract({
+    address: quoter,
+    abi: UNIV3_QUOTER_V2_ABI,
+    functionName: 'quoteExactOutputSingle',
+    args: [
+      {
+        tokenIn,
+        tokenOut,
+        amount: amountOut,
+        fee: feeTier,
+        sqrtPriceLimitX96: limitSqrtPriceX96
+      }
+    ]
+  })) as [bigint, bigint, number, bigint];
+  const [amountIn, , , gasEstimate] = result;
+  return {
+    amountIn,
     gasEstimate
   };
 }

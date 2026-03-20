@@ -1,6 +1,7 @@
 import type { IngressSource } from '../ingress/types.js';
 import type { ExecutionOutcomeAttribution, RouteDecisionAttribution } from '../attribution/types.js';
 import type { ConstraintBindingFloor, ConstraintRejectReason } from '../routing/constraintTypes.js';
+import type { ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -39,6 +40,17 @@ type JournalConstraintBreakdown = {
   nearMissBps: string;
 };
 
+type JournalExactOutputViability = {
+  status: ExactOutputViabilityStatus;
+  targetOutput: string;
+  requiredInputForTargetOutput: string;
+  availableInput: string;
+  inputDeficit: string;
+  inputSlack: string;
+  checkedFeeTier?: number;
+  reason: string;
+};
+
 type JournalFeeTierAttempt = {
   feeTier: number;
   poolExists: boolean;
@@ -51,6 +63,7 @@ type JournalFeeTierAttempt = {
   reason: string;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: JournalConstraintBreakdown;
+  exactOutputViability?: JournalExactOutputViability;
 };
 
 type JournalVenueAttempt = {
@@ -65,6 +78,7 @@ type JournalVenueAttempt = {
   quoteCount?: number;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: JournalConstraintBreakdown;
+  exactOutputViability?: JournalExactOutputViability;
   feeTierAttempts?: JournalFeeTierAttempt[];
 };
 
@@ -109,6 +123,7 @@ export type DecisionJournalEvent =
           quoteCount?: number;
           constraintReason?: ConstraintRejectReason;
           constraintBreakdown?: JournalConstraintBreakdown;
+          exactOutputViability?: JournalExactOutputViability;
           feeTierAttempts?: JournalFeeTierAttempt[];
         };
         evaluations?: Array<{

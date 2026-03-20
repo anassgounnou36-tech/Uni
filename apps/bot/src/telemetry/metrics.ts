@@ -56,6 +56,14 @@ export class BotMetrics {
     this.increment('scheduler_near_miss_total');
   }
 
+  incrementSchedulerRequiredOutputUnsatisfiable(): void {
+    this.increment('scheduler_required_output_unsatisfiable_total');
+  }
+
+  incrementSchedulerRequiredOutputNearMiss(): void {
+    this.increment('scheduler_required_output_near_miss_total');
+  }
+
   observeIngestToSendLatency(ms: number): void {
     this.ingestToSendLatencies.push(ms);
   }

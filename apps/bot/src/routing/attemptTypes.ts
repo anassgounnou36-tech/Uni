@@ -1,5 +1,6 @@
 import type { HedgeVenue } from './venues.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
+import type { ExactOutputViability } from './exactOutputTypes.js';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -21,6 +22,7 @@ export type FeeTierAttemptSummary = {
   reason: string;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: ConstraintBreakdown;
+  exactOutputViability?: ExactOutputViability;
 };
 
 export type VenueRouteAttemptSummary = {
@@ -37,4 +39,5 @@ export type VenueRouteAttemptSummary = {
   metadata?: Record<string, string | number | boolean | null | undefined>;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: ConstraintBreakdown;
+  exactOutputViability?: ExactOutputViability;
 };

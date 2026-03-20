@@ -131,6 +131,14 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
   for (const evaluation of evaluations) {
     if (!bestObservedEvaluation || evaluation.netEdgeOut > bestObservedEvaluation.netEdgeOut) {
       bestObservedEvaluation = evaluation;
+      continue;
+    }
+    if (evaluation.netEdgeOut === bestObservedEvaluation.netEdgeOut) {
+      const currentHasBestRejected = bestObservedEvaluation.bestRejectedSummary !== undefined;
+      const candidateHasBestRejected = evaluation.bestRejectedSummary !== undefined;
+      if (!currentHasBestRejected && candidateHasBestRejected) {
+        bestObservedEvaluation = evaluation;
+      }
     }
   }
 
