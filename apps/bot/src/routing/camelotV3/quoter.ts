@@ -260,7 +260,7 @@ export class CamelotAmmv3Quoter {
         ok: false,
         reason: 'GAS_NOT_PRICEABLE',
         summary: {
-            venue: 'CAMELOT_AMMV3',
+          venue: 'CAMELOT_AMMV3',
           status: 'GAS_NOT_PRICEABLE',
           reason: 'GAS_CONVERSION_FAILED',
           candidateClass: deriveRejectedCandidateClass({

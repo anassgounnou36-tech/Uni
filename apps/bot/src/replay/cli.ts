@@ -264,7 +264,7 @@ export async function main(): Promise<void> {
   console.log(JSON.stringify(output));
 }
 
-const isEntrypoint = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const isEntrypoint = path.resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url);
 if (isEntrypoint) {
   void main();
 }

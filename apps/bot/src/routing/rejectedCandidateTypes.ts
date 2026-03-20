@@ -53,6 +53,7 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
   return 'UNKNOWN';
 }
 
+/** @deprecated Use deriveRejectedCandidateClass(summary) instead. */
 export function classifyRejectedCandidate(params: {
   status: string;
   reason: string;

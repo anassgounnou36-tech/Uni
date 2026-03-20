@@ -696,12 +696,15 @@ export class BotRuntime {
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
             bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
             bestRejectedSummary: scheduleResult.bestObservedEvaluation?.bestRejectedSummary
-              ? {
-                  ...this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary),
-                  candidateClass: this.withDerivedCandidateClass(
+              ? (() => {
+                  const bestRejected = this.withDerivedCandidateClass(
                     scheduleResult.bestObservedEvaluation.bestRejectedSummary
-                  ).candidateClass!
-                }
+                  );
+                  return {
+                    ...this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary),
+                    candidateClass: bestRejected.candidateClass ?? 'UNKNOWN'
+                  };
+                })()
               : undefined,
             evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
           }

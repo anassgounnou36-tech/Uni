@@ -140,11 +140,12 @@ export class UniV3RoutePlanner {
           },
           candidateClass: discovery.status === 'POOL_MISSING' ? 'ROUTE_MISSING' : 'UNKNOWN'
         });
-        attempts[attempts.length - 1]!.candidateClass = deriveRejectedCandidateClass({
+        const latestAttempt = attempts[attempts.length - 1]!;
+        latestAttempt.candidateClass = deriveRejectedCandidateClass({
           venue: 'UNISWAP_V3',
-          status: attempts[attempts.length - 1]!.status,
-          reason: attempts[attempts.length - 1]!.reason,
-          exactOutputViability: attempts[attempts.length - 1]!.exactOutputViability
+          status: latestAttempt.status,
+          reason: latestAttempt.reason,
+          exactOutputViability: latestAttempt.exactOutputViability
         });
         continue;
       }
@@ -172,11 +173,12 @@ export class UniV3RoutePlanner {
           },
           candidateClass: 'QUOTE_FAILED'
         });
-        attempts[attempts.length - 1]!.candidateClass = deriveRejectedCandidateClass({
+        const latestAttempt = attempts[attempts.length - 1]!;
+        latestAttempt.candidateClass = deriveRejectedCandidateClass({
           venue: 'UNISWAP_V3',
-          status: attempts[attempts.length - 1]!.status,
-          reason: attempts[attempts.length - 1]!.reason,
-          exactOutputViability: attempts[attempts.length - 1]!.exactOutputViability
+          status: latestAttempt.status,
+          reason: latestAttempt.reason,
+          exactOutputViability: latestAttempt.exactOutputViability
         });
         continue;
       }
@@ -259,12 +261,13 @@ export class UniV3RoutePlanner {
           }),
           candidateClass: 'GAS_NOT_PRICEABLE'
         });
-        attempts[attempts.length - 1]!.candidateClass = deriveRejectedCandidateClass({
+        const latestAttempt = attempts[attempts.length - 1]!;
+        latestAttempt.candidateClass = deriveRejectedCandidateClass({
           venue: 'UNISWAP_V3',
-          status: attempts[attempts.length - 1]!.status,
-          reason: attempts[attempts.length - 1]!.reason,
-          quotedAmountOut: attempts[attempts.length - 1]!.quotedAmountOut,
-          exactOutputViability: attempts[attempts.length - 1]!.exactOutputViability
+          status: latestAttempt.status,
+          reason: latestAttempt.reason,
+          quotedAmountOut: latestAttempt.quotedAmountOut,
+          exactOutputViability: latestAttempt.exactOutputViability
         });
         continue;
       }
