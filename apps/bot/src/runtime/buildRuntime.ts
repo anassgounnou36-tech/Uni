@@ -27,6 +27,7 @@ import { BotRuntime, type HotLaneContext, type SchedulerContext } from './BotRun
 import type { RuntimeConfig } from './config.js';
 import { InflightTracker } from './inflightTracker.js';
 import type { StructuredLogger } from '../telemetry/logging.js';
+import { ViemResolveEnvProvider } from './resolveEnvProvider.js';
 
 const DEFAULT_DEV_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as const;
 
@@ -226,6 +227,7 @@ export async function buildRuntimeFromConfig(
   const schedulerContext =
     overrides.schedulerContext ??
     {
+      resolveEnvProvider: new ViemResolveEnvProvider(readClient),
       routeBook: new RouteBook({
         uniswapV3: new UniV3RoutePlanner({
           client: readClient,
@@ -241,18 +243,18 @@ export async function buildRuntimeFromConfig(
           univ3Quoter: UNIV3_QUOTER_V2
         }),
         enableCamelotAmmv3: config.enableCamelotAmmv3
-      }),
-      resolveEnv: {
-        timestamp: BigInt(Math.floor(nowMs() / 1000)),
-        basefee: 100_000_000n,
-        chainId: 42161n
-      }
+      })
     };
 
   const hotLaneContext =
     overrides.hotLaneContext ??
     {
       ...schedulerContext,
+      resolveEnv: {
+        timestamp: BigInt(Math.floor(nowMs() / 1000)),
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
       conditionalEnvelope: {
         TimestampMax: BigInt(Math.floor(nowMs() / 1000)) + 120n
       },

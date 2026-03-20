@@ -1,5 +1,5 @@
 import type { Address } from 'viem';
-import { discoverPool } from './poolDiscovery.js';
+import { discoverPoolWithStatus } from './poolDiscovery.js';
 import { classifyQuoteFailure, quoteExactInputSingle, quoteExactOutputSingle } from './quoter.js';
 import { convertGasWeiToTokenOut } from './gasValue.js';
 import type {
@@ -14,6 +14,7 @@ import type { FeeTierAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummar
 import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintRejectReason } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
 import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
+import { classifyRejectedCandidate } from '../rejectedCandidateTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
@@ -30,7 +31,7 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
   return {
     feeTiers: policy?.feeTiers ?? DEFAULT_FEE_TIERS,
     slippageBufferBps: policy?.slippageBufferBps ?? 50n,
-    gasEstimateWei: policy?.gasEstimateWei ?? 0n,
+    effectiveGasPriceWei: policy?.effectiveGasPriceWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
     riskBufferOut: policy?.riskBufferOut ?? 0n,
     profitFloorOut: policy?.profitFloorOut ?? 0n,
@@ -99,16 +100,16 @@ export class UniV3RoutePlanner {
     let quoteCount = 0;
 
     for (const feeTier of policy.feeTiers) {
-      const discovered = await discoverPool(this.context.client, this.context.factory, tokenIn, tokenOut, feeTier);
-      if (!discovered) {
+      const discovery = await discoverPoolWithStatus(this.context.client, this.context.factory, tokenIn, tokenOut, feeTier);
+      if (!discovery.pool) {
         attempts.push({
           feeTier,
           poolExists: false,
           quoteSucceeded: false,
           status: 'NOT_ROUTEABLE',
-          reason: 'POOL_MISSING',
+          reason: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'POOL_INACTIVE',
           exactOutputViability: {
-            status: 'POOL_MISSING',
+            status: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'NOT_CHECKED',
             targetOutput: requiredOutput,
             requiredInputForTargetOutput: 0n,
             availableInput: amountIn,
@@ -116,12 +117,13 @@ export class UniV3RoutePlanner {
             inputSlack: amountIn > 0n ? amountIn : 0n,
             checkedFeeTier: feeTier,
             reason: 'pool missing'
-          }
+          },
+          candidateClass: discovery.status === 'POOL_MISSING' ? 'ROUTE_MISSING' : 'UNKNOWN'
         });
         continue;
       }
 
-      let quote: { amountOut: bigint; gasEstimate: bigint } | undefined;
+      let quote: { amountOut: bigint; gasUnitsEstimate: bigint } | undefined;
       let exactOutputViability: ExactOutputViability;
       try {
         quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
@@ -141,7 +143,8 @@ export class UniV3RoutePlanner {
             inputSlack: amountIn > 0n ? amountIn : 0n,
             checkedFeeTier: feeTier,
             reason: 'exact-output viability skipped because exact-input quote failed'
-          }
+          },
+          candidateClass: 'QUOTE_FAILED'
         });
         continue;
       }
@@ -190,13 +193,15 @@ export class UniV3RoutePlanner {
       quoteCount += 1;
       const quotedAmountOut = quote.amountOut;
       const slippageBufferOut = quotedAmountOut - applyBpsFloor(quotedAmountOut, 10_000n - policy.slippageBufferBps);
-      const gasWei = policy.gasEstimateWei > 0n ? policy.gasEstimateWei : quote.gasEstimate;
+      const gasUnitsEstimate = quote.gasUnitsEstimate;
+      const effectiveGasPriceWei = policy.effectiveGasPriceWei;
+      const gasCostWei = gasUnitsEstimate * effectiveGasPriceWei;
       const gasConversion = await convertGasWeiToTokenOut({
         client: this.context.client,
         factory: this.context.factory,
         quoter: this.context.quoter,
         tokenOut,
-        gasWei,
+        gasCostWei,
         supportedFeeTiers: policy.feeTiers
       });
 
@@ -219,7 +224,8 @@ export class UniV3RoutePlanner {
             exactOutputViability,
             nearMiss: false,
             nearMissBps: policy.nearMissBps
-          })
+          }),
+          candidateClass: 'GAS_NOT_PRICEABLE'
         });
         continue;
       }
@@ -280,6 +286,13 @@ export class UniV3RoutePlanner {
           exactOutputViability,
           nearMiss: breakdown.nearMiss,
           nearMissBps: breakdown.nearMissBps
+        }),
+        candidateClass: classifyRejectedCandidate({
+          status,
+          reason,
+          constraintReason,
+          exactOutputViabilityStatus: exactOutputViability.status,
+          quotedAmountOut
         })
       };
       attempts.push(attemptSummary);
@@ -330,6 +343,7 @@ export class UniV3RoutePlanner {
         selectedFeeTier: best.feeTierAttempt.feeTier,
         exactOutputViability: best.feeTierAttempt.exactOutputViability,
         hedgeGap: best.feeTierAttempt.hedgeGap,
+        candidateClass: best.feeTierAttempt.candidateClass,
         feeTierAttempts: attempts,
         quoteCount
       };
@@ -346,6 +360,7 @@ export class UniV3RoutePlanner {
         venue: 'UNISWAP_V3',
         status: 'GAS_NOT_PRICEABLE',
         reason: 'GAS_CONVERSION_FAILED',
+        candidateClass: 'GAS_NOT_PRICEABLE',
         feeTierAttempts: attempts,
         quoteCount
       };
@@ -423,6 +438,7 @@ export class UniV3RoutePlanner {
         constraintBreakdown: bestRejected.constraintBreakdown,
         exactOutputViability: bestRejected.feeTierAttempt.exactOutputViability,
         hedgeGap: bestRejected.feeTierAttempt.hedgeGap,
+        candidateClass: bestRejected.feeTierAttempt.candidateClass,
         feeTierAttempts: attempts,
         quoteCount
       };
@@ -437,6 +453,7 @@ export class UniV3RoutePlanner {
       venue: 'UNISWAP_V3',
       status: 'NOT_ROUTEABLE',
       reason: attempts.some((attempt) => attempt.status === 'QUOTE_FAILED') ? 'POOL_OR_QUOTE_UNAVAILABLE' : 'POOL_MISSING',
+      candidateClass: attempts.some((attempt) => attempt.status === 'QUOTE_FAILED') ? 'QUOTE_FAILED' : 'ROUTE_MISSING',
       feeTierAttempts: attempts,
       quoteCount
     };

@@ -65,7 +65,11 @@ describe('scheduler + prepared-execution gate', () => {
         chainId: 42161n
       },
       routeBook,
+      resolveEnvProvider: {
+        getCurrent: async () => ({ chainId: 42161n, blockNumber: 1000n, blockNumberish: 1000n, timestamp: 1_900_000_000n, baseFeePerGas: 100_000_000n, sampledAtMs: 1 })
+      },
       candidateBlocks: [1000n, 1001n, 1002n],
+      candidateBlockOffsets: [0n, 1n, 2n],
       threshold: 1n,
       competeWindowBlocks: 2n
     });
@@ -77,6 +81,32 @@ describe('scheduler + prepared-execution gate', () => {
     expect(scheduleResult.schedule.scheduledBlock).toEqual(1000n);
     const finalEval = scheduleResult.evaluations.at(-1)!;
     expect(finalEval.netEdgeOut).toBeGreaterThanOrEqual(1n);
+  });
+
+  it('scheduler_uses_dynamic_candidate_block_offsets', async () => {
+    const signed = loadSigned();
+    const routeBook = makeRouteBook(50n);
+    const scheduleResult = await findFirstProfitableBlock({
+      order: signed.order,
+      resolveEnvProvider: {
+        getCurrent: async () => ({
+          chainId: 42161n,
+          blockNumber: 1234n,
+          blockNumberish: 5555n,
+          timestamp: 1_900_000_000n,
+          baseFeePerGas: 100_000_000n,
+          sampledAtMs: 1
+        })
+      },
+      routeBook,
+      candidateBlockOffsets: [0n, 3n, 7n],
+      threshold: 1n,
+      competeWindowBlocks: 2n
+    });
+    expect(scheduleResult.ok).toBe(true);
+    if (!scheduleResult.ok) return;
+    expect(scheduleResult.schedule.scheduledBlock).toBe(5555n);
+    expect(scheduleResult.evaluations[0]?.block).toBe(5555n);
   });
 
   it('uses the exact same serialized tx for simulation and live send', async () => {

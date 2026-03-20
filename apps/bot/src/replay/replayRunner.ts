@@ -11,11 +11,12 @@ import { NonceManager } from '../send/nonceManager.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { ExecutionPlan } from '../execution/types.js';
 import type { RouteCandidateSummary } from '../routing/venues.js';
+import type { ResolveEnvProvider } from '../runtime/resolveEnvProvider.js';
 
 export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
   thresholdOut: bigint;
-  candidateBlocks: readonly bigint[];
+  candidateBlockOffsets?: readonly bigint[];
   competeWindowBlocks: bigint;
 };
 
@@ -38,6 +39,7 @@ export type ReplayRunnerParams = {
   routeBook: RouteBook;
   simService: ForkSimService;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  resolveEnvProvider?: ResolveEnvProvider;
   shadowMode: boolean;
   executor: `0x${string}`;
   conditionalEnvelope: ConditionalEnvelope;
@@ -93,6 +95,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
   const orderedCorpus = [...params.corpus].sort((a, b) => a.orderHash.localeCompare(b.orderHash));
   const records: ReplayRecord[] = [];
 
+  const candidateBlockOffsets = params.supportPolicy.candidateBlockOffsets ?? [0n, 1n, 2n];
   for (const normalized of orderedCorpus) {
     await params.store.upsertDiscovered(normalized, normalized);
     await params.store.transition(normalized.orderHash, 'DECODED');
@@ -115,18 +118,24 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
 
     const scheduleResult = await findFirstProfitableBlock({
       order,
+      resolveEnvProvider: params.resolveEnvProvider,
       baseEnv: params.resolveEnv,
       routeBook: params.routeBook,
-      candidateBlocks: params.supportPolicy.candidateBlocks,
+      candidateBlockOffsets,
       threshold: params.supportPolicy.thresholdOut,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
     });
 
     if (!scheduleResult.ok) {
       let noEdgeReason: OrderReasonCode = 'SCHEDULER_NO_EDGE';
-      const probeBlock = params.supportPolicy.candidateBlocks[0];
-      if (probeBlock !== undefined) {
-        const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlock });
+      const probeBlockOffset = candidateBlockOffsets[0];
+      let probeBlockNumberish: bigint | undefined = probeBlockOffset;
+      if (params.resolveEnvProvider && probeBlockOffset !== undefined) {
+        const probeBase = await params.resolveEnvProvider.getCurrent();
+        probeBlockNumberish = probeBase.blockNumberish + probeBlockOffset;
+      }
+      if (probeBlockNumberish !== undefined) {
+        const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlockNumberish });
         const probeRoute = await params.routeBook.selectBestRoute({ resolvedOrder: probeResolved });
         if (!probeRoute.ok && probeRoute.reason === 'GAS_NOT_PRICEABLE') {
           noEdgeReason = 'NOT_PRICEABLE_GAS';
@@ -224,7 +233,8 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
 export async function runReplayRegression(params: {
   corpus: readonly NormalizedOrder[];
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
-  candidateBlocks: readonly bigint[];
+  candidateBlockOffsets?: readonly bigint[];
+  resolveEnvProvider?: ResolveEnvProvider;
   baselineRouteBook: RouteBook;
   candidateRouteBook: RouteBook;
 }): Promise<ReplayRegressionSummary> {
@@ -241,7 +251,10 @@ export async function runReplayRegression(params: {
   let camelotStrictImprovementCount = 0;
 
   for (const order of params.corpus) {
-    const block = params.candidateBlocks[0];
+    const blockOffset = (params.candidateBlockOffsets ?? [0n])[0];
+    const block = params.resolveEnvProvider && blockOffset !== undefined
+      ? (await params.resolveEnvProvider.getCurrent()).blockNumberish + blockOffset
+      : blockOffset;
     if (block === undefined) {
       break;
     }

@@ -3,6 +3,7 @@ import type { ExecutionOutcomeAttribution, RouteDecisionAttribution } from '../a
 import type { ConstraintBindingFloor, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
+import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -79,6 +80,7 @@ type JournalFeeTierAttempt = {
   constraintBreakdown?: JournalConstraintBreakdown;
   exactOutputViability?: JournalExactOutputViability;
   hedgeGap?: JournalHedgeGapSummary;
+  candidateClass?: RejectedCandidateClass;
 };
 
 type JournalVenueAttempt = {
@@ -95,6 +97,7 @@ type JournalVenueAttempt = {
   constraintBreakdown?: JournalConstraintBreakdown;
   exactOutputViability?: JournalExactOutputViability;
   hedgeGap?: JournalHedgeGapSummary;
+  candidateClass?: RejectedCandidateClass;
   feeTierAttempts?: JournalFeeTierAttempt[];
 };
 
@@ -124,7 +127,7 @@ export type DecisionJournalEvent =
       {
         reason: string;
         thresholdOut?: string;
-        candidateBlocks?: string[];
+        candidateBlockOffsets?: string[];
         bestObservedNetEdgeOut?: string;
         bestObservedVenue?: string;
         bestRejectedSummary?: {
@@ -137,6 +140,7 @@ export type DecisionJournalEvent =
           netEdgeOut?: string;
           selectedFeeTier?: number;
           quoteCount?: number;
+          candidateClass?: RejectedCandidateClass;
           constraintReason?: ConstraintRejectReason;
           constraintBreakdown?: JournalConstraintBreakdown;
           exactOutputViability?: JournalExactOutputViability;

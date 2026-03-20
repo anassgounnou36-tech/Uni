@@ -4,12 +4,12 @@ import type { UniV3FeeTier } from './types.js';
 
 export type QuotedExactInputSingle = {
   amountOut: bigint;
-  gasEstimate: bigint;
+  gasUnitsEstimate: bigint;
 };
 
 export type QuotedExactOutputSingle = {
   amountIn: bigint;
-  gasEstimate: bigint;
+  gasUnitsEstimate: bigint;
 };
 
 export function classifyQuoteFailure(error: unknown): string {
@@ -48,11 +48,11 @@ export async function quoteExactInputSingle(
       }
     ]
   })) as [bigint, bigint, number, bigint];
-  const [amountOut, , , gasEstimate] = result;
+  const [amountOut, , , gasUnitsEstimate] = result;
 
   return {
     amountOut,
-    gasEstimate
+    gasUnitsEstimate
   };
 }
 
@@ -79,9 +79,9 @@ export async function quoteExactOutputSingle(
       }
     ]
   })) as [bigint, bigint, number, bigint];
-  const [amountIn, , , gasEstimate] = result;
+  const [amountIn, , , gasUnitsEstimate] = result;
   return {
     amountIn,
-    gasEstimate
+    gasUnitsEstimate
   };
 }

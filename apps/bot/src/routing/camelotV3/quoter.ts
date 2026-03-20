@@ -8,6 +8,7 @@ import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
 import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
+import { classifyRejectedCandidate } from '../rejectedCandidateTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -107,6 +108,7 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'CAMELOT_DISABLED',
+          candidateClass: 'ROUTE_MISSING',
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -129,6 +131,7 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'POOL_LOOKUP_FAILED',
+          candidateClass: 'UNKNOWN',
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -142,6 +145,7 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'POOL_MISSING',
+          candidateClass: 'ROUTE_MISSING',
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -166,6 +170,7 @@ export class CamelotAmmv3Quoter {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
               reason: 'UNEXPECTED_QUOTE_SHAPE',
+              candidateClass: 'QUOTE_FAILED',
               exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
@@ -182,6 +187,7 @@ export class CamelotAmmv3Quoter {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
               reason: 'UNEXPECTED_QUOTE_SCALAR',
+              candidateClass: 'QUOTE_FAILED',
               exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
@@ -197,6 +203,7 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'QUOTE_FAILED',
           reason: 'QUOTE_CALL_FAILED',
+          candidateClass: 'QUOTE_FAILED',
           exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
         }
       };
@@ -205,19 +212,22 @@ export class CamelotAmmv3Quoter {
     const requiredOutput = sumRequiredOutput(params.outputs);
     const policy = {
       slippageBufferBps: params.policy?.slippageBufferBps ?? 50n,
-      gasEstimateWei: params.policy?.gasEstimateWei ?? 0n,
+      effectiveGasPriceWei: params.policy?.effectiveGasPriceWei ?? 0n,
       riskBufferBps: params.policy?.riskBufferBps ?? 10n,
       riskBufferOut: params.policy?.riskBufferOut ?? 0n,
       profitFloorOut: params.policy?.profitFloorOut ?? 0n,
       nearMissBps: params.policy?.nearMissBps ?? DEFAULT_NEAR_MISS_BPS
     };
 
+    const gasUnitsEstimate = 0n;
+    const effectiveGasPriceWei = policy.effectiveGasPriceWei;
+    const gasCostWei = gasUnitsEstimate * effectiveGasPriceWei;
     const gasConversion = await convertGasWeiToTokenOut({
       client: this.context.client,
       factory: this.context.univ3Factory,
       quoter: this.context.univ3Quoter,
       tokenOut: params.tokenOut,
-      gasWei: policy.gasEstimateWei,
+      gasCostWei,
       supportedFeeTiers: DEFAULT_UNIV3_GAS_FEE_TIERS
     });
     if (!gasConversion.ok) {
@@ -227,11 +237,12 @@ export class CamelotAmmv3Quoter {
         reason: 'GAS_NOT_PRICEABLE',
         summary: {
           venue: 'CAMELOT_AMMV3',
-          status: 'GAS_NOT_PRICEABLE',
-          reason: 'GAS_CONVERSION_FAILED',
-          quotedAmountOut,
-          grossEdgeOut: quotedAmountOut - requiredOutput,
-          exactOutputViability,
+            status: 'GAS_NOT_PRICEABLE',
+            reason: 'GAS_CONVERSION_FAILED',
+            candidateClass: 'GAS_NOT_PRICEABLE',
+            quotedAmountOut,
+            grossEdgeOut: quotedAmountOut - requiredOutput,
+            exactOutputViability,
           hedgeGap: buildHedgeGapSummary({
             requiredOutput,
             quotedAmountOut,
@@ -317,7 +328,14 @@ export class CamelotAmmv3Quoter {
           constraintReason: 'REQUIRED_OUTPUT',
           constraintBreakdown: breakdown,
           exactOutputViability,
-          hedgeGap
+          hedgeGap,
+          candidateClass: classifyRejectedCandidate({
+            status: 'CONSTRAINT_REJECTED',
+            reason: 'REQUIRED_OUTPUT',
+            constraintReason: 'REQUIRED_OUTPUT',
+            exactOutputViabilityStatus: exactOutputViability.status,
+            quotedAmountOut
+          })
         }
       };
     }
@@ -336,7 +354,14 @@ export class CamelotAmmv3Quoter {
           constraintReason: breakdown.bindingFloor,
           constraintBreakdown: breakdown,
           exactOutputViability,
-          hedgeGap
+          hedgeGap,
+          candidateClass: classifyRejectedCandidate({
+            status: 'CONSTRAINT_REJECTED',
+            reason: breakdown.bindingFloor,
+            constraintReason: breakdown.bindingFloor,
+            exactOutputViabilityStatus: exactOutputViability.status,
+            quotedAmountOut
+          })
         }
       };
     }
@@ -353,7 +378,13 @@ export class CamelotAmmv3Quoter {
           grossEdgeOut,
           netEdgeOut,
           exactOutputViability,
-          hedgeGap
+          hedgeGap,
+          candidateClass: classifyRejectedCandidate({
+            status: 'NOT_PROFITABLE',
+            reason: 'NET_EDGE_NON_POSITIVE',
+            exactOutputViabilityStatus: exactOutputViability.status,
+            quotedAmountOut
+          })
         }
       };
     }
@@ -389,7 +420,8 @@ export class CamelotAmmv3Quoter {
         grossEdgeOut,
         netEdgeOut,
         exactOutputViability,
-        hedgeGap
+        hedgeGap,
+        candidateClass: 'POLICY_BLOCKED'
       }
     };
   }

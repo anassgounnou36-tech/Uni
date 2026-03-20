@@ -30,9 +30,27 @@ pnpm bot:start
 ### Scheduling
 - `SCHEDULER_CADENCE_MS` (default `500`): scheduler loop interval.
 - `HOT_LANE_CADENCE_MS` (default `200`): hot-lane loop interval.
-- `CANDIDATE_BLOCKS` (default `1000,1001,1002`): candidate block numbers.
+- `CANDIDATE_BLOCK_OFFSETS` (default `0,1,2`): candidate offsets applied to current resolve-env blockNumberish each scheduler tick (`blockNumberish` is the chain-native scheduling number, e.g. ArbSys block number on Arbitrum).
 - `COMPETE_WINDOW_BLOCKS` (default `2`): compete window width in blocks.
 - `THRESHOLD_OUT` (default `1`): minimum output-unit edge threshold.
+
+`CANDIDATE_BLOCKS` is deprecated and now rejected at startup; use `CANDIDATE_BLOCK_OFFSETS`.
+
+## Replay CLI
+
+Use replay to reproduce dropped/scheduled decisions without scanning live logs:
+
+```bash
+pnpm --filter @uni/bot replay --order-hash <hash>
+```
+
+Optional fixture override:
+
+```bash
+pnpm --filter @uni/bot replay --order-hash <hash> --fixture fixtures/orders/arbitrum/live/live-01.json
+```
+
+The command emits one compact JSON summary including resolved input/output, decision path, and replay diagnostics.
 
 ### Mode and safety
 - `SHADOW_MODE` (default `true`): all sends are shadowed; no broadcast.

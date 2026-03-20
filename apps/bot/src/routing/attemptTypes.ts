@@ -2,6 +2,7 @@ import type { HedgeVenue } from './venues.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViability } from './exactOutputTypes.js';
 import type { HedgeGapSummary } from './hedgeGapTypes.js';
+import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -25,6 +26,7 @@ export type FeeTierAttemptSummary = {
   constraintBreakdown?: ConstraintBreakdown;
   exactOutputViability?: ExactOutputViability;
   hedgeGap?: HedgeGapSummary;
+  candidateClass?: RejectedCandidateClass;
 };
 
 export type VenueRouteAttemptSummary = {
@@ -43,4 +45,5 @@ export type VenueRouteAttemptSummary = {
   constraintBreakdown?: ConstraintBreakdown;
   exactOutputViability?: ExactOutputViability;
   hedgeGap?: HedgeGapSummary;
+  candidateClass?: RejectedCandidateClass;
 };

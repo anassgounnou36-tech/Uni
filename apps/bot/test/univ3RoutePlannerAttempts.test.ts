@@ -33,7 +33,7 @@ function routeInput() {
     policy: {
       feeTiers: [500, 3000, 10000] as const,
       slippageBufferBps: 0n,
-      gasEstimateWei: 0n,
+      effectiveGasPriceWei: 0n,
       riskBufferBps: 0n,
       riskBufferOut: 0n,
       profitFloorOut: 0n
@@ -138,7 +138,7 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       policy: {
         feeTiers: [3000] as const,
         slippageBufferBps: 0n,
-        gasEstimateWei: 0n,
+        effectiveGasPriceWei: 0n,
         riskBufferBps: 0n,
         riskBufferOut: 0n,
         profitFloorOut: 0n
@@ -181,7 +181,7 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       policy: {
         feeTiers: [3000] as const,
         slippageBufferBps: 0n,
-        gasEstimateWei: 0n,
+        effectiveGasPriceWei: 0n,
         riskBufferBps: 0n,
         riskBufferOut: 0n,
         profitFloorOut: 30n
@@ -196,5 +196,41 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBe(0n);
     expect(result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
     expect(result.failure.summary.exactOutputViability?.status).toBe('SATISFIABLE');
+  });
+
+  it('gasCostOut_is_nonzero_when_gas_and_price_are_nonzero', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') {
+        const [a, b] = [call.args?.[0] as string, call.args?.[1] as string];
+        if (a?.toLowerCase() === tokenIn.toLowerCase() && b?.toLowerCase() === tokenOut.toLowerCase()) return pool3000;
+        return pool500;
+      }
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') {
+        const param = call.args?.[0] as { tokenIn: string; tokenOut: string; amountIn: bigint } | undefined;
+        if (param?.tokenIn.toLowerCase() === tokenIn.toLowerCase() && param?.tokenOut.toLowerCase() === tokenOut.toLowerCase()) {
+          return [1_100n, 0n, 0, 200n] as [bigint, bigint, number, bigint];
+        }
+        return [50n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        feeTiers: [3000] as const,
+        slippageBufferBps: 0n,
+        effectiveGasPriceWei: 2n,
+        riskBufferBps: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n
+      }
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.gasCostOut).toBeGreaterThan(0n);
   });
 });

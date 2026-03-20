@@ -19,6 +19,7 @@ import { JsonConsoleLogger } from '../src/telemetry/logging.js';
 import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { NormalizedOrder } from '../src/store/types.js';
+import type { ResolveEnvProvider } from '../src/runtime/resolveEnvProvider.js';
 
 function fixture(name: string): { encodedOrder: `0x${string}`; signature: `0x${string}` } {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../fixtures/orders/arbitrum/live');
@@ -67,6 +68,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     schedulerCadenceMs: 100,
     hotLaneCadenceMs: 100,
     candidateBlocks: [1000n, 1001n],
+    candidateBlockOffsets: [0n, 1n],
     competeWindowBlocks: 2n,
     thresholdOut: 20n,
     shadowMode: true,
@@ -549,6 +551,9 @@ function makeRuntime(params: {
     inflightTracker: new InflightTracker(),
     schedulerContext: {
       routeBook: params.schedulerRouteBook,
+      resolveEnvProvider: {
+        getCurrent: async () => ({ chainId: 42161n, blockNumber: 1000n, blockNumberish: 1000n, timestamp: 1_900_000_000n, baseFeePerGas: 1n, sampledAtMs: 1 })
+      } as ResolveEnvProvider,
       resolveEnv: { timestamp: 1_900_000_000n, basefee: 1n, chainId: 42161n }
     },
     hotLaneContext: {
@@ -641,7 +646,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('scheduler no-edge dropped payload includes compact economics evaluations', async () => {
     const payload = makePayload();
     const { runtime, journal, ingress } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n, 1001n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlocks: [1000n, 1001n], candidateBlockOffsets: [0n, 1n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRouteBook()
     });
 
@@ -652,7 +657,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(dropped?.payload).toMatchObject({
       reason: 'SCHEDULER_NO_EDGE',
       thresholdOut: '10',
-      candidateBlocks: ['1000', '1001']
+      candidateBlockOffsets: ['0', '1']
     });
     expect(typeof dropped?.payload.bestObservedNetEdgeOut).toEqual('string');
     expect(Array.isArray(dropped?.payload.evaluations)).toEqual(true);
@@ -684,7 +689,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const logs: string[] = [];
     const logger = new JsonConsoleLogger((line) => logs.push(line));
     const { runtime, ingress } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRouteBook(),
       logger
     });
@@ -710,7 +715,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const logs: string[] = [];
     const logger = new JsonConsoleLogger((line) => logs.push(line));
     const { runtime, journal, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeNearMissRouteBook(),
       logger
     });
@@ -755,7 +760,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('increments satisfiable-required-output counter only when best rejected viability is SATISFIABLE', async () => {
     const payload = makePayload();
     const { runtime, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRequiredOutputSatisfiableRouteBook()
     });
 
@@ -770,7 +775,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('increments camelot unsatisfiable counter when camelot is best REQUIRED_OUTPUT rejected', async () => {
     const payload = makePayload();
     const { runtime, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeCamelotUnsatisfiableRouteBook()
     });
 

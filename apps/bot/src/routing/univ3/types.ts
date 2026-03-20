@@ -8,7 +8,7 @@ export type UniV3FeeTier = 500 | 3000 | 10000;
 export type RoutePlanningPolicy = {
   feeTiers?: readonly UniV3FeeTier[];
   slippageBufferBps?: bigint;
-  gasEstimateWei?: bigint;
+  effectiveGasPriceWei?: bigint;
   riskBufferBps?: bigint;
   riskBufferOut?: bigint;
   profitFloorOut?: bigint;

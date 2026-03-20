@@ -1,4 +1,5 @@
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
+import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
 
 export type Quantiles = {
   p50: number;
@@ -76,6 +77,14 @@ export class BotMetrics {
 
   incrementSchedulerRequiredOutputSatisfiable(): void {
     this.increment('scheduler_required_output_satisfiable_total');
+  }
+
+  incrementSchedulerBestRejectedCandidateClass(candidateClass: RejectedCandidateClass): void {
+    this.increment(`scheduler_best_rejected_candidate_class_total{candidate_class="${candidateClass}"}`);
+  }
+
+  incrementSchedulerPolicyBlockedNearMiss(): void {
+    this.increment('scheduler_policy_blocked_near_miss_total');
   }
 
   observeIngestToSendLatency(ms: number): void {

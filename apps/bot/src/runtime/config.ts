@@ -23,7 +23,7 @@ function parseBigIntList(value: string): bigint[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0)
-    .map((entry) => parseBigInt(entry, 'candidateBlocks'));
+    .map((entry) => parseBigInt(entry, 'CANDIDATE_BLOCK_OFFSETS'));
 }
 
 function parseCanaryPairs(value: string): Array<{ inputToken: `0x${string}`; outputToken: `0x${string}` }> {
@@ -62,7 +62,8 @@ const baseSchema = z.object({
 
   SCHEDULER_CADENCE_MS: z.coerce.number().int().positive().default(500),
   HOT_LANE_CADENCE_MS: z.coerce.number().int().positive().default(200),
-  CANDIDATE_BLOCKS: z.string().default('1000,1001,1002'),
+  CANDIDATE_BLOCKS: z.string().optional(),
+  CANDIDATE_BLOCK_OFFSETS: z.string().default('0,1,2'),
   COMPETE_WINDOW_BLOCKS: z.string().default('2'),
   THRESHOLD_OUT: z.string().default('1'),
 
@@ -99,7 +100,7 @@ export type RuntimeConfig = {
 
   schedulerCadenceMs: number;
   hotLaneCadenceMs: number;
-  candidateBlocks: bigint[];
+  candidateBlockOffsets: bigint[];
   competeWindowBlocks: bigint;
   thresholdOut: bigint;
 
@@ -118,6 +119,9 @@ export type RuntimeConfig = {
 
 export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
   const parsed = baseSchema.parse(env);
+  if (parsed.CANDIDATE_BLOCKS !== undefined) {
+    throw new Error('CANDIDATE_BLOCKS is deprecated; use CANDIDATE_BLOCK_OFFSETS');
+  }
   return {
     readRpcUrl: parsed.READ_RPC_URL,
     forkRpcUrl: parsed.FORK_RPC_URL,
@@ -138,7 +142,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
 
     schedulerCadenceMs: parsed.SCHEDULER_CADENCE_MS,
     hotLaneCadenceMs: parsed.HOT_LANE_CADENCE_MS,
-    candidateBlocks: parseBigIntList(parsed.CANDIDATE_BLOCKS),
+    candidateBlockOffsets: parseBigIntList(parsed.CANDIDATE_BLOCK_OFFSETS),
     competeWindowBlocks: parseBigInt(parsed.COMPETE_WINDOW_BLOCKS, 'COMPETE_WINDOW_BLOCKS'),
     thresholdOut: parseBigInt(parsed.THRESHOLD_OUT, 'THRESHOLD_OUT'),
 

@@ -3,6 +3,7 @@ import { resolveAt } from '@uni/protocol';
 import type { RouteBook } from '../routing/routeBook.js';
 import type { HedgeRoutePlan } from '../routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
+import type { ResolveEnvProvider } from '../runtime/resolveEnvProvider.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -50,9 +51,11 @@ export type FirstProfitableBlockResult =
 
 export type FirstProfitableBlockParams = {
   order: V3DutchOrder;
-  baseEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  resolveEnvProvider?: ResolveEnvProvider;
+  baseEnv?: Omit<ResolveEnv, 'blockNumberish'>;
   routeBook: RouteBook;
-  candidateBlocks: readonly bigint[];
+  candidateBlockOffsets?: readonly bigint[];
+  candidateBlocks?: readonly bigint[];
   threshold: bigint;
   competeWindowBlocks: bigint;
 };
@@ -63,27 +66,49 @@ function totalOutputAmount(resolved: ResolvedV3DutchOrder): bigint {
 
 export async function findFirstProfitableBlock(params: FirstProfitableBlockParams): Promise<FirstProfitableBlockResult> {
   const evaluations: BlockEvaluation[] = [];
+  const currentEnv = params.resolveEnvProvider ? await params.resolveEnvProvider.getCurrent() : undefined;
+  const baseEnv: Omit<ResolveEnv, 'blockNumberish'> = currentEnv
+    ? {
+        timestamp: currentEnv.timestamp,
+        basefee: currentEnv.baseFeePerGas,
+        chainId: currentEnv.chainId
+      }
+    : (params.baseEnv ?? { timestamp: 0n, basefee: 0n, chainId: 42161n });
+  const candidateBlocks = currentEnv
+    ? (params.candidateBlockOffsets ?? [0n, 1n, 2n]).map((offset) => currentEnv.blockNumberish + offset)
+    : (params.candidateBlocks ?? []);
 
-  for (const block of [...params.candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+  for (const block of [...candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const resolved = await resolveAt(params.order, {
-      ...params.baseEnv,
+      ...baseEnv,
       blockNumberish: block
     });
 
     const routeResult = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
     if (!routeResult.ok) {
       const bestRejectedSummary = routeResult.bestRejectedSummary ? { ...routeResult.bestRejectedSummary } : undefined;
+      const bestRejectedQuotedAmountOut = bestRejectedSummary?.quotedAmountOut ?? 0n;
+      const bestRejectedMinAmountOut = bestRejectedSummary?.minAmountOut ?? 0n;
+      const bestRejectedGasCostOut = bestRejectedSummary?.constraintBreakdown?.gasCostOut ?? 0n;
+      const bestRejectedRiskBufferOut = bestRejectedSummary?.constraintBreakdown?.riskBufferOut ?? 0n;
+      const bestRejectedProfitFloorOut = bestRejectedSummary?.constraintBreakdown?.profitFloorOut ?? 0n;
+      const bestRejectedSlippageBufferOut = bestRejectedSummary?.constraintBreakdown?.slippageBufferOut ?? 0n;
+      const bestRejectedGrossEdgeOut =
+        bestRejectedSummary?.grossEdgeOut
+        ?? (bestRejectedSummary?.quotedAmountOut !== undefined
+          ? bestRejectedSummary.quotedAmountOut - totalOutputAmount(resolved)
+          : 0n);
       evaluations.push({
         block,
         requiredOutput: totalOutputAmount(resolved),
-        quotedAmountOut: 0n,
-        minAmountOut: 0n,
-        slippageBufferOut: 0n,
-        gasCostOut: 0n,
-        riskBufferOut: 0n,
-        profitFloorOut: 0n,
-        grossEdgeOut: 0n,
-        netEdgeOut: -1n,
+        quotedAmountOut: bestRejectedQuotedAmountOut,
+        minAmountOut: bestRejectedMinAmountOut,
+        slippageBufferOut: bestRejectedSlippageBufferOut,
+        gasCostOut: bestRejectedGasCostOut,
+        riskBufferOut: bestRejectedRiskBufferOut,
+        profitFloorOut: bestRejectedProfitFloorOut,
+        grossEdgeOut: bestRejectedGrossEdgeOut,
+        netEdgeOut: bestRejectedSummary?.netEdgeOut ?? -1n,
         selectionOk: false,
         selectionReason: routeResult.reason,
         venueAttempts: routeResult.venueAttempts,
