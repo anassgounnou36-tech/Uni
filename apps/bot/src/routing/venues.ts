@@ -1,4 +1,9 @@
 import type { Address } from 'viem';
+import type { RoutePathKind } from './pathTypes.js';
+import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
+import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
+import type { ExactOutputViability } from './exactOutputTypes.js';
+import type { HedgeGapSummary } from './hedgeGapTypes.js';
 
 export const HEDGE_VENUES = ['UNISWAP_V3', 'CAMELOT_AMMV3'] as const;
 export type HedgeVenue = (typeof HEDGE_VENUES)[number];
@@ -16,8 +21,12 @@ export type RouteQuoteMetadata =
 
 export type HedgeRoutePlan = {
   venue: HedgeVenue;
+  pathKind: RoutePathKind;
+  hopCount: 1 | 2;
   tokenIn: Address;
   tokenOut: Address;
+  bridgeToken?: Address;
+  encodedPath?: `0x${string}`;
   amountIn: bigint;
   requiredOutput: bigint;
   quotedAmountOut: bigint;
@@ -47,6 +56,10 @@ export type RouteCandidateFailureReason =
 
 export type RouteCandidateSummary = {
   venue: HedgeVenue;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: Address;
+  pathDescriptor?: string;
   eligible: boolean;
   reason?: RouteCandidateFailureReason | 'BEAT_BY_HIGHER_NET_EDGE' | 'BEAT_BY_TIE_BREAK';
   details?: string;
@@ -55,4 +68,9 @@ export type RouteCandidateSummary = {
   minAmountOut?: bigint;
   netEdgeOut?: bigint;
   gasCostOut?: bigint;
+  candidateClass?: RejectedCandidateClass;
+  constraintReason?: ConstraintRejectReason;
+  constraintBreakdown?: ConstraintBreakdown;
+  exactOutputViability?: ExactOutputViability;
+  hedgeGap?: HedgeGapSummary;
 };

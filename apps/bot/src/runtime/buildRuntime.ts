@@ -232,7 +232,8 @@ export async function buildRuntimeFromConfig(
         uniswapV3: new UniV3RoutePlanner({
           client: readClient,
           factory: UNIV3_FACTORY,
-          quoter: UNIV3_QUOTER_V2
+          quoter: UNIV3_QUOTER_V2,
+          bridgeTokens: config.bridgeTokens
         }),
         camelotAmmv3: new CamelotAmmv3RoutePlanner({
           client: readClient,
@@ -240,7 +241,8 @@ export async function buildRuntimeFromConfig(
           factory: CAMELOT_AMMV3_FACTORY,
           quoter: CAMELOT_AMMV3_QUOTER,
           univ3Factory: UNIV3_FACTORY,
-          univ3Quoter: UNIV3_QUOTER_V2
+          univ3Quoter: UNIV3_QUOTER_V2,
+          bridgeTokens: config.bridgeTokens
         }),
         enableCamelotAmmv3: config.enableCamelotAmmv3
       })

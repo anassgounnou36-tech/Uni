@@ -42,6 +42,19 @@ function parseCanaryPairs(value: string): Array<{ inputToken: `0x${string}`; out
   });
 }
 
+function parseAddressList(value: string, name: string): Array<`0x${string}`> {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      if (!HEX_ADDR.test(entry)) {
+        throw new Error(`Invalid ${name} address: ${entry}`);
+      }
+      return entry as `0x${string}`;
+    });
+}
+
 const baseSchema = z.object({
   READ_RPC_URL: z.string().url(),
   FORK_RPC_URL: z.string().url().optional(),
@@ -74,6 +87,9 @@ const baseSchema = z.object({
   MAX_LIVE_INFLIGHT: z.coerce.number().int().nonnegative().default(0),
   MIN_LIVE_EDGE_OUT: z.string().default('0'),
   ENABLE_CAMELOT_AMMV3: z.string().optional(),
+  BRIDGE_TOKENS: z.string().default(
+    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85EBE478A1C0b69FCBB9'
+  ),
 
   ENABLE_METRICS_SERVER: z.string().optional(),
   METRICS_HOST: z.string().default('0.0.0.0'),
@@ -111,6 +127,7 @@ export type RuntimeConfig = {
   maxLiveInflight: number;
   minLiveEdgeOut: bigint;
   enableCamelotAmmv3: boolean;
+  bridgeTokens: Array<`0x${string}`>;
 
   enableMetricsServer: boolean;
   metricsHost: string;
@@ -153,6 +170,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxLiveInflight: parsed.MAX_LIVE_INFLIGHT,
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
     enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
+    bridgeTokens: parseAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),
     metricsHost: parsed.METRICS_HOST,

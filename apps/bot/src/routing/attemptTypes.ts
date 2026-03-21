@@ -3,6 +3,8 @@ import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTy
 import type { ExactOutputViability } from './exactOutputTypes.js';
 import type { HedgeGapSummary } from './hedgeGapTypes.js';
 import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
+import type { RoutePathKind } from './pathTypes.js';
+import type { Address } from 'viem';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -14,6 +16,11 @@ export type RouteAttemptStatus =
 
 export type FeeTierAttemptSummary = {
   feeTier: number;
+  secondFeeTier?: number;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: Address;
+  pathDescriptor?: string;
   poolExists: boolean;
   quoteSucceeded: boolean;
   quotedAmountOut?: bigint;
@@ -31,6 +38,10 @@ export type FeeTierAttemptSummary = {
 
 export type VenueRouteAttemptSummary = {
   venue: HedgeVenue;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: Address;
+  pathDescriptor?: string;
   status: RouteAttemptStatus;
   reason: string;
   quotedAmountOut?: bigint;

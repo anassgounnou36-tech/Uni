@@ -100,8 +100,9 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         _safeTransfer(route.tokenIn, settlementAdapter, amountIn);
 
         uint256 minimumOutput = route.minAmountOut > requiredOutput ? route.minAmountOut : requiredOutput;
-        uint256 settledOutput = ISettlementAdapter(settlementAdapter)
-            .executeExactInputSingle(
+        uint256 settledOutput;
+        if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
+            settledOutput = ISettlementAdapter(settlementAdapter).executeExactInputSingle(
                 route.tokenIn,
                 route.tokenOut,
                 route.uniPoolFee,
@@ -110,6 +111,14 @@ contract UniswapXDutchV3Executor is IReactorCallback {
                 route.limitSqrtPriceX96,
                 address(this)
             );
+        } else if (route.pathKind == ExecutorTypes.PATH_KIND_TWO_HOP) {
+            if (route.hopCount != 2 || route.encodedPath.length == 0) revert ExecutorErrors.BadRoute();
+            _validateBoundedPath(route);
+            settledOutput =
+                ISettlementAdapter(settlementAdapter).executeExactInputPath(route.encodedPath, amountIn, minimumOutput, address(this));
+        } else {
+            revert ExecutorErrors.BadRoute();
+        }
         if (settledOutput < minimumOutput) revert ExecutorErrors.SlippageExceeded();
 
         uint256 outputBalance = IERC20(route.tokenOut).balanceOf(address(this));
@@ -153,14 +162,30 @@ contract UniswapXDutchV3Executor is IReactorCallback {
     }
 
     function _resolveSettlementAdapter(ExecutorTypes.RoutePlan memory route) private view returns (address) {
+        if (route.hopCount == 0 || route.hopCount > 2) revert ExecutorErrors.BadRoute();
         if (route.venue == ExecutorTypes.VENUE_UNISWAP_V3) {
-            if (route.uniPoolFee == 0) revert ExecutorErrors.BadRoute();
+            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT && route.uniPoolFee == 0) revert ExecutorErrors.BadRoute();
             return UNISWAP_V3_ADAPTER;
         }
         if (route.venue == ExecutorTypes.VENUE_CAMELOT_AMMV3) {
-            if (route.uniPoolFee != 0) revert ExecutorErrors.BadRoute();
+            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT && route.uniPoolFee != 0) revert ExecutorErrors.BadRoute();
             return CAMELOT_AMMV3_ADAPTER;
         }
         revert ExecutorErrors.BadRoute();
+    }
+
+    function _validateBoundedPath(ExecutorTypes.RoutePlan memory route) private pure {
+        bytes memory path = route.encodedPath;
+        // Encoded path format is token(20) + N * (fee(3) + token(20)).
+        if (path.length <= 20 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
+        uint256 hops = (path.length - 20) / 23;
+        if (hops == 0 || hops > 2 || hops != route.hopCount) revert ExecutorErrors.BadRoute();
+        address start;
+        address finish;
+        assembly {
+            start := shr(96, mload(add(path, 32)))
+            finish := shr(96, mload(add(add(path, 32), sub(mload(path), 20))))
+        }
+        if (start != route.tokenIn || finish != route.tokenOut) revert ExecutorErrors.BadRoute();
     }
 }

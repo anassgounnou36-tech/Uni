@@ -547,6 +547,8 @@ describe('quoting/planning unit accounting', () => {
         ok: true,
         chosenRoute: {
           venue: 'UNISWAP_V3',
+          pathKind: 'DIRECT',
+          hopCount: 1,
           tokenIn: resolvedOrder.input.token,
           tokenOut: resolvedOrder.outputs[0]!.token,
           amountIn: resolvedOrder.input.amount,
@@ -637,6 +639,8 @@ describe('execution plan pipeline integration', () => {
           ok: true,
           chosenRoute: {
             venue: 'UNISWAP_V3',
+            pathKind: 'DIRECT',
+            hopCount: 1,
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
@@ -677,6 +681,7 @@ describe('execution plan pipeline integration', () => {
     expect(callbackDecoded.tokenIn.toLowerCase()).toEqual(built.plan.route.tokenIn.toLowerCase());
     expect(callbackDecoded.tokenOut.toLowerCase()).toEqual(built.plan.route.tokenOut.toLowerCase());
     expect(callbackDecoded.uniPoolFee).toEqual(3000);
+    expect(callbackDecoded.pathKind).toEqual('DIRECT');
 
     const executeDecoded = decodeFunctionData({ abi: EXECUTOR_ABI, data: built.plan.executeCalldata });
     expect(executeDecoded.functionName).toEqual('execute');
@@ -773,6 +778,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
           ok: true,
           chosenRoute: {
             venue: 'UNISWAP_V3',
+            pathKind: 'DIRECT',
+            hopCount: 1,
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
@@ -965,6 +972,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
           ok: true,
           chosenRoute: {
             venue: 'UNISWAP_V3',
+            pathKind: 'DIRECT',
+            hopCount: 1,
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
@@ -1122,7 +1131,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         factory: CAMELOT_AMMV3_FACTORY,
         quoter: CAMELOT_AMMV3_QUOTER,
         univ3Factory: UNIV3_FACTORY,
-        univ3Quoter: UNIV3_QUOTER_V2
+        univ3Quoter: UNIV3_QUOTER_V2,
+        bridgeTokens: ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1']
       }),
       enableCamelotAmmv3: true
     });

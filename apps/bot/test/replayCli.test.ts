@@ -44,6 +44,8 @@ describe('replay cli input resolution', () => {
         rejectedVenueSummaries: [
           {
             venue: 'UNISWAP_V3',
+            pathKind: 'TWO_HOP',
+            bridgeToken: '0x000000000000000000000000000000000000000b',
             eligible: false,
             reason: 'CONSTRAINT_REJECTED',
             candidateClass: 'LIQUIDITY_BLOCKED',
@@ -62,6 +64,8 @@ describe('replay cli input resolution', () => {
     expect(output.exactOutputStatus).toBe('UNSATISFIABLE');
     expect(output.gapClass).toBe('MEDIUM');
     expect(output.bestRejectedVenue).toBe('UNISWAP_V3');
+    expect(output.bestRejectedPathKind).toBe('TWO_HOP');
+    expect(output.bestRejectedBridgeToken).toBe('0x000000000000000000000000000000000000000b');
     expect(output.bestRejectedReason).toBe('CONSTRAINT_REJECTED');
   });
 });

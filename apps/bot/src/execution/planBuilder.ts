@@ -51,6 +51,12 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
             : 'NOT_ROUTEABLE'
     };
   }
+  if (routeDecision.chosenRoute.pathKind === 'DIRECT' && routeDecision.chosenRoute.hopCount !== 1) {
+    return { ok: false, reason: 'UNSUPPORTED_SHAPE', details: 'direct route must have hopCount=1' };
+  }
+  if (routeDecision.chosenRoute.pathKind === 'TWO_HOP' && routeDecision.chosenRoute.hopCount !== 2) {
+    return { ok: false, reason: 'UNSUPPORTED_SHAPE', details: 'two-hop route must have hopCount=2' };
+  }
 
   const callbackData = encodeRoutePlanCallbackData(routeDecision.chosenRoute);
   const executeCalldata = encodeFunctionData({
@@ -88,6 +94,8 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     conditionalEnvelope: params.conditionalEnvelope,
     requiredOutputOut: totalRequiredOutput(resolvedOrder.outputs),
     predictedNetEdgeOut: routeDecision.chosenRoute.netEdgeOut,
+    selectedPathKind: routeDecision.chosenRoute.pathKind,
+    selectedHopCount: routeDecision.chosenRoute.hopCount,
     selectedBlock: params.blockNumberish,
     resolveEnv: params.resolveEnv
   };

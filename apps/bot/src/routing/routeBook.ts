@@ -32,6 +32,13 @@ function venueTieBreak(a: HedgeVenue, b: HedgeVenue): number {
 function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
   return {
     venue: route.venue,
+    pathKind: route.pathKind,
+    hopCount: route.hopCount,
+    bridgeToken: route.bridgeToken,
+    pathDescriptor:
+      route.pathKind === 'TWO_HOP' && route.bridgeToken
+        ? `TWO_HOP: ${route.tokenIn} -> ${route.bridgeToken} -> ${route.tokenOut}`
+        : `DIRECT: ${route.tokenIn} -> ${route.tokenOut}`,
     eligible: route.quotedAmountOut >= route.minAmountOut && route.netEdgeOut > 0n,
     quotedAmountOut: route.quotedAmountOut,
     requiredOutput: route.requiredOutput,
@@ -192,6 +199,15 @@ export class RouteBook {
       alternatives.push({
         venue: 'UNISWAP_V3',
         eligible: false,
+        pathKind: uniswapResult.failure.summary.pathKind,
+        hopCount: uniswapResult.failure.summary.hopCount,
+        bridgeToken: uniswapResult.failure.summary.bridgeToken,
+        pathDescriptor: uniswapResult.failure.summary.pathDescriptor,
+        candidateClass: uniswapResult.failure.summary.candidateClass,
+        constraintReason: uniswapResult.failure.summary.constraintReason,
+        constraintBreakdown: uniswapResult.failure.summary.constraintBreakdown,
+        exactOutputViability: uniswapResult.failure.summary.exactOutputViability,
+        hedgeGap: uniswapResult.failure.summary.hedgeGap,
         reason: toCandidateFailureReason(uniswapResult.failure.summary),
         details: uniswapResult.failure.summary.reason
       });
@@ -210,6 +226,15 @@ export class RouteBook {
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
           eligible: false,
+          pathKind: camelotResult.failure.summary.pathKind,
+          hopCount: camelotResult.failure.summary.hopCount,
+          bridgeToken: camelotResult.failure.summary.bridgeToken,
+          pathDescriptor: camelotResult.failure.summary.pathDescriptor,
+          candidateClass: camelotResult.failure.summary.candidateClass,
+          constraintReason: camelotResult.failure.summary.constraintReason,
+          constraintBreakdown: camelotResult.failure.summary.constraintBreakdown,
+          exactOutputViability: camelotResult.failure.summary.exactOutputViability,
+          hedgeGap: camelotResult.failure.summary.hedgeGap,
           reason: toCandidateFailureReason(camelotResult.failure.summary),
           details: camelotResult.failure.summary.reason
         });

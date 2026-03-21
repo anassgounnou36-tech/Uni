@@ -27,6 +27,8 @@ function makeRouteBook(netEdgeOut: bigint): RouteBook {
       const quotedAmountOut = requiredOutput + 100n;
       const route = {
         venue: 'UNISWAP_V3',
+        pathKind: 'DIRECT',
+        hopCount: 1,
         tokenIn: resolvedOrder.input.token,
         tokenOut: resolvedOrder.outputs[0]!.token,
         amountIn: resolvedOrder.input.amount,

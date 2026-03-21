@@ -53,6 +53,7 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxLiveInflight: 2,
     minLiveEdgeOut: 1n,
     enableCamelotAmmv3: false,
+    bridgeTokens: ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'],
 
     enableMetricsServer: false,
     metricsHost: '127.0.0.1',
@@ -67,6 +68,8 @@ function routeBookWithEdge(edgeOut: bigint): RouteBook {
       ok: true,
       chosenRoute: {
         venue: 'UNISWAP_V3',
+        pathKind: 'DIRECT',
+        hopCount: 1,
         tokenIn: resolvedOrder.input.token,
         tokenOut: resolvedOrder.outputs[0]!.token,
         amountIn: resolvedOrder.input.amount,

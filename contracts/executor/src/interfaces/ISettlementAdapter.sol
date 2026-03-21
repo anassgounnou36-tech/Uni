@@ -11,4 +11,8 @@ interface ISettlementAdapter {
         uint160 limitSqrtPriceX96,
         address recipient
     ) external returns (uint256 amountOut);
+
+    function executeExactInputPath(bytes calldata path, uint256 amountIn, uint256 minAmountOut, address recipient)
+        external
+        returns (uint256 amountOut);
 }

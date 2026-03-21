@@ -7,6 +7,7 @@ export type UniV3FeeTier = 500 | 3000 | 10000;
 
 export type RoutePlanningPolicy = {
   feeTiers?: readonly UniV3FeeTier[];
+  bridgeTokens?: readonly Address[];
   slippageBufferBps?: bigint;
   effectiveGasPriceWei?: bigint;
   riskBufferBps?: bigint;
@@ -44,6 +45,7 @@ export type UniV3RoutingContext = {
   client: PublicClient;
   factory: Address;
   quoter: Address;
+  bridgeTokens?: readonly Address[];
 };
 
 export type RoutePlannerInput = {

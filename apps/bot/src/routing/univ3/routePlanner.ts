@@ -1,6 +1,13 @@
 import type { Address } from 'viem';
 import { discoverPoolWithStatus } from './poolDiscovery.js';
-import { classifyQuoteFailure, quoteExactInputSingle, quoteExactOutputSingle } from './quoter.js';
+import {
+  classifyQuoteFailure,
+  encodeUniV3Path,
+  quoteExactInputPath,
+  quoteExactInputSingle,
+  quoteExactOutputPath,
+  quoteExactOutputSingle
+} from './quoter.js';
 import { convertGasWeiToTokenOut } from './gasValue.js';
 import type {
   RoutePlannerInput,
@@ -15,6 +22,7 @@ import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintReje
 import type { ExactOutputViability } from '../exactOutputTypes.js';
 import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
 import { deriveRejectedCandidateClass } from '../rejectedCandidateTypes.js';
+import type { RoutePathKind } from '../pathTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
@@ -30,6 +38,7 @@ function applyBpsFloor(amount: bigint, bpsToKeep: bigint): bigint {
 function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<RoutePlanningPolicy> {
   return {
     feeTiers: policy?.feeTiers ?? DEFAULT_FEE_TIERS,
+    bridgeTokens: policy?.bridgeTokens ?? [],
     slippageBufferBps: policy?.slippageBufferBps ?? 50n,
     effectiveGasPriceWei: policy?.effectiveGasPriceWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
@@ -72,6 +81,22 @@ type Candidate = {
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: ConstraintBreakdown;
 };
+
+type PathShape = {
+  kind: RoutePathKind;
+  hopCount: 1 | 2;
+  bridgeToken?: Address;
+  feeTier: number;
+  secondFeeTier?: number;
+  encodedPath?: `0x${string}`;
+};
+
+function buildPathDescriptor(kind: RoutePathKind, tokenIn: Address, tokenOut: Address, bridgeToken?: Address): string {
+  if (kind === 'TWO_HOP' && bridgeToken) {
+    return `TWO_HOP: ${tokenIn} -> ${bridgeToken} -> ${tokenOut}`;
+  }
+  return `DIRECT: ${tokenIn} -> ${tokenOut}`;
+}
 
 export class UniV3RoutePlanner {
   constructor(private readonly context: UniV3RoutingContext) {}
@@ -119,44 +144,94 @@ export class UniV3RoutePlanner {
     const candidates: Candidate[] = [];
     let quoteCount = 0;
 
-    for (const feeTier of policy.feeTiers) {
-      const discovery = await discoverPoolWithStatus(this.context.client, this.context.factory, tokenIn, tokenOut, feeTier);
-      if (!discovery.pool) {
-        attempts.push({
-          feeTier,
-          poolExists: false,
-          quoteSucceeded: false,
-          status: 'NOT_ROUTEABLE',
-          reason: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'POOL_INACTIVE',
-          exactOutputViability: {
-            status: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'NOT_CHECKED',
-            targetOutput: requiredOutput,
-            requiredInputForTargetOutput: 0n,
-            availableInput: amountIn,
-            inputDeficit: 0n,
-            inputSlack: amountIn > 0n ? amountIn : 0n,
-            checkedFeeTier: feeTier,
-            reason: 'pool missing'
-          },
-          candidateClass: discovery.status === 'POOL_MISSING' ? 'ROUTE_MISSING' : 'UNKNOWN'
-        });
-        const latestAttempt = attempts[attempts.length - 1]!;
-        latestAttempt.candidateClass = deriveRejectedCandidateClass({
-          venue: 'UNISWAP_V3',
-          status: latestAttempt.status,
-          reason: latestAttempt.reason,
-          exactOutputViability: latestAttempt.exactOutputViability
-        });
-        continue;
+    const evaluatePathCandidate = async (shape: PathShape): Promise<void> => {
+      const pathDescriptor = buildPathDescriptor(shape.kind, tokenIn, tokenOut, shape.bridgeToken);
+      if (shape.kind === 'DIRECT') {
+        const discovery = await discoverPoolWithStatus(this.context.client, this.context.factory, tokenIn, tokenOut, shape.feeTier as UniV3FeeTier);
+        if (!discovery.pool) {
+          attempts.push({
+            feeTier: shape.feeTier,
+            secondFeeTier: shape.secondFeeTier,
+            pathKind: shape.kind,
+            hopCount: shape.hopCount,
+            pathDescriptor,
+            poolExists: false,
+            quoteSucceeded: false,
+            status: 'NOT_ROUTEABLE',
+            reason: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'POOL_INACTIVE',
+            exactOutputViability: {
+              status: discovery.status === 'POOL_MISSING' ? 'POOL_MISSING' : 'NOT_CHECKED',
+              targetOutput: requiredOutput,
+              requiredInputForTargetOutput: 0n,
+              availableInput: amountIn,
+              inputDeficit: 0n,
+              inputSlack: amountIn > 0n ? amountIn : 0n,
+              checkedFeeTier: shape.feeTier,
+              reason: 'pool missing'
+            },
+            candidateClass: discovery.status === 'POOL_MISSING' ? 'ROUTE_MISSING' : 'UNKNOWN'
+          });
+          return;
+        }
+      } else {
+        const bridge = shape.bridgeToken!;
+        const first = await discoverPoolWithStatus(this.context.client, this.context.factory, tokenIn, bridge, shape.feeTier as UniV3FeeTier);
+        const second = await discoverPoolWithStatus(
+          this.context.client,
+          this.context.factory,
+          bridge,
+          tokenOut,
+          shape.secondFeeTier as UniV3FeeTier
+        );
+        if (!first.pool || !second.pool) {
+          attempts.push({
+            feeTier: shape.feeTier,
+            secondFeeTier: shape.secondFeeTier,
+            pathKind: shape.kind,
+            hopCount: shape.hopCount,
+            bridgeToken: bridge,
+            pathDescriptor,
+            poolExists: false,
+            quoteSucceeded: false,
+            status: 'NOT_ROUTEABLE',
+            reason: 'POOL_MISSING',
+            exactOutputViability: {
+              status: 'POOL_MISSING',
+              targetOutput: requiredOutput,
+              requiredInputForTargetOutput: 0n,
+              availableInput: amountIn,
+              inputDeficit: 0n,
+              inputSlack: amountIn > 0n ? amountIn : 0n,
+              checkedFeeTier: shape.feeTier,
+              reason: 'bridge pool missing'
+            },
+            candidateClass: 'ROUTE_MISSING'
+          });
+          return;
+        }
       }
 
-      let quote: { amountOut: bigint; gasUnitsEstimate: bigint } | undefined;
+      let quote: { amountOut: bigint; gasUnitsEstimate: bigint };
       let exactOutputViability: ExactOutputViability;
       try {
-        quote = await quoteExactInputSingle(this.context.client, this.context.quoter, tokenIn, tokenOut, feeTier, amountIn);
+        quote = shape.kind === 'DIRECT'
+          ? await quoteExactInputSingle(
+            this.context.client,
+            this.context.quoter,
+            tokenIn,
+            tokenOut,
+            shape.feeTier as UniV3FeeTier,
+            amountIn
+          )
+          : await quoteExactInputPath(this.context.client, this.context.quoter, shape.encodedPath!, amountIn);
       } catch (error) {
         attempts.push({
-          feeTier,
+          feeTier: shape.feeTier,
+          secondFeeTier: shape.secondFeeTier,
+          pathKind: shape.kind,
+          hopCount: shape.hopCount,
+          bridgeToken: shape.bridgeToken,
+          pathDescriptor,
           poolExists: true,
           quoteSucceeded: false,
           status: 'QUOTE_FAILED',
@@ -168,33 +243,26 @@ export class UniV3RoutePlanner {
             availableInput: amountIn,
             inputDeficit: 0n,
             inputSlack: amountIn > 0n ? amountIn : 0n,
-            checkedFeeTier: feeTier,
+            checkedFeeTier: shape.feeTier,
             reason: 'exact-output viability skipped because exact-input quote failed'
           },
           candidateClass: 'QUOTE_FAILED'
         });
-        const latestAttempt = attempts[attempts.length - 1]!;
-        latestAttempt.candidateClass = deriveRejectedCandidateClass({
-          venue: 'UNISWAP_V3',
-          status: latestAttempt.status,
-          reason: latestAttempt.reason,
-          exactOutputViability: latestAttempt.exactOutputViability
-        });
-        continue;
+        return;
       }
-      if (!quote) {
-        continue;
-      }
+
       try {
-        const exactOutputQuote = await quoteExactOutputSingle(
-          this.context.client,
-          this.context.quoter,
-          tokenIn,
-          tokenOut,
-          feeTier,
-          requiredOutput,
-          0n
-        );
+        const exactOutputQuote = shape.kind === 'DIRECT'
+          ? await quoteExactOutputSingle(
+            this.context.client,
+            this.context.quoter,
+            tokenIn,
+            tokenOut,
+            shape.feeTier as UniV3FeeTier,
+            requiredOutput,
+            0n
+          )
+          : await quoteExactOutputPath(this.context.client, this.context.quoter, shape.encodedPath!, requiredOutput);
         const requiredInputForTargetOutput = exactOutputQuote.amountIn;
         const inputDeficit = requiredInputForTargetOutput > amountIn ? requiredInputForTargetOutput - amountIn : 0n;
         const inputSlack = amountIn > requiredInputForTargetOutput ? amountIn - requiredInputForTargetOutput : 0n;
@@ -205,7 +273,11 @@ export class UniV3RoutePlanner {
           availableInput: amountIn,
           inputDeficit,
           inputSlack,
-          checkedFeeTier: feeTier,
+          checkedFeeTier: shape.feeTier,
+          pathKind: shape.kind,
+          hopCount: shape.hopCount,
+          bridgeToken: shape.bridgeToken,
+          pathDescriptor,
           reason:
             requiredInputForTargetOutput <= amountIn
               ? 'required output satisfiable with available input'
@@ -219,7 +291,11 @@ export class UniV3RoutePlanner {
           availableInput: amountIn,
           inputDeficit: 0n,
           inputSlack: amountIn > 0n ? amountIn : 0n,
-          checkedFeeTier: feeTier,
+          checkedFeeTier: shape.feeTier,
+          pathKind: shape.kind,
+          hopCount: shape.hopCount,
+          bridgeToken: shape.bridgeToken,
+          pathDescriptor,
           reason: `exact-output quote failed: ${classifyQuoteFailure(error)}`
         };
       }
@@ -227,9 +303,7 @@ export class UniV3RoutePlanner {
       quoteCount += 1;
       const quotedAmountOut = quote.amountOut;
       const slippageBufferOut = quotedAmountOut - applyBpsFloor(quotedAmountOut, 10_000n - policy.slippageBufferBps);
-      const gasUnitsEstimate = quote.gasUnitsEstimate;
-      const effectiveGasPriceWei = policy.effectiveGasPriceWei;
-      const gasCostWei = gasUnitsEstimate * effectiveGasPriceWei;
+      const gasCostWei = quote.gasUnitsEstimate * policy.effectiveGasPriceWei;
       const gasConversion = await convertGasWeiToTokenOut({
         client: this.context.client,
         factory: this.context.factory,
@@ -238,11 +312,15 @@ export class UniV3RoutePlanner {
         gasCostWei,
         supportedFeeTiers: policy.feeTiers
       });
-
       if (!gasConversion.ok) {
         const requiredFloor = requiredOutput + (quotedAmountOut * policy.riskBufferBps) / 10_000n + policy.riskBufferOut + policy.profitFloorOut;
         attempts.push({
-          feeTier,
+          feeTier: shape.feeTier,
+          secondFeeTier: shape.secondFeeTier,
+          pathKind: shape.kind,
+          hopCount: shape.hopCount,
+          bridgeToken: shape.bridgeToken,
+          pathDescriptor,
           poolExists: true,
           quoteSucceeded: true,
           quotedAmountOut,
@@ -252,6 +330,10 @@ export class UniV3RoutePlanner {
           reason: 'GAS_CONVERSION_FAILED',
           exactOutputViability,
           hedgeGap: buildHedgeGapSummary({
+            pathKind: shape.kind,
+            hopCount: shape.hopCount,
+            bridgeToken: shape.bridgeToken,
+            pathDescriptor,
             requiredOutput,
             quotedAmountOut,
             minAmountOut: requiredFloor,
@@ -261,15 +343,7 @@ export class UniV3RoutePlanner {
           }),
           candidateClass: 'GAS_NOT_PRICEABLE'
         });
-        const latestAttempt = attempts[attempts.length - 1]!;
-        latestAttempt.candidateClass = deriveRejectedCandidateClass({
-          venue: 'UNISWAP_V3',
-          status: latestAttempt.status,
-          reason: latestAttempt.reason,
-          quotedAmountOut: latestAttempt.quotedAmountOut,
-          exactOutputViability: latestAttempt.exactOutputViability
-        });
-        continue;
+        return;
       }
 
       const gasCostOut = gasConversion.gasCostOut;
@@ -286,9 +360,7 @@ export class UniV3RoutePlanner {
       });
       const grossEdgeOut = quotedAmountOut - breakdown.requiredOutput;
       const minAmountOut = breakdown.minAmountOut;
-      const netEdgeOut =
-        quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
-
+      const netEdgeOut = quotedAmountOut - breakdown.requiredOutput - breakdown.slippageBufferOut - gasCostOut - riskBufferOut - profitFloorOut;
       let status: RouteAttemptStatus = 'ROUTEABLE';
       let reason = 'ROUTE_SELECTED';
       let constraintReason: ConstraintRejectReason | undefined;
@@ -307,9 +379,13 @@ export class UniV3RoutePlanner {
         status = 'NOT_PROFITABLE';
         reason = 'NET_EDGE_NON_POSITIVE';
       }
-
       const attemptSummary: FeeTierAttemptSummary = {
-        feeTier,
+        feeTier: shape.feeTier,
+        secondFeeTier: shape.secondFeeTier,
+        pathKind: shape.kind,
+        hopCount: shape.hopCount,
+        bridgeToken: shape.bridgeToken,
+        pathDescriptor,
         poolExists: true,
         quoteSucceeded: true,
         quotedAmountOut,
@@ -322,6 +398,10 @@ export class UniV3RoutePlanner {
         constraintBreakdown,
         exactOutputViability,
         hedgeGap: buildHedgeGapSummary({
+          pathKind: shape.kind,
+          hopCount: shape.hopCount,
+          bridgeToken: shape.bridgeToken,
+          pathDescriptor,
           requiredOutput,
           quotedAmountOut,
           minAmountOut,
@@ -340,9 +420,12 @@ export class UniV3RoutePlanner {
         })
       };
       attempts.push(attemptSummary);
-
       const route: UniV3RoutePlan = {
         venue: 'UNISWAP_V3',
+        pathKind: shape.kind,
+        hopCount: shape.hopCount,
+        bridgeToken: shape.bridgeToken,
+        encodedPath: shape.encodedPath,
         tokenIn,
         tokenOut,
         amountIn,
@@ -358,26 +441,78 @@ export class UniV3RoutePlanner {
         netEdgeOut,
         quoteMetadata: {
           venue: 'UNISWAP_V3',
-          poolFee: feeTier
+          poolFee: shape.feeTier as UniV3FeeTier
         }
       };
-      candidates.push({
-        route,
-        feeTierAttempt: attemptSummary,
-        status,
-        reason,
-        constraintReason,
-        constraintBreakdown
-      });
+      candidates.push({ route, feeTierAttempt: attemptSummary, status, reason, constraintReason, constraintBreakdown });
+    };
+
+    for (const feeTier of policy.feeTiers) {
+      await evaluatePathCandidate({ kind: 'DIRECT', hopCount: 1, feeTier });
     }
+    const bridgeTokens = input.policy?.bridgeTokens ?? this.context.bridgeTokens ?? [];
+    for (const bridgeToken of bridgeTokens) {
+      if (bridgeToken.toLowerCase() === tokenIn.toLowerCase() || bridgeToken.toLowerCase() === tokenOut.toLowerCase()) {
+        continue;
+      }
+      for (const feeTier of policy.feeTiers) {
+        for (const secondFeeTier of policy.feeTiers) {
+          const encodedPath = encodeUniV3Path([
+            { tokenIn, fee: feeTier, tokenOut: bridgeToken },
+            { tokenIn: bridgeToken, fee: secondFeeTier, tokenOut }
+          ]);
+          await evaluatePathCandidate({
+            kind: 'TWO_HOP',
+            hopCount: 2,
+            bridgeToken,
+            feeTier,
+            secondFeeTier,
+            encodedPath
+          });
+        }
+      }
+    }
+
+    for (const attempt of attempts) {
+      if (!attempt.candidateClass) {
+        attempt.candidateClass = deriveRejectedCandidateClass({
+          venue: 'UNISWAP_V3',
+          status: attempt.status,
+          reason: attempt.reason,
+          quotedAmountOut: attempt.quotedAmountOut,
+          exactOutputViability: attempt.exactOutputViability,
+          constraintReason: attempt.constraintReason,
+          constraintBreakdown: attempt.constraintBreakdown
+        });
+      }
+    }
+    const sortByNetEdge = (a: Candidate, b: Candidate): number => {
+      if (a.route.netEdgeOut !== b.route.netEdgeOut) {
+        return a.route.netEdgeOut > b.route.netEdgeOut ? -1 : 1;
+      }
+      if (a.route.quotedAmountOut !== b.route.quotedAmountOut) {
+        return a.route.quotedAmountOut > b.route.quotedAmountOut ? -1 : 1;
+      }
+      if (a.route.gasCostOut !== b.route.gasCostOut) {
+        return a.route.gasCostOut < b.route.gasCostOut ? -1 : 1;
+      }
+      if (a.route.pathKind !== b.route.pathKind) {
+        return a.route.pathKind === 'DIRECT' ? -1 : 1;
+      }
+      return 0;
+    };
 
     const successfulQuotes = candidates.filter((candidate) => candidate.feeTierAttempt.quoteSucceeded);
     const routeableCandidates = candidates.filter((candidate) => candidate.status === 'ROUTEABLE');
     if (routeableCandidates.length > 0) {
-      const sorted = [...routeableCandidates].sort((a, b) => (a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0));
+      const sorted = [...routeableCandidates].sort(sortByNetEdge);
       const best = sorted[0]!;
       const summary: VenueRouteAttemptSummary = {
         venue: 'UNISWAP_V3',
+        pathKind: best.route.pathKind,
+        hopCount: best.route.hopCount,
+        bridgeToken: best.route.bridgeToken,
+        pathDescriptor: best.feeTierAttempt.pathDescriptor,
         status: 'ROUTEABLE',
         reason: 'ROUTEABLE',
         quotedAmountOut: best.route.quotedAmountOut,
@@ -470,11 +605,15 @@ export class UniV3RoutePlanner {
             })[0]
         : undefined;
       const bestRejectedByEdge = [...successfulQuotes].sort((a, b) =>
-        a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0
+        sortByNetEdge(a, b)
       )[0]!;
       const bestRejected = bestRejectedByConstraint ?? bestRejectedByEdge;
       const summary: VenueRouteAttemptSummary = {
         venue: 'UNISWAP_V3',
+        pathKind: bestRejected.route.pathKind,
+        hopCount: bestRejected.route.hopCount,
+        bridgeToken: bestRejected.route.bridgeToken,
+        pathDescriptor: bestRejected.feeTierAttempt.pathDescriptor,
         status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
         reason: hasConstraintReject ? (bestRejected.constraintReason ?? 'MIN_AMOUNT_OUT') : 'NET_EDGE_NON_POSITIVE',
         quotedAmountOut: bestRejected.route.quotedAmountOut,

@@ -42,6 +42,27 @@ function routeInput() {
 }
 
 describe('UniV3RoutePlanner fee-tier attempts', () => {
+  it('uniswap_two_hop_candidate_is_generated_when_bridge_pools_exist', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactInput') return [980n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      if (call.functionName === 'quoteExactOutput') return [970n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter, bridgeTokens: [bridge] });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.pathKind).toBe('TWO_HOP');
+    expect(result.route.hopCount).toBe(2);
+    expect(result.route.bridgeToken?.toLowerCase()).toBe(bridge.toLowerCase());
+  });
+
   it('preserves fee-tier attempts and picks best routeable tier', async () => {
     const client = makeClient((call) => {
       if (call.functionName === 'getPool') {

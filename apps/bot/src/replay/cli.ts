@@ -169,6 +169,8 @@ export function formatReplayOutput(params: {
     )?.exactOutputViability?.status,
     gapClass: (bestRejected as { hedgeGap?: { gapClass?: HedgeGapClass } } | undefined)?.hedgeGap?.gapClass,
     bestRejectedVenue: bestRejected?.venue,
+    bestRejectedPathKind: bestRejected?.pathKind,
+    bestRejectedBridgeToken: bestRejected?.bridgeToken,
     bestRejectedReason: bestRejected?.reason,
     decision: params.replayRecord?.decision,
     chosenRoute: params.replayRecord?.chosenVenue,

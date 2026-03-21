@@ -20,6 +20,15 @@ interface ISwapRouter02 {
     }
 
     function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
+
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
 }
 
 contract UniV3SwapRouter02Adapter is ISettlementAdapter {
@@ -53,6 +62,29 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
                     sqrtPriceLimitX96: limitSqrtPriceX96
                 })
             );
+    }
+
+    function executeExactInputPath(bytes calldata path, uint256 amountIn, uint256 minAmountOut, address recipient)
+        external
+        returns (uint256 amountOut)
+    {
+        if (path.length == 0) revert ExecutorErrors.BadRoute();
+        uint256 hops = ((path.length - 20) / 23);
+        if (hops == 0 || hops > 2 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
+        address tokenIn;
+        assembly {
+            tokenIn := shr(96, calldataload(path.offset))
+        }
+        _safeApprove(tokenIn, ROUTER, 0);
+        _safeApprove(tokenIn, ROUTER, amountIn);
+        amountOut = ISwapRouter02(ROUTER).exactInput(
+            ISwapRouter02.ExactInputParams({
+                path: path,
+                recipient: recipient,
+                amountIn: amountIn,
+                amountOutMinimum: minAmountOut
+            })
+        );
     }
 
     function _safeApprove(address token, address spender, uint256 amount) private {
