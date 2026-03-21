@@ -3,7 +3,7 @@ import type { RoutePlannerInput } from '../univ3/types.js';
 import { CamelotAmmv3Quoter, type CamelotAmmv3QuoterContext } from './quoter.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
-import { deriveRejectedCandidateClass } from '../rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
 
 export type CamelotRoutePlanningResult =
   | { ok: true; route: HedgeRoutePlan & { venue: 'CAMELOT_AMMV3' }; summary: VenueRouteAttemptSummary }
@@ -99,10 +99,23 @@ export class CamelotAmmv3RoutePlanner {
     }
     const rejected = [directQuote, ...bridgeQuotes]
       .filter((quote): quote is Extract<typeof quote, { ok: false }> => !quote.ok)
+      .map((quote) => ({
+        ...quote,
+        summary: {
+          ...quote.summary,
+          candidateClass: quote.summary.candidateClass ?? deriveRejectedCandidateClass(quote.summary)
+        }
+      }))
       .sort((a, b) => {
-        if (a.summary.candidateClass !== b.summary.candidateClass) {
-          if (a.summary.candidateClass === 'POLICY_BLOCKED') return -1;
-          if (b.summary.candidateClass === 'POLICY_BLOCKED') return 1;
+        const aClassPriority = rejectedCandidateClassPriority(a.summary.candidateClass ?? 'UNKNOWN');
+        const bClassPriority = rejectedCandidateClassPriority(b.summary.candidateClass ?? 'UNKNOWN');
+        if (aClassPriority !== bClassPriority) {
+          return aClassPriority - bClassPriority;
+        }
+        const aInputDeficit = a.summary.hedgeGap?.inputDeficit ?? a.summary.exactOutputViability?.inputDeficit;
+        const bInputDeficit = b.summary.hedgeGap?.inputDeficit ?? b.summary.exactOutputViability?.inputDeficit;
+        if (aInputDeficit !== undefined && bInputDeficit !== undefined && aInputDeficit !== bInputDeficit) {
+          return aInputDeficit < bInputDeficit ? -1 : 1;
         }
         const aOut = a.summary.quotedAmountOut ?? 0n;
         const bOut = b.summary.quotedAmountOut ?? 0n;

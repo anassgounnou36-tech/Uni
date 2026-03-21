@@ -731,6 +731,8 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
       .find((record) => record.event === 'routebook_no_edge_summary');
     expect(summaryRecord?.fields?.bestRejectedConstraintReason).toBe('REQUIRED_OUTPUT');
+    expect(summaryRecord?.fields?.bestRejectedCandidateClass).toBeDefined();
+    expect(typeof summaryRecord?.fields?.bestRejectedCandidateClass).toBe('string');
     expect(summaryRecord?.fields?.bestRejectedNearMiss).toBe(true);
     expect(summaryRecord?.fields?.bestRejectedShortfallOut).toBe('2');
     expect(summaryRecord?.fields?.bestRejectedExactOutputStatus).toBe('UNSATISFIABLE');
