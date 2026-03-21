@@ -335,6 +335,9 @@ describe('RouteBook', () => {
     expect(selected.ok).toBe(false);
     if (selected.ok) return;
     expect(selected.reason).toBe('CONSTRAINT_REJECTED');
+    const uniSummary = selected.alternativeRoutes.find((route) => route.venue === 'UNISWAP_V3');
+    expect(uniSummary?.reason).toBe('CONSTRAINT_REJECTED');
+    expect(uniSummary?.reason).not.toBe('NOT_PROFITABLE');
     expect(selected.bestRejectedSummary?.constraintReason).toBe('REQUIRED_OUTPUT');
     expect(selected.bestRejectedSummary?.constraintBreakdown?.requiredOutputShortfallOut).toBeGreaterThan(0n);
     expect(selected.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
@@ -664,5 +667,53 @@ describe('RouteBook', () => {
     expect(selected.ok).toBe(false);
     if (selected.ok) return;
     expect(selected.bestRejectedSummary?.candidateClass).toBeDefined();
+  });
+
+  it('routeBook_ensures_bestRejectedSummary_candidateClass_when_missing', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              constraintReason: 'REQUIRED_OUTPUT',
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              },
+              candidateClass: undefined
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'NOT_ROUTEABLE' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'NOT_ROUTEABLE', { reason: 'POOL_MISSING' })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
   });
 });

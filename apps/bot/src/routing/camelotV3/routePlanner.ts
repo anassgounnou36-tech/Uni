@@ -3,6 +3,7 @@ import type { RoutePlannerInput } from '../univ3/types.js';
 import { CamelotAmmv3Quoter, type CamelotAmmv3QuoterContext } from './quoter.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
+import { deriveRejectedCandidateClass } from '../rejectedCandidateTypes.js';
 
 export type CamelotRoutePlanningResult =
   | { ok: true; route: HedgeRoutePlan & { venue: 'CAMELOT_AMMV3' }; summary: VenueRouteAttemptSummary }
@@ -25,16 +26,22 @@ export class CamelotAmmv3RoutePlanner {
   async planBestRoute(input: RoutePlannerInput): Promise<CamelotRoutePlanningResult> {
     const { resolvedOrder } = input;
     if (resolvedOrder.outputs.length === 0) {
+      const summary: VenueRouteAttemptSummary = {
+        venue: 'CAMELOT_AMMV3',
+        status: 'NOT_ROUTEABLE',
+        reason: 'ORDER_HAS_NO_OUTPUTS',
+        candidateClass: deriveRejectedCandidateClass({
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'ORDER_HAS_NO_OUTPUTS'
+        })
+      };
       return {
         ok: false,
         failure: {
           reason: 'NOT_ROUTEABLE',
           details: 'order has no outputs',
-          summary: {
-            venue: 'CAMELOT_AMMV3',
-            status: 'NOT_ROUTEABLE',
-            reason: 'ORDER_HAS_NO_OUTPUTS'
-          }
+          summary
         }
       };
     }
@@ -43,16 +50,22 @@ export class CamelotAmmv3RoutePlanner {
     const tokenOut = resolvedOrder.outputs[0]!.token;
     const sameOutputToken = resolvedOrder.outputs.every((output) => output.token.toLowerCase() === tokenOut.toLowerCase());
     if (!sameOutputToken) {
+      const summary: VenueRouteAttemptSummary = {
+        venue: 'CAMELOT_AMMV3',
+        status: 'NOT_ROUTEABLE',
+        reason: 'OUTPUT_TOKEN_MISMATCH',
+        candidateClass: deriveRejectedCandidateClass({
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'OUTPUT_TOKEN_MISMATCH'
+        })
+      };
       return {
         ok: false,
         failure: {
           reason: 'NOT_ROUTEABLE',
           details: 'output token mismatch',
-          summary: {
-            venue: 'CAMELOT_AMMV3',
-            status: 'NOT_ROUTEABLE',
-            reason: 'OUTPUT_TOKEN_MISMATCH'
-          }
+          summary
         }
       };
     }
@@ -65,7 +78,17 @@ export class CamelotAmmv3RoutePlanner {
       policy: input.policy
     });
     if (!quote.ok) {
-      return { ok: false, failure: { reason: quote.reason, details: quote.details, summary: quote.summary } };
+      return {
+        ok: false,
+        failure: {
+          reason: quote.reason,
+          details: quote.details,
+          summary: {
+            ...quote.summary,
+            candidateClass: quote.summary.candidateClass ?? deriveRejectedCandidateClass(quote.summary)
+          }
+        }
+      };
     }
 
     return { ok: true, route: quote.route, summary: quote.summary };

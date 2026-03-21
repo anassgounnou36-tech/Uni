@@ -91,6 +91,8 @@ export class HybridIngressCoordinator {
         source: envelope.source,
         receivedAtMs: envelope.receivedAtMs,
         createdAtMs: envelope.createdAtMs,
+        encodedOrder: typeof payload.encodedOrder === 'string' ? payload.encodedOrder : undefined,
+        signature: typeof payload.signature === 'string' ? payload.signature : undefined,
         deduped: !upserted.created,
         validation: 'ACCEPTED'
       }

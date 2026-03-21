@@ -8,7 +8,7 @@ import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
 import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
-import { classifyRejectedCandidate } from '../rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass } from '../rejectedCandidateTypes.js';
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const DEFAULT_UNIV3_GAS_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -108,7 +108,11 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'CAMELOT_DISABLED',
-          candidateClass: 'ROUTE_MISSING',
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
+            status: 'NOT_ROUTEABLE',
+            reason: 'CAMELOT_DISABLED'
+          }),
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -131,7 +135,11 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'POOL_LOOKUP_FAILED',
-          candidateClass: 'UNKNOWN',
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
+            status: 'NOT_ROUTEABLE',
+            reason: 'POOL_LOOKUP_FAILED'
+          }),
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -145,7 +153,11 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'POOL_MISSING',
-          candidateClass: 'ROUTE_MISSING',
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
+            status: 'NOT_ROUTEABLE',
+            reason: 'POOL_MISSING'
+          }),
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }
       };
@@ -170,7 +182,11 @@ export class CamelotAmmv3Quoter {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
               reason: 'UNEXPECTED_QUOTE_SHAPE',
-              candidateClass: 'QUOTE_FAILED',
+              candidateClass: deriveRejectedCandidateClass({
+                venue: 'CAMELOT_AMMV3',
+                status: 'QUOTE_FAILED',
+                reason: 'UNEXPECTED_QUOTE_SHAPE'
+              }),
               exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
@@ -187,7 +203,11 @@ export class CamelotAmmv3Quoter {
               venue: 'CAMELOT_AMMV3',
               status: 'QUOTE_FAILED',
               reason: 'UNEXPECTED_QUOTE_SCALAR',
-              candidateClass: 'QUOTE_FAILED',
+              candidateClass: deriveRejectedCandidateClass({
+                venue: 'CAMELOT_AMMV3',
+                status: 'QUOTE_FAILED',
+                reason: 'UNEXPECTED_QUOTE_SCALAR'
+              }),
               exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
             }
           };
@@ -203,7 +223,11 @@ export class CamelotAmmv3Quoter {
           venue: 'CAMELOT_AMMV3',
           status: 'QUOTE_FAILED',
           reason: 'QUOTE_CALL_FAILED',
-          candidateClass: 'QUOTE_FAILED',
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
+            status: 'QUOTE_FAILED',
+            reason: 'QUOTE_CALL_FAILED'
+          }),
           exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
         }
       };
@@ -237,12 +261,18 @@ export class CamelotAmmv3Quoter {
         reason: 'GAS_NOT_PRICEABLE',
         summary: {
           venue: 'CAMELOT_AMMV3',
+          status: 'GAS_NOT_PRICEABLE',
+          reason: 'GAS_CONVERSION_FAILED',
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
             status: 'GAS_NOT_PRICEABLE',
             reason: 'GAS_CONVERSION_FAILED',
-            candidateClass: 'GAS_NOT_PRICEABLE',
             quotedAmountOut,
-            grossEdgeOut: quotedAmountOut - requiredOutput,
-            exactOutputViability,
+            exactOutputViability
+          }),
+          quotedAmountOut,
+          grossEdgeOut: quotedAmountOut - requiredOutput,
+          exactOutputViability,
           hedgeGap: buildHedgeGapSummary({
             requiredOutput,
             quotedAmountOut,
@@ -329,12 +359,14 @@ export class CamelotAmmv3Quoter {
           constraintBreakdown: breakdown,
           exactOutputViability,
           hedgeGap,
-          candidateClass: classifyRejectedCandidate({
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
             status: 'CONSTRAINT_REJECTED',
             reason: 'REQUIRED_OUTPUT',
+            quotedAmountOut,
             constraintReason: 'REQUIRED_OUTPUT',
-            exactOutputViabilityStatus: exactOutputViability.status,
-            quotedAmountOut
+            constraintBreakdown: breakdown,
+            exactOutputViability
           })
         }
       };
@@ -355,12 +387,14 @@ export class CamelotAmmv3Quoter {
           constraintBreakdown: breakdown,
           exactOutputViability,
           hedgeGap,
-          candidateClass: classifyRejectedCandidate({
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
             status: 'CONSTRAINT_REJECTED',
             reason: breakdown.bindingFloor,
+            quotedAmountOut,
             constraintReason: breakdown.bindingFloor,
-            exactOutputViabilityStatus: exactOutputViability.status,
-            quotedAmountOut
+            constraintBreakdown: breakdown,
+            exactOutputViability
           })
         }
       };
@@ -379,11 +413,12 @@ export class CamelotAmmv3Quoter {
           netEdgeOut,
           exactOutputViability,
           hedgeGap,
-          candidateClass: classifyRejectedCandidate({
+          candidateClass: deriveRejectedCandidateClass({
+            venue: 'CAMELOT_AMMV3',
             status: 'NOT_PROFITABLE',
             reason: 'NET_EDGE_NON_POSITIVE',
-            exactOutputViabilityStatus: exactOutputViability.status,
-            quotedAmountOut
+            quotedAmountOut,
+            exactOutputViability
           })
         }
       };
@@ -420,8 +455,7 @@ export class CamelotAmmv3Quoter {
         grossEdgeOut,
         netEdgeOut,
         exactOutputViability,
-        hedgeGap,
-        candidateClass: 'POLICY_BLOCKED'
+        hedgeGap
       }
     };
   }

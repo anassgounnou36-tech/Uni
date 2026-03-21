@@ -24,7 +24,7 @@ import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
-import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, type RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 
 export type SchedulerContext = {
@@ -77,6 +77,16 @@ export class BotRuntime {
       return error.message;
     }
     return String(error);
+  }
+
+  private withDerivedCandidateClass(summary: VenueRouteAttemptSummary): VenueRouteAttemptSummary {
+    if (summary.status === 'ROUTEABLE' || summary.candidateClass) {
+      return summary;
+    }
+    return {
+      ...summary,
+      candidateClass: deriveRejectedCandidateClass(summary)
+    };
   }
 
   private getPolicyInflightCount(): number {
@@ -134,6 +144,16 @@ export class BotRuntime {
       nearMissBps: string;
     };
   } {
+    const withCandidateClass = this.withDerivedCandidateClass({
+      venue: 'UNISWAP_V3',
+      status: summary.status,
+      reason: summary.reason,
+      quotedAmountOut: summary.quotedAmountOut,
+      constraintReason: summary.constraintReason,
+      constraintBreakdown: summary.constraintBreakdown,
+      exactOutputViability: summary.exactOutputViability,
+      candidateClass: summary.candidateClass
+    });
     return {
       feeTier: summary.feeTier,
       poolExists: summary.poolExists,
@@ -145,6 +165,7 @@ export class BotRuntime {
       status: summary.status,
       reason: summary.reason,
       constraintReason: summary.constraintReason,
+      candidateClass: withCandidateClass.candidateClass,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
       exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
       hedgeGap: summary.hedgeGap ? this.toJournalHedgeGap(summary.hedgeGap) : undefined
@@ -335,6 +356,7 @@ export class BotRuntime {
       };
     }>;
   } {
+    const withCandidateClass = this.withDerivedCandidateClass(summary);
     return {
       venue: summary.venue,
       status: summary.status,
@@ -345,7 +367,7 @@ export class BotRuntime {
       netEdgeOut: summary.netEdgeOut?.toString(),
       selectedFeeTier: summary.selectedFeeTier,
       quoteCount: summary.quoteCount,
-      candidateClass: summary.candidateClass,
+      candidateClass: withCandidateClass.candidateClass,
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown ? this.toJournalConstraintBreakdown(summary.constraintBreakdown) : undefined,
       exactOutputViability: summary.exactOutputViability ? this.toJournalExactOutputViability(summary.exactOutputViability) : undefined,
@@ -674,7 +696,15 @@ export class BotRuntime {
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
             bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
             bestRejectedSummary: scheduleResult.bestObservedEvaluation?.bestRejectedSummary
-              ? this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
+              ? (() => {
+                  const bestRejected = this.withDerivedCandidateClass(
+                    scheduleResult.bestObservedEvaluation.bestRejectedSummary
+                  );
+                  return {
+                    ...this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary),
+                    candidateClass: bestRejected.candidateClass ?? 'UNKNOWN'
+                  };
+                })()
               : undefined,
             evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
           }
