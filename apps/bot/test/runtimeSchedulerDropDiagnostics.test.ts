@@ -779,6 +779,35 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(metrics.snapshot().counters.scheduler_required_output_satisfiable_total).toBeUndefined();
   });
 
+  it('candidateClass_is_serialized_in_bestRejectedSummary_and_dropped_payloads', async () => {
+    const payload = makePayload();
+    const { runtime, journal, ingress } = makeRuntime({
+      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeNearMissRouteBook()
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
+    const bestRejected = dropped?.payload.bestRejectedSummary as Record<string, unknown> | undefined;
+    expect(typeof bestRejected?.candidateClass).toBe('string');
+    expect((bestRejected?.candidateClass as string).length).toBeGreaterThan(0);
+    const evaluations = (dropped?.payload.evaluations ?? []) as Array<Record<string, unknown>>;
+    for (const evaluation of evaluations) {
+      const droppedBestRejected = evaluation.bestRejectedSummary as Record<string, unknown> | undefined;
+      if (droppedBestRejected) {
+        expect(typeof droppedBestRejected.candidateClass).toBe('string');
+        expect((droppedBestRejected.candidateClass as string).length).toBeGreaterThan(0);
+      }
+      const venueAttempts = (evaluation.venueAttempts ?? []) as Array<Record<string, unknown>>;
+      for (const attempt of venueAttempts) {
+        expect(typeof attempt.candidateClass).toBe('string');
+        expect((attempt.candidateClass as string).length).toBeGreaterThan(0);
+      }
+    }
+  });
+
   it('increments satisfiable-required-output counter only when best rejected viability is SATISFIABLE', async () => {
     const payload = makePayload();
     const { runtime, ingress, metrics } = makeRuntime({

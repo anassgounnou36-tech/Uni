@@ -94,7 +94,18 @@ export class CamelotAmmv3RoutePlanner {
     );
     const routeable = [directQuote, ...bridgeQuotes].filter((quote): quote is Extract<typeof quote, { ok: true }> => quote.ok);
     if (routeable.length > 0) {
-      const best = [...routeable].sort((a, b) => (a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0))[0]!;
+      const best = [...routeable].sort((a, b) => {
+        if (a.route.netEdgeOut !== b.route.netEdgeOut) {
+          return a.route.netEdgeOut > b.route.netEdgeOut ? -1 : 1;
+        }
+        if (a.route.quotedAmountOut !== b.route.quotedAmountOut) {
+          return a.route.quotedAmountOut > b.route.quotedAmountOut ? -1 : 1;
+        }
+        if (a.route.gasCostOut !== b.route.gasCostOut) {
+          return a.route.gasCostOut < b.route.gasCostOut ? -1 : 1;
+        }
+        return 0;
+      })[0]!;
       return { ok: true, route: best.route, summary: best.summary };
     }
     const rejected = [directQuote, ...bridgeQuotes]

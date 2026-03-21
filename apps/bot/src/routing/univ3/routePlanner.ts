@@ -496,9 +496,6 @@ export class UniV3RoutePlanner {
       if (a.route.gasCostOut !== b.route.gasCostOut) {
         return a.route.gasCostOut < b.route.gasCostOut ? -1 : 1;
       }
-      if (a.route.pathKind !== b.route.pathKind) {
-        return a.route.pathKind === 'DIRECT' ? -1 : 1;
-      }
       return 0;
     };
 

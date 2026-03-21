@@ -4,6 +4,7 @@ import type { ConstraintBindingFloor, ConstraintRejectReason } from '../routing/
 import type { ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import type { RoutePathKind } from '../routing/pathTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -50,10 +51,18 @@ type JournalExactOutputViability = {
   inputDeficit?: string;
   inputSlack?: string;
   checkedFeeTier?: number;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: string;
+  pathDescriptor?: string;
   reason: string;
 };
 
 type JournalHedgeGapSummary = {
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: string;
+  pathDescriptor?: string;
   requiredOutput: string;
   quotedAmountOut: string;
   outputCoverageBps: string;
@@ -68,6 +77,11 @@ type JournalHedgeGapSummary = {
 
 type JournalFeeTierAttempt = {
   feeTier: number;
+  secondFeeTier?: number;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: string;
+  pathDescriptor?: string;
   poolExists: boolean;
   quoteSucceeded: boolean;
   quotedAmountOut?: string;
@@ -85,6 +99,10 @@ type JournalFeeTierAttempt = {
 
 type JournalVenueAttempt = {
   venue: string;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: string;
+  pathDescriptor?: string;
   status: string;
   reason: string;
   quotedAmountOut?: string;
@@ -134,6 +152,10 @@ export type DecisionJournalEvent =
         bestObservedVenue?: string;
         bestRejectedSummary?: {
           venue: string;
+          pathKind?: RoutePathKind;
+          hopCount?: 1 | 2;
+          bridgeToken?: string;
+          pathDescriptor?: string;
           status: string;
           reason: string;
           quotedAmountOut?: string;

@@ -42,7 +42,7 @@ function routeInput() {
 }
 
 describe('UniV3RoutePlanner fee-tier attempts', () => {
-  it('uniswap_two_hop_candidate_is_generated_when_bridge_pools_exist', async () => {
+  it('uniswap_two_hop_candidate_generated_when_bridge_pools_exist', async () => {
     const bridge = '0x000000000000000000000000000000000000000b';
     const client = makeClient((call) => {
       if (call.functionName === 'getPool') return pool3000;
@@ -61,6 +61,37 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.route.pathKind).toBe('TWO_HOP');
     expect(result.route.hopCount).toBe(2);
     expect(result.route.bridgeToken?.toLowerCase()).toBe(bridge.toLowerCase());
+  });
+
+  it('two_hop_rejected_candidates_preserve_constraint_reason_exact_output_viability_hedge_gap_and_candidate_class', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') {
+        const [a, b] = [call.args?.[0] as string, call.args?.[1] as string];
+        if (
+          (a?.toLowerCase() === tokenIn.toLowerCase() && b?.toLowerCase() === bridge.toLowerCase())
+          || (a?.toLowerCase() === bridge.toLowerCase() && b?.toLowerCase() === tokenOut.toLowerCase())
+        ) return pool3000;
+        return '0x0000000000000000000000000000000000000000';
+      }
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInput') return [890n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      if (call.functionName === 'quoteExactOutput') return [1_010n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter, bridgeTokens: [bridge] });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('CONSTRAINT_REJECTED');
+    expect(result.failure.summary.pathKind).toBe('TWO_HOP');
+    expect(result.failure.summary.hopCount).toBe(2);
+    expect(result.failure.summary.bridgeToken?.toLowerCase()).toBe(bridge.toLowerCase());
+    expect(result.failure.summary.constraintReason).toBe('REQUIRED_OUTPUT');
+    expect(result.failure.summary.exactOutputViability?.status).toBe('UNSATISFIABLE');
+    expect(result.failure.summary.hedgeGap?.gapClass).toBeDefined();
+    expect(result.failure.summary.candidateClass).toBeDefined();
   });
 
   it('preserves fee-tier attempts and picks best routeable tier', async () => {
