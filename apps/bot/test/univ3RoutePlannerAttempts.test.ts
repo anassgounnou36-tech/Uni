@@ -42,7 +42,7 @@ function routeInput() {
 }
 
 describe('UniV3RoutePlanner fee-tier attempts', () => {
-  it('uniswap_two_hop_candidate_generated_when_bridge_pools_exist', async () => {
+  it('uniswap_two_hop_candidate_is_generated_when_bridge_pools_exist', async () => {
     const bridge = '0x000000000000000000000000000000000000000b';
     const client = makeClient((call) => {
       if (call.functionName === 'getPool') return pool3000;

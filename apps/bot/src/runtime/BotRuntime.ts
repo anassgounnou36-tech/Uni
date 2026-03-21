@@ -452,13 +452,13 @@ export class BotRuntime {
     profitFloorOut: string;
     netEdgeOut: string;
     venueAttempts: Array<{
-          venue: string;
-          pathKind?: RoutePathKind;
-          hopCount?: 1 | 2;
-          bridgeToken?: string;
-          pathDescriptor?: string;
-          status: string;
-          reason: string;
+      venue: string;
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: string;
+      pathDescriptor?: string;
+      status: string;
+      reason: string;
       quotedAmountOut?: string;
       minAmountOut?: string;
       grossEdgeOut?: string;
