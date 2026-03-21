@@ -731,6 +731,8 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
       .find((record) => record.event === 'routebook_no_edge_summary');
     expect(summaryRecord?.fields?.bestRejectedConstraintReason).toBe('REQUIRED_OUTPUT');
+    expect(summaryRecord?.fields?.bestRejectedCandidateClass).toBeDefined();
+    expect(typeof summaryRecord?.fields?.bestRejectedCandidateClass).toBe('string');
     expect(summaryRecord?.fields?.bestRejectedNearMiss).toBe(true);
     expect(summaryRecord?.fields?.bestRejectedShortfallOut).toBe('2');
     expect(summaryRecord?.fields?.bestRejectedExactOutputStatus).toBe('UNSATISFIABLE');
@@ -756,6 +758,21 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(firstVenueAttempt?.constraintBreakdown).toBeDefined();
     expect((firstVenueAttempt?.exactOutputViability as Record<string, unknown> | undefined)?.status).toBe('NOT_CHECKED');
     expect((firstVenueAttempt?.hedgeGap as Record<string, unknown> | undefined)?.gapClass).toBe('EXACT');
+    const venueAttempts = (dropped?.payload.evaluations?.[0] as Record<string, unknown> | undefined)
+      ?.venueAttempts as Array<Record<string, unknown>> | undefined;
+    const validCandidateClasses = new Set([
+      'POLICY_BLOCKED',
+      'LIQUIDITY_BLOCKED',
+      'ROUTE_MISSING',
+      'QUOTE_FAILED',
+      'GAS_NOT_PRICEABLE',
+      'UNKNOWN'
+    ]);
+    for (const attempt of venueAttempts ?? []) {
+      expect(typeof attempt.candidateClass).toBe('string');
+      expect((attempt.candidateClass as string).length).toBeGreaterThan(0);
+      expect(validCandidateClasses.has(attempt.candidateClass as string)).toBe(true);
+    }
     expect(metrics.snapshot().counters.scheduler_required_output_unsatisfiable_total).toBe(1);
     expect(metrics.snapshot().counters.scheduler_required_output_near_miss_total).toBe(1);
     expect(metrics.snapshot().counters['scheduler_gap_class_total{gap_class="SMALL"}']).toBe(1);

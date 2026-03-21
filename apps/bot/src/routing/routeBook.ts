@@ -2,9 +2,9 @@ import type { RoutePlannerInput } from './univ3/types.js';
 import type { UniV3RoutePlanner } from './univ3/routePlanner.js';
 import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
-import type { VenueRouteAttemptSummary } from './attemptTypes.js';
+import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
-import { deriveRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
+import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -52,6 +52,13 @@ function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
 }
 
+function ensureCandidateClass(summary: RejectedVenueRouteAttemptSummary | VenueRouteAttemptSummary): RejectedVenueRouteAttemptSummary {
+  if (summary.status === 'ROUTEABLE') {
+    throw new Error('routeBook ensureCandidateClass received ROUTEABLE summary');
+  }
+  return ensureRejectedCandidateClass(summary) as RejectedVenueRouteAttemptSummary;
+}
+
 function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandidateSummary['reason'] {
   if (summary.status === 'NOT_PROFITABLE') {
     return 'NOT_PROFITABLE';
@@ -94,12 +101,116 @@ function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): 
   return 5;
 }
 
+function isHugeGapNonNearMiss(summary: VenueRouteAttemptSummary): boolean {
+  return summary.hedgeGap?.gapClass === 'HUGE'
+    && !hasNearMiss(summary)
+    && summary.constraintReason === 'REQUIRED_OUTPUT';
+}
+
+function hasNearMiss(summary: VenueRouteAttemptSummary): boolean {
+  return summary.hedgeGap?.nearMiss ?? summary.constraintBreakdown?.nearMiss ?? false;
+}
+
+function isActionablePolicyBlocked(summary: VenueRouteAttemptSummary): boolean {
+  return (summary.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED'
+    && hasNearMiss(summary);
+}
+
+function hasInputDeficit(summary: VenueRouteAttemptSummary): bigint | undefined {
+  return summary.hedgeGap?.inputDeficit ?? summary.exactOutputViability?.inputDeficit;
+}
+
+function hasOutputCoverageBps(summary: VenueRouteAttemptSummary): bigint | undefined {
+  return summary.hedgeGap?.outputCoverageBps;
+}
+
+function hasRequiredShortfall(summary: VenueRouteAttemptSummary): bigint | undefined {
+  return summary.hedgeGap?.requiredOutputShortfallOut ?? summary.constraintBreakdown?.requiredOutputShortfallOut;
+}
+
+function hasFloorShortfall(summary: VenueRouteAttemptSummary): bigint | undefined {
+  return summary.constraintBreakdown?.minAmountOutShortfallOut ?? hasRequiredShortfall(summary);
+}
+
+function comparePolicyBlocked(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
+  const aNearMiss = hasNearMiss(a);
+  const bNearMiss = hasNearMiss(b);
+  if (aNearMiss !== bNearMiss) return aNearMiss ? -1 : 1;
+  const aFloorShortfall = hasFloorShortfall(a);
+  const bFloorShortfall = hasFloorShortfall(b);
+  if (aFloorShortfall !== undefined && bFloorShortfall !== undefined && aFloorShortfall !== bFloorShortfall) {
+    return aFloorShortfall < bFloorShortfall ? -1 : 1;
+  }
+  const aCoverage = hasOutputCoverageBps(a);
+  const bCoverage = hasOutputCoverageBps(b);
+  if (aCoverage !== undefined && bCoverage !== undefined && aCoverage !== bCoverage) {
+    return aCoverage > bCoverage ? -1 : 1;
+  }
+  const aQuoted = a.quotedAmountOut ?? -1n;
+  const bQuoted = b.quotedAmountOut ?? -1n;
+  if (aQuoted !== bQuoted) return aQuoted > bQuoted ? -1 : 1;
+  const aGasCostOut = a.constraintBreakdown?.gasCostOut ?? 0n;
+  const bGasCostOut = b.constraintBreakdown?.gasCostOut ?? 0n;
+  if (aGasCostOut !== bGasCostOut) return aGasCostOut < bGasCostOut ? -1 : 1;
+  return 0;
+}
+
+function compareLiquidityBlocked(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
+  const aInputDeficit = hasInputDeficit(a);
+  const bInputDeficit = hasInputDeficit(b);
+  if (aInputDeficit !== undefined && bInputDeficit !== undefined && aInputDeficit !== bInputDeficit) {
+    return aInputDeficit < bInputDeficit ? -1 : 1;
+  }
+  if ((aInputDeficit !== undefined) !== (bInputDeficit !== undefined)) {
+    return aInputDeficit !== undefined ? -1 : 1;
+  }
+  const aCoverage = hasOutputCoverageBps(a);
+  const bCoverage = hasOutputCoverageBps(b);
+  if (aCoverage !== undefined && bCoverage !== undefined && aCoverage !== bCoverage) {
+    return aCoverage > bCoverage ? -1 : 1;
+  }
+  const aRequiredShortfall = hasRequiredShortfall(a);
+  const bRequiredShortfall = hasRequiredShortfall(b);
+  if (aRequiredShortfall !== undefined && bRequiredShortfall !== undefined && aRequiredShortfall !== bRequiredShortfall) {
+    return aRequiredShortfall < bRequiredShortfall ? -1 : 1;
+  }
+  const aQuoted = a.quotedAmountOut ?? -1n;
+  const bQuoted = b.quotedAmountOut ?? -1n;
+  if (aQuoted !== bQuoted) return aQuoted > bQuoted ? -1 : 1;
+  return 0;
+}
+
 function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
-  const aClassPriority = rejectedCandidateClassPriority(a.candidateClass ?? 'UNKNOWN');
-  const bClassPriority = rejectedCandidateClassPriority(b.candidateClass ?? 'UNKNOWN');
+  const aClass = a.candidateClass ?? 'UNKNOWN';
+  const bClass = b.candidateClass ?? 'UNKNOWN';
+  const aClassPriority = rejectedCandidateClassPriority(aClass);
+  const bClassPriority = rejectedCandidateClassPriority(bClass);
+
+  const aDisfavored = aClass === 'QUOTE_FAILED' || isHugeGapNonNearMiss(a);
+  const bDisfavored = bClass === 'QUOTE_FAILED' || isHugeGapNonNearMiss(b);
+  const aActionable = isActionablePolicyBlocked(a) || aClass === 'LIQUIDITY_BLOCKED';
+  const bActionable = isActionablePolicyBlocked(b) || bClass === 'LIQUIDITY_BLOCKED';
+  if (aActionable !== bActionable) {
+    return aActionable ? -1 : 1;
+  }
+  if (aDisfavored !== bDisfavored) {
+    return aDisfavored ? 1 : -1;
+  }
+
   if (aClassPriority !== bClassPriority) {
     return aClassPriority - bClassPriority;
   }
+
+  if (aClass === 'POLICY_BLOCKED' && bClass === 'POLICY_BLOCKED') {
+    const comparison = comparePolicyBlocked(a, b);
+    if (comparison !== 0) return comparison;
+  }
+
+  if (aClass === 'LIQUIDITY_BLOCKED' && bClass === 'LIQUIDITY_BLOCKED') {
+    const comparison = compareLiquidityBlocked(a, b);
+    if (comparison !== 0) return comparison;
+  }
+
   const aHasQuote = a.quotedAmountOut !== undefined;
   const bHasQuote = b.quotedAmountOut !== undefined;
   if (aHasQuote !== bHasQuote) {
@@ -119,14 +230,14 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
     if (aStatusRank !== bStatusRank) {
       return aStatusRank - bStatusRank;
     }
-    const aFloorShortfall = a.constraintBreakdown?.minAmountOutShortfallOut ?? a.constraintBreakdown?.requiredOutputShortfallOut;
-    const bFloorShortfall = b.constraintBreakdown?.minAmountOutShortfallOut ?? b.constraintBreakdown?.requiredOutputShortfallOut;
+    const aFloorShortfall = hasFloorShortfall(a);
+    const bFloorShortfall = hasFloorShortfall(b);
     if (aFloorShortfall !== undefined && bFloorShortfall !== undefined && aFloorShortfall !== bFloorShortfall) {
       return aFloorShortfall < bFloorShortfall ? -1 : 1;
     }
 
-    const aInputDeficit = a.hedgeGap?.inputDeficit ?? a.exactOutputViability?.inputDeficit;
-    const bInputDeficit = b.hedgeGap?.inputDeficit ?? b.exactOutputViability?.inputDeficit;
+    const aInputDeficit = hasInputDeficit(a);
+    const bInputDeficit = hasInputDeficit(b);
     if (aInputDeficit !== undefined && bInputDeficit !== undefined && aInputDeficit !== bInputDeficit) {
       return aInputDeficit < bInputDeficit ? -1 : 1;
     }
@@ -134,14 +245,14 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
       return aInputDeficit !== undefined ? -1 : 1;
     }
 
-    const aCoverage = a.hedgeGap?.outputCoverageBps;
-    const bCoverage = b.hedgeGap?.outputCoverageBps;
+    const aCoverage = hasOutputCoverageBps(a);
+    const bCoverage = hasOutputCoverageBps(b);
     if (aCoverage !== undefined && bCoverage !== undefined && aCoverage !== bCoverage) {
       return aCoverage > bCoverage ? -1 : 1;
     }
 
-    const aRequiredShortfall = a.hedgeGap?.requiredOutputShortfallOut ?? a.constraintBreakdown?.requiredOutputShortfallOut;
-    const bRequiredShortfall = b.hedgeGap?.requiredOutputShortfallOut ?? b.constraintBreakdown?.requiredOutputShortfallOut;
+    const aRequiredShortfall = hasRequiredShortfall(a);
+    const bRequiredShortfall = hasRequiredShortfall(b);
     if (aRequiredShortfall !== undefined && bRequiredShortfall !== undefined && aRequiredShortfall !== bRequiredShortfall) {
       return aRequiredShortfall < bRequiredShortfall ? -1 : 1;
     }
@@ -195,21 +306,22 @@ export class RouteBook {
         eligible.push(uniswapResult.route);
       }
     } else {
-      venueAttempts.push(uniswapResult.failure.summary);
+      const failureSummary = ensureCandidateClass(uniswapResult.failure.summary as RejectedVenueRouteAttemptSummary);
+      venueAttempts.push(failureSummary);
       alternatives.push({
         venue: 'UNISWAP_V3',
         eligible: false,
-        pathKind: uniswapResult.failure.summary.pathKind,
-        hopCount: uniswapResult.failure.summary.hopCount,
-        bridgeToken: uniswapResult.failure.summary.bridgeToken,
-        pathDescriptor: uniswapResult.failure.summary.pathDescriptor,
-        candidateClass: uniswapResult.failure.summary.candidateClass,
-        constraintReason: uniswapResult.failure.summary.constraintReason,
-        constraintBreakdown: uniswapResult.failure.summary.constraintBreakdown,
-        exactOutputViability: uniswapResult.failure.summary.exactOutputViability,
-        hedgeGap: uniswapResult.failure.summary.hedgeGap,
-        reason: toCandidateFailureReason(uniswapResult.failure.summary),
-        details: uniswapResult.failure.summary.reason
+        pathKind: failureSummary.pathKind,
+        hopCount: failureSummary.hopCount,
+        bridgeToken: failureSummary.bridgeToken,
+        pathDescriptor: failureSummary.pathDescriptor,
+        candidateClass: failureSummary.candidateClass,
+        constraintReason: failureSummary.constraintReason,
+        constraintBreakdown: failureSummary.constraintBreakdown,
+        exactOutputViability: failureSummary.exactOutputViability,
+        hedgeGap: failureSummary.hedgeGap,
+        reason: toCandidateFailureReason(failureSummary),
+        details: failureSummary.reason
       });
     }
 
@@ -222,21 +334,22 @@ export class RouteBook {
           eligible.push(camelotResult.route);
         }
       } else {
-        venueAttempts.push(camelotResult.failure.summary);
+        const failureSummary = ensureCandidateClass(camelotResult.failure.summary as RejectedVenueRouteAttemptSummary);
+        venueAttempts.push(failureSummary);
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
           eligible: false,
-          pathKind: camelotResult.failure.summary.pathKind,
-          hopCount: camelotResult.failure.summary.hopCount,
-          bridgeToken: camelotResult.failure.summary.bridgeToken,
-          pathDescriptor: camelotResult.failure.summary.pathDescriptor,
-          candidateClass: camelotResult.failure.summary.candidateClass,
-          constraintReason: camelotResult.failure.summary.constraintReason,
-          constraintBreakdown: camelotResult.failure.summary.constraintBreakdown,
-          exactOutputViability: camelotResult.failure.summary.exactOutputViability,
-          hedgeGap: camelotResult.failure.summary.hedgeGap,
-          reason: toCandidateFailureReason(camelotResult.failure.summary),
-          details: camelotResult.failure.summary.reason
+          pathKind: failureSummary.pathKind,
+          hopCount: failureSummary.hopCount,
+          bridgeToken: failureSummary.bridgeToken,
+          pathDescriptor: failureSummary.pathDescriptor,
+          candidateClass: failureSummary.candidateClass,
+          constraintReason: failureSummary.constraintReason,
+          constraintBreakdown: failureSummary.constraintBreakdown,
+          exactOutputViability: failureSummary.exactOutputViability,
+          hedgeGap: failureSummary.hedgeGap,
+          reason: toCandidateFailureReason(failureSummary),
+          details: failureSummary.reason
         });
       }
     } else if (!this.planners.enableCamelotAmmv3) {
@@ -245,6 +358,11 @@ export class RouteBook {
         venue: 'CAMELOT_AMMV3',
         status: 'NOT_ROUTEABLE',
         reason: 'CAMELOT_DISABLED',
+        candidateClass: ensureRejectedCandidateClass({
+          venue: 'CAMELOT_AMMV3',
+          status: 'NOT_ROUTEABLE',
+          reason: 'CAMELOT_DISABLED'
+        }).candidateClass,
         exactOutputViability: {
           status: 'NOT_CHECKED',
           targetOutput: requiredOutput,
@@ -261,11 +379,14 @@ export class RouteBook {
     }
 
     if (eligible.length === 0) {
-      const bestRejectedSummary = [...venueAttempts].sort(rejectedCandidateSort)[0];
+      const rejectedCandidates = venueAttempts
+        .filter((attempt): attempt is RejectedVenueRouteAttemptSummary => attempt.status !== 'ROUTEABLE')
+        .map((attempt) => ensureCandidateClass(attempt));
+      const bestRejectedSummary = [...rejectedCandidates].sort(rejectedCandidateSort)[0];
       const bestRejectedWithClass = bestRejectedSummary
         ? {
             ...bestRejectedSummary,
-            candidateClass: bestRejectedSummary.candidateClass ?? deriveRejectedCandidateClass(bestRejectedSummary)
+            candidateClass: ensureCandidateClass(bestRejectedSummary).candidateClass
           }
         : undefined;
       const statuses = venueAttempts.map((attempt) => attempt.status);

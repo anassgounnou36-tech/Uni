@@ -753,4 +753,243 @@ describe('RouteBook', () => {
     if (selected.ok) return;
     expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
   });
+
+  it('bestRejected_prefers_actionable_policy_near_miss_over_quote_failed_huge_gap', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'QUOTE_FAILED' as const,
+            summary: venueSummary('UNISWAP_V3', 'QUOTE_FAILED', {
+              reason: 'QUOTE_CALL_FAILED',
+              quotedAmountOut: 500n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 500n,
+                outputCoverageBps: 5_555n,
+                requiredOutputShortfallOut: 400n,
+                inputDeficit: 0n,
+                inputSlack: 0n,
+                gapClass: 'HUGE',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              reason: 'PROFITABILITY_FLOOR',
+              quotedAmountOut: 899n,
+              constraintReason: 'PROFITABILITY_FLOOR',
+              constraintBreakdown: constraintBreakdown({
+                bindingFloor: 'PROFITABILITY_FLOOR',
+                nearMiss: true,
+                minAmountOutShortfallOut: 1n
+              }),
+              exactOutputViability: {
+                status: 'SATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 999n,
+                availableInput: 1_000n,
+                inputDeficit: 0n,
+                inputSlack: 1n,
+                reason: 'required output satisfiable'
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('CAMELOT_AMMV3');
+    expect(selected.bestRejectedSummary?.candidateClass).toBe('POLICY_BLOCKED');
+  });
+
+  it('bestRejected_prefers_near_miss_uniswap_liquidity_blocked_over_quote_failed_huge_gap_camelot', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              constraintReason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 896n,
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 896n,
+                outputCoverageBps: 9_955n,
+                requiredOutputShortfallOut: 4n,
+                minAmountOutShortfallOut: 5n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                gapClass: 'SMALL',
+                nearMiss: true,
+                nearMissBps: 25n
+              },
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'QUOTE_FAILED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'QUOTE_FAILED', {
+              reason: 'QUOTE_CALL_FAILED',
+              constraintReason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 500n,
+              exactOutputViability: {
+                status: 'QUOTE_FAILED',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 0n,
+                availableInput: 1_000n,
+                reason: 'exact-output quote failed'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 500n,
+                outputCoverageBps: 5_555n,
+                requiredOutputShortfallOut: 400n,
+                inputDeficit: 0n,
+                inputSlack: 0n,
+                gapClass: 'HUGE',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('UNISWAP_V3');
+    expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
+  });
+
+  it('bestRejected_liquidity_blocked_prefers_smaller_input_deficit', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 895n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_003n,
+                availableInput: 1_000n,
+                inputDeficit: 3n,
+                inputSlack: 0n,
+                reason: 'unsatisfiable'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 895n,
+                outputCoverageBps: 9_944n,
+                requiredOutputShortfallOut: 5n,
+                minAmountOutShortfallOut: 6n,
+                inputDeficit: 3n,
+                inputSlack: 0n,
+                gapClass: 'MEDIUM',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 894n,
+              constraintReason: 'REQUIRED_OUTPUT',
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'unsatisfiable'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 894n,
+                outputCoverageBps: 9_933n,
+                requiredOutputShortfallOut: 6n,
+                minAmountOutShortfallOut: 7n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                gapClass: 'MEDIUM',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('CAMELOT_AMMV3');
+    expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
+    expect(selected.bestRejectedSummary?.hedgeGap?.inputDeficit).toBe(1n);
+  });
 });

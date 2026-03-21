@@ -24,7 +24,11 @@ import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
-import { deriveRejectedCandidateClass, type RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import {
+  deriveRejectedCandidateClass,
+  ensureRejectedCandidateClass,
+  type RejectedCandidateClass
+} from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 
 export type SchedulerContext = {
@@ -87,6 +91,13 @@ export class BotRuntime {
       ...summary,
       candidateClass: deriveRejectedCandidateClass(summary)
     };
+  }
+
+  private withDerivedRejectedCandidateClass(summary: VenueRouteAttemptSummary): VenueRouteAttemptSummary {
+    if (summary.status === 'ROUTEABLE') {
+      return summary;
+    }
+    return ensureRejectedCandidateClass(summary);
   }
 
   private getPolicyInflightCount(): number {
@@ -152,6 +163,7 @@ export class BotRuntime {
       constraintReason: summary.constraintReason,
       constraintBreakdown: summary.constraintBreakdown,
       exactOutputViability: summary.exactOutputViability,
+      hedgeGap: summary.hedgeGap,
       candidateClass: summary.candidateClass
     });
     return {
@@ -356,7 +368,7 @@ export class BotRuntime {
       };
     }>;
   } {
-    const withCandidateClass = this.withDerivedCandidateClass(summary);
+    const withCandidateClass = this.withDerivedRejectedCandidateClass(summary);
     return {
       venue: summary.venue,
       status: summary.status,
@@ -420,6 +432,7 @@ export class BotRuntime {
       netEdgeOut?: string;
       selectedFeeTier?: number;
       quoteCount?: number;
+      candidateClass: RejectedCandidateClass;
       feeTierAttempts?: Array<{
         feeTier: number;
         poolExists: boolean;
@@ -447,7 +460,13 @@ export class BotRuntime {
       netEdgeOut: evaluation.netEdgeOut.toString(),
       venueAttempts: evaluation.venueAttempts.map((summary) => this.toJournalVenueAttempt(summary)),
       bestRejectedSummary: evaluation.bestRejectedSummary
-        ? this.toJournalVenueAttempt(evaluation.bestRejectedSummary)
+        ? (() => {
+            const withCandidateClass = this.withDerivedCandidateClass(evaluation.bestRejectedSummary);
+            return {
+              ...this.toJournalVenueAttempt(evaluation.bestRejectedSummary),
+              candidateClass: withCandidateClass.candidateClass ?? 'UNKNOWN'
+            };
+          })()
         : undefined
     };
   }
@@ -604,6 +623,12 @@ export class BotRuntime {
         competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
       if (!scheduleResult.ok) {
+        const bestRejectedSummary = scheduleResult.bestObservedEvaluation?.bestRejectedSummary
+          ? this.withDerivedRejectedCandidateClass(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
+          : undefined;
+        const venueAttempts = scheduleResult.bestObservedEvaluation?.venueAttempts.map(
+          (attempt) => this.withDerivedRejectedCandidateClass(attempt)
+        );
         await this.deps.store.transition(orderHash, 'DROPPED', 'SCHEDULER_NO_EDGE');
         this.deps.metrics.increment('orders_dropped_total{reason="SCHEDULER_NO_EDGE"}');
         this.deps.metrics.increment('scheduler_no_edge_total');
@@ -613,39 +638,39 @@ export class BotRuntime {
             Number(scheduleResult.bestObservedEvaluation.netEdgeOut)
           );
         }
-        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss) {
+        if (bestRejectedSummary?.constraintBreakdown?.nearMiss) {
           this.deps.metrics.incrementSchedulerNearMiss();
         }
-        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.candidateClass) {
+        if (bestRejectedSummary?.candidateClass) {
           this.deps.metrics.incrementSchedulerBestRejectedCandidateClass(
-            scheduleResult.bestObservedEvaluation.bestRejectedSummary.candidateClass
+            bestRejectedSummary.candidateClass
           );
           if (
-            scheduleResult.bestObservedEvaluation.bestRejectedSummary.candidateClass === 'POLICY_BLOCKED'
-            && scheduleResult.bestObservedEvaluation.bestRejectedSummary.constraintBreakdown?.nearMiss
+            bestRejectedSummary.candidateClass === 'POLICY_BLOCKED'
+            && bestRejectedSummary.constraintBreakdown?.nearMiss
           ) {
             this.deps.metrics.incrementSchedulerPolicyBlockedNearMiss();
           }
         }
-        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT') {
-          if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'UNSATISFIABLE') {
+        if (bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT') {
+          if (bestRejectedSummary.exactOutputViability?.status === 'UNSATISFIABLE') {
             this.deps.metrics.incrementSchedulerRequiredOutputUnsatisfiable();
-            if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.venue === 'CAMELOT_AMMV3') {
+            if (bestRejectedSummary.venue === 'CAMELOT_AMMV3') {
               this.deps.metrics.incrementSchedulerCamelotRequiredOutputUnsatisfiable();
             }
           }
-          if (scheduleResult.bestObservedEvaluation.bestRejectedSummary.constraintBreakdown?.nearMiss) {
+          if (bestRejectedSummary.constraintBreakdown?.nearMiss) {
             this.deps.metrics.incrementSchedulerRequiredOutputNearMiss();
           }
         }
-        if (scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap) {
+        if (bestRejectedSummary?.hedgeGap) {
           this.deps.metrics.incrementSchedulerGapClass(
-            scheduleResult.bestObservedEvaluation.bestRejectedSummary.hedgeGap.gapClass
+            bestRejectedSummary.hedgeGap.gapClass
           );
         }
         if (
-          scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT'
-          && scheduleResult.bestObservedEvaluation.bestRejectedSummary.exactOutputViability?.status === 'SATISFIABLE'
+          bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT'
+          && bestRejectedSummary.exactOutputViability?.status === 'SATISFIABLE'
         ) {
           this.deps.metrics.incrementSchedulerRequiredOutputSatisfiable();
         }
@@ -661,25 +686,23 @@ export class BotRuntime {
           thresholdOut: this.deps.config.thresholdOut.toString(),
           bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
           bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
-          bestRejectedCandidateClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.candidateClass,
-          bestRejectedReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.reason,
-          bestRejectedConstraintReason: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintReason,
-          bestRejectedNearMiss: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.nearMiss,
-          bestRejectedShortfallOut: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
-          bestRejectedExactOutputStatus: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.status,
-          bestRejectedGapClass: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.gapClass,
+          bestRejectedCandidateClass: bestRejectedSummary?.candidateClass,
+          bestRejectedReason: bestRejectedSummary?.reason,
+          bestRejectedConstraintReason: bestRejectedSummary?.constraintReason,
+          bestRejectedNearMiss: bestRejectedSummary?.constraintBreakdown?.nearMiss,
+          bestRejectedShortfallOut: bestRejectedSummary?.constraintBreakdown?.minAmountOutShortfallOut.toString(),
+          bestRejectedExactOutputStatus: bestRejectedSummary?.exactOutputViability?.status,
+          bestRejectedGapClass: bestRejectedSummary?.hedgeGap?.gapClass,
           bestRejectedInputDeficit:
-            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputDeficit?.toString()
-            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputDeficit?.toString(),
+            bestRejectedSummary?.hedgeGap?.inputDeficit?.toString()
+            ?? bestRejectedSummary?.exactOutputViability?.inputDeficit?.toString(),
           bestRejectedInputSlack:
-            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.inputSlack?.toString()
-            ?? scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.inputSlack?.toString(),
-          bestRejectedOutputCoverageBps:
-            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),
-          bestRejectedRequiredOutputShortfallOut:
-            scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.hedgeGap?.requiredOutputShortfallOut.toString(),
-          bestRejectedCheckedFeeTier: scheduleResult.bestObservedEvaluation?.bestRejectedSummary?.exactOutputViability?.checkedFeeTier,
-          venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
+            bestRejectedSummary?.hedgeGap?.inputSlack?.toString()
+            ?? bestRejectedSummary?.exactOutputViability?.inputSlack?.toString(),
+          bestRejectedOutputCoverageBps: bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),
+          bestRejectedRequiredOutputShortfallOut: bestRejectedSummary?.hedgeGap?.requiredOutputShortfallOut.toString(),
+          bestRejectedCheckedFeeTier: bestRejectedSummary?.exactOutputViability?.checkedFeeTier,
+          venueAttemptStatuses: venueAttempts?.map((attempt) => ({
             venue: attempt.venue,
             status: attempt.status,
             reason: attempt.reason
@@ -695,18 +718,21 @@ export class BotRuntime {
             candidateBlockOffsets: this.deps.config.candidateBlockOffsets.map((offset) => offset.toString()),
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
             bestObservedVenue: scheduleResult.bestObservedEvaluation?.chosenRouteVenue,
-            bestRejectedSummary: scheduleResult.bestObservedEvaluation?.bestRejectedSummary
+            bestRejectedSummary: bestRejectedSummary
               ? (() => {
-                  const bestRejected = this.withDerivedCandidateClass(
-                    scheduleResult.bestObservedEvaluation.bestRejectedSummary
-                  );
                   return {
-                    ...this.toJournalVenueAttempt(scheduleResult.bestObservedEvaluation.bestRejectedSummary),
-                    candidateClass: bestRejected.candidateClass ?? 'UNKNOWN'
+                    ...this.toJournalVenueAttempt(bestRejectedSummary),
+                    candidateClass: bestRejectedSummary.candidateClass ?? 'UNKNOWN'
                   };
                 })()
               : undefined,
-            evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
+            evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation({
+              ...evaluation,
+              venueAttempts: evaluation.venueAttempts.map((attempt) => this.withDerivedRejectedCandidateClass(attempt)),
+              bestRejectedSummary: evaluation.bestRejectedSummary
+                ? this.withDerivedRejectedCandidateClass(evaluation.bestRejectedSummary)
+                : undefined
+            }))
           }
         });
         continue;

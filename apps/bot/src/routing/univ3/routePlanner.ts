@@ -17,11 +17,11 @@ import type {
   UniV3RoutePlan,
   UniV3RoutingContext
 } from './types.js';
-import type { FeeTierAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummary } from '../attemptTypes.js';
+import type { FeeTierAttemptSummary, RejectedVenueRouteAttemptSummary, RouteAttemptStatus, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { buildConstraintBreakdown, type ConstraintBreakdown, type ConstraintRejectReason } from '../constraintTypes.js';
 import type { ExactOutputViability } from '../exactOutputTypes.js';
 import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
-import { deriveRejectedCandidateClass } from '../rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, ensureRejectedCandidateClass } from '../rejectedCandidateTypes.js';
 import type { RoutePathKind } from '../pathTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
@@ -110,11 +110,11 @@ export class UniV3RoutePlanner {
         venue: 'UNISWAP_V3',
         status: 'NOT_ROUTEABLE',
         reason: 'ORDER_HAS_NO_OUTPUTS',
-        candidateClass: deriveRejectedCandidateClass({
+        candidateClass: ensureRejectedCandidateClass({
           venue: 'UNISWAP_V3',
           status: 'NOT_ROUTEABLE',
           reason: 'ORDER_HAS_NO_OUTPUTS'
-        }),
+        }).candidateClass,
         feeTierAttempts: []
       };
       return makeFailure('NOT_ROUTEABLE', 'order has no outputs', summary);
@@ -128,11 +128,11 @@ export class UniV3RoutePlanner {
         venue: 'UNISWAP_V3',
         status: 'NOT_ROUTEABLE',
         reason: 'OUTPUT_TOKEN_MISMATCH',
-        candidateClass: deriveRejectedCandidateClass({
+        candidateClass: ensureRejectedCandidateClass({
           venue: 'UNISWAP_V3',
           status: 'NOT_ROUTEABLE',
           reason: 'OUTPUT_TOKEN_MISMATCH'
-        }),
+        }).candidateClass,
         feeTierAttempts: []
       };
       return makeFailure('NOT_ROUTEABLE', 'output token mismatch', summary);
@@ -535,18 +535,13 @@ export class UniV3RoutePlanner {
 
     const gasOnly = successfulQuotes.length > 0 && successfulQuotes.every((candidate) => candidate.status === 'GAS_NOT_PRICEABLE');
     if (gasOnly) {
-      const summary: VenueRouteAttemptSummary = {
+      const summary = ensureRejectedCandidateClass({
         venue: 'UNISWAP_V3',
         status: 'GAS_NOT_PRICEABLE',
         reason: 'GAS_CONVERSION_FAILED',
-        candidateClass: deriveRejectedCandidateClass({
-          venue: 'UNISWAP_V3',
-          status: 'GAS_NOT_PRICEABLE',
-          reason: 'GAS_CONVERSION_FAILED'
-        }),
         feeTierAttempts: attempts,
         quoteCount
-      };
+      }) as RejectedVenueRouteAttemptSummary;
       return makeFailure('GAS_NOT_PRICEABLE', 'gas conversion failed for all successful quotes', summary);
     }
 
@@ -608,7 +603,7 @@ export class UniV3RoutePlanner {
         sortByNetEdge(a, b)
       )[0]!;
       const bestRejected = bestRejectedByConstraint ?? bestRejectedByEdge;
-      const summary: VenueRouteAttemptSummary = {
+      const summary = ensureRejectedCandidateClass({
         venue: 'UNISWAP_V3',
         pathKind: bestRejected.route.pathKind,
         hopCount: bestRejected.route.hopCount,
@@ -625,19 +620,10 @@ export class UniV3RoutePlanner {
         constraintBreakdown: bestRejected.constraintBreakdown,
         exactOutputViability: bestRejected.feeTierAttempt.exactOutputViability,
         hedgeGap: bestRejected.feeTierAttempt.hedgeGap,
-        candidateClass: bestRejected.feeTierAttempt.candidateClass
-          ?? deriveRejectedCandidateClass({
-            venue: 'UNISWAP_V3',
-            status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
-            reason: hasConstraintReject ? (bestRejected.constraintReason ?? 'MIN_AMOUNT_OUT') : 'NET_EDGE_NON_POSITIVE',
-            quotedAmountOut: bestRejected.route.quotedAmountOut,
-            constraintReason: bestRejected.constraintReason,
-            constraintBreakdown: bestRejected.constraintBreakdown,
-            exactOutputViability: bestRejected.feeTierAttempt.exactOutputViability
-          }),
+        candidateClass: bestRejected.feeTierAttempt.candidateClass,
         feeTierAttempts: attempts,
         quoteCount
-      };
+      }) as RejectedVenueRouteAttemptSummary;
       return makeFailure(
         hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
         hasConstraintReject ? 'quoted amount below min amount out' : 'all successful quotes are not profitable',
@@ -645,18 +631,13 @@ export class UniV3RoutePlanner {
       );
     }
 
-    const summary: VenueRouteAttemptSummary = {
+    const summary = ensureRejectedCandidateClass({
       venue: 'UNISWAP_V3',
       status: 'NOT_ROUTEABLE',
       reason: attempts.some((attempt) => attempt.status === 'QUOTE_FAILED') ? 'POOL_OR_QUOTE_UNAVAILABLE' : 'POOL_MISSING',
-      candidateClass: deriveRejectedCandidateClass({
-        venue: 'UNISWAP_V3',
-        status: 'NOT_ROUTEABLE',
-        reason: attempts.some((attempt) => attempt.status === 'QUOTE_FAILED') ? 'POOL_OR_QUOTE_UNAVAILABLE' : 'POOL_MISSING'
-      }),
       feeTierAttempts: attempts,
       quoteCount
-    };
+    }) as RejectedVenueRouteAttemptSummary;
     return makeFailure('NOT_ROUTEABLE', 'no fee tier produced a successful quote', summary);
   }
 }

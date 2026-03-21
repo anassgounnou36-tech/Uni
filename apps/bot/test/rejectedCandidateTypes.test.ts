@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveRejectedCandidateClass } from '../src/routing/rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, ensureRejectedCandidateClass } from '../src/routing/rejectedCandidateTypes.js';
 
 describe('deriveRejectedCandidateClass', () => {
   it('returns non-empty class for representative rejected summaries', () => {
@@ -73,5 +73,77 @@ describe('deriveRejectedCandidateClass', () => {
       expect(result.length).toBeGreaterThan(0);
       expect(result).not.toBe('UNKNOWN');
     }
+  });
+
+  it('never labels quote-failed or huge-gap required-output as POLICY_BLOCKED', () => {
+    expect(
+      deriveRejectedCandidateClass({
+        venue: 'CAMELOT_AMMV3',
+        status: 'CONSTRAINT_REJECTED',
+        reason: 'REQUIRED_OUTPUT',
+        quotedAmountOut: 500n,
+        constraintReason: 'REQUIRED_OUTPUT',
+        exactOutputViability: {
+          status: 'QUOTE_FAILED',
+          targetOutput: 900n,
+          requiredInputForTargetOutput: 0n,
+          availableInput: 1_000n,
+          reason: 'exact-output quote failed'
+        },
+        hedgeGap: {
+          requiredOutput: 900n,
+          quotedAmountOut: 500n,
+          outputCoverageBps: 5_555n,
+          requiredOutputShortfallOut: 400n,
+          inputDeficit: 0n,
+          inputSlack: 0n,
+          gapClass: 'HUGE',
+          nearMiss: false,
+          nearMissBps: 25n
+        }
+      })
+    ).toBe('QUOTE_FAILED');
+
+    expect(
+      deriveRejectedCandidateClass({
+        venue: 'CAMELOT_AMMV3',
+        status: 'CONSTRAINT_REJECTED',
+        reason: 'REQUIRED_OUTPUT',
+        quotedAmountOut: 500n,
+        constraintReason: 'REQUIRED_OUTPUT',
+        exactOutputViability: {
+          status: 'UNSATISFIABLE',
+          targetOutput: 900n,
+          requiredInputForTargetOutput: 1_200n,
+          availableInput: 1_000n,
+          inputDeficit: 200n,
+          inputSlack: 0n,
+          reason: 'required output unsatisfiable'
+        },
+        hedgeGap: {
+          requiredOutput: 900n,
+          quotedAmountOut: 500n,
+          outputCoverageBps: 5_555n,
+          requiredOutputShortfallOut: 400n,
+          inputDeficit: 200n,
+          inputSlack: 0n,
+          gapClass: 'HUGE',
+          nearMiss: false,
+          nearMissBps: 25n
+        }
+      })
+    ).toBe('LIQUIDITY_BLOCKED');
+  });
+
+  it('ensureRejectedCandidateClass always fills class for rejected summary', () => {
+    const withClass = ensureRejectedCandidateClass({
+      venue: 'UNISWAP_V3',
+      status: 'CONSTRAINT_REJECTED',
+      reason: 'REQUIRED_OUTPUT',
+      constraintReason: 'REQUIRED_OUTPUT',
+      candidateClass: undefined
+    });
+    expect(withClass.candidateClass).toBeDefined();
+    expect(withClass.candidateClass.length).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import { getAddress, isAddress } from 'viem';
 
-const HEX_ADDR = /^0x[a-fA-F0-9]{40}$/;
 const HEX_KEY = /^0x[a-fA-F0-9]{64}$/;
 
 function parseBoolean(value: string | undefined, defaultValue: boolean): boolean {
@@ -26,33 +26,36 @@ function parseBigIntList(value: string): bigint[] {
     .map((entry) => parseBigInt(entry, 'CANDIDATE_BLOCK_OFFSETS'));
 }
 
+function normalizeAddress(value: string, name: string): `0x${string}` {
+  const trimmed = value.trim();
+  if (!isAddress(trimmed)) {
+    throw new Error(`Invalid ${name} address: ${value}`);
+  }
+  return getAddress(trimmed);
+}
+
+function normalizeAddressList(value: string, name: string): Array<`0x${string}`> {
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => normalizeAddress(entry, name));
+}
+
 function parseCanaryPairs(value: string): Array<{ inputToken: `0x${string}`; outputToken: `0x${string}` }> {
   if (!value.trim()) {
     return [];
   }
   return value.split(',').map((entry) => {
     const [inputToken, outputToken] = entry.split(':').map((part) => part.trim());
-    if (!inputToken || !outputToken || !HEX_ADDR.test(inputToken) || !HEX_ADDR.test(outputToken)) {
+    if (!inputToken || !outputToken) {
       throw new Error('Invalid CANARY_ALLOWLISTED_PAIRS format');
     }
     return {
-      inputToken: inputToken as `0x${string}`,
-      outputToken: outputToken as `0x${string}`
+      inputToken: normalizeAddress(inputToken, 'CANARY_ALLOWLISTED_PAIRS input'),
+      outputToken: normalizeAddress(outputToken, 'CANARY_ALLOWLISTED_PAIRS output')
     };
   });
-}
-
-function parseAddressList(value: string, name: string): Array<`0x${string}`> {
-  return value
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0)
-    .map((entry) => {
-      if (!HEX_ADDR.test(entry)) {
-        throw new Error(`Invalid ${name} address: ${entry}`);
-      }
-      return entry as `0x${string}`;
-    });
 }
 
 const baseSchema = z.object({
@@ -62,7 +65,7 @@ const baseSchema = z.object({
   DATABASE_URL: z.string().url().optional(),
   ALLOW_EPHEMERAL_STATE: z.string().optional(),
   SIGNER_PRIVATE_KEY: z.string().regex(HEX_KEY).optional(),
-  EXECUTOR_ADDRESS: z.string().regex(HEX_ADDR).default('0x3333333333333333333333333333333333333333'),
+  EXECUTOR_ADDRESS: z.string().default('0x3333333333333333333333333333333333333333'),
 
   POLL_CADENCE_MS: z.coerce.number().int().positive().default(1_000),
   ENABLE_WEBHOOK_INGRESS: z.string().optional(),
@@ -146,7 +149,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     databaseUrl: parsed.DATABASE_URL,
     allowEphemeralState: parseBoolean(parsed.ALLOW_EPHEMERAL_STATE, false),
     signerPrivateKey: parsed.SIGNER_PRIVATE_KEY as `0x${string}` | undefined,
-    executorAddress: parsed.EXECUTOR_ADDRESS as `0x${string}`,
+    executorAddress: normalizeAddress(parsed.EXECUTOR_ADDRESS, 'EXECUTOR_ADDRESS'),
 
     pollCadenceMs: parsed.POLL_CADENCE_MS,
     enableWebhookIngress: parseBoolean(parsed.ENABLE_WEBHOOK_INGRESS, false),
@@ -170,7 +173,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxLiveInflight: parsed.MAX_LIVE_INFLIGHT,
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
     enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
-    bridgeTokens: parseAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
+    bridgeTokens: normalizeAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),
     metricsHost: parsed.METRICS_HOST,
