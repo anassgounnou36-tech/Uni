@@ -16,18 +16,28 @@ import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 
 type ReplayFixture = { encodedOrder: `0x${string}`; signature: `0x${string}`; orderHash?: `0x${string}` };
 type ReplaySource = 'DB_ORDER' | 'DB_JOURNAL' | 'FIXTURE';
+type ReplayResolveSnapshot = {
+  chainId: bigint;
+  blockNumber: bigint;
+  blockNumberish: bigint;
+  timestamp: bigint;
+  baseFeePerGas: bigint;
+  sampledAtMs: number;
+};
 
 type OrderLookupResult = {
   source: ReplaySource;
   fixture: ReplayFixture;
+  resolveSnapshot?: ReplayResolveSnapshot;
 };
 
 type ReplayDbLookups = {
   findFromDatabase?: (databaseUrl: string, orderHash: string) => Promise<OrderLookupResult | undefined>;
+  findFromJournalId?: (databaseUrl: string, journalId: string) => Promise<OrderLookupResult | undefined>;
 };
 
-function parseArgs(argv: string[]): { orderHash?: string; fixture?: string } {
-  const result: { orderHash?: string; fixture?: string } = {};
+function parseArgs(argv: string[]): { orderHash?: string; fixture?: string; journalId?: string } {
+  const result: { orderHash?: string; fixture?: string; journalId?: string } = {};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--order-hash') {
@@ -35,6 +45,9 @@ function parseArgs(argv: string[]): { orderHash?: string; fixture?: string } {
       i += 1;
     } else if (arg === '--fixture') {
       result.fixture = argv[i + 1];
+      i += 1;
+    } else if (arg === '--journal-id') {
+      result.journalId = argv[i + 1];
       i += 1;
     }
   }
@@ -56,12 +69,24 @@ function loadFixtureByHash(orderHash: string): ReplayFixture {
 }
 
 type JournalRow = {
+  id?: number;
+  order_hash?: string;
+  event_type?: string;
   payload_json: unknown;
 };
 
 type JournalOrderSeenPayload = {
   encodedOrder?: string;
   signature?: string;
+};
+
+type DroppedResolveSnapshotPayload = {
+  chainId?: string;
+  blockNumber?: string;
+  blockNumberish?: string;
+  timestamp?: string;
+  baseFeePerGas?: string;
+  sampledAtMs?: number;
 };
 
 function toReplayFixture(payload: JournalOrderSeenPayload): ReplayFixture | undefined {
@@ -126,8 +151,94 @@ async function findFromDatabase(databaseUrl: string, orderHash: string): Promise
   return undefined;
 }
 
+function toReplayResolveSnapshot(payload: DroppedResolveSnapshotPayload | undefined): ReplayResolveSnapshot | undefined {
+  if (!payload) return undefined;
+  if (
+    payload.chainId === undefined
+    || payload.blockNumber === undefined
+    || payload.blockNumberish === undefined
+    || payload.timestamp === undefined
+    || payload.baseFeePerGas === undefined
+    || payload.sampledAtMs === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    chainId: BigInt(payload.chainId),
+    blockNumber: BigInt(payload.blockNumber),
+    blockNumberish: BigInt(payload.blockNumberish),
+    timestamp: BigInt(payload.timestamp),
+    baseFeePerGas: BigInt(payload.baseFeePerGas),
+    sampledAtMs: payload.sampledAtMs
+  };
+}
+
+async function findFromJournalId(databaseUrl: string, journalId: string): Promise<OrderLookupResult | undefined> {
+  const sql = await createPostgresAdapter(databaseUrl);
+  try {
+    const journalRows = await sql.query<JournalRow>(
+      `select id, order_hash, event_type, payload_json
+       from decision_journal
+       where id = $1
+       limit 1`,
+      [journalId]
+    );
+    const row = journalRows.rows[0];
+    if (!row?.order_hash) {
+      return undefined;
+    }
+    const payload = (typeof row.payload_json === 'string'
+      ? JSON.parse(row.payload_json)
+      : row.payload_json) as { resolveSnapshot?: DroppedResolveSnapshotPayload };
+    const orderSeenRows = await sql.query<JournalRow>(
+      `select payload_json
+       from decision_journal
+       where order_hash = $1 and event_type = 'ORDER_SEEN'
+       order by at_ms desc, id desc
+       limit 10`,
+      [row.order_hash]
+    );
+    for (const seenRow of orderSeenRows.rows) {
+      const seenPayload = (typeof seenRow.payload_json === 'string'
+        ? JSON.parse(seenRow.payload_json)
+        : seenRow.payload_json) as JournalOrderSeenPayload;
+      const fixture = toReplayFixture(seenPayload);
+      if (fixture) {
+        return {
+          source: 'DB_JOURNAL',
+          fixture: {
+            ...fixture,
+            orderHash: row.order_hash as `0x${string}`
+          },
+          resolveSnapshot: toReplayResolveSnapshot(payload.resolveSnapshot)
+        };
+      }
+    }
+  } catch {
+    return undefined;
+  } finally {
+    await sql.close().catch(() => undefined);
+  }
+  return undefined;
+}
+
+async function hasJournalEntryForOrderHash(databaseUrl: string, orderHash: string): Promise<boolean> {
+  const sql = await createPostgresAdapter(databaseUrl);
+  try {
+    const rows = await sql.query<{ count: string }>(
+      `select count(*)::text as count from decision_journal where order_hash = $1`,
+      [orderHash]
+    );
+    return (rows.rows[0]?.count ?? '0') !== '0';
+  } catch {
+    return false;
+  } finally {
+    await sql.close().catch(() => undefined);
+  }
+}
+
 export async function resolveInput(
-  args: { orderHash?: string; fixture?: string },
+  args: { orderHash?: string; fixture?: string; journalId?: string },
   databaseUrl?: string,
   lookups: ReplayDbLookups = {}
 ): Promise<OrderLookupResult> {
@@ -138,7 +249,17 @@ export async function resolveInput(
     };
   }
   if (!args.orderHash) {
-    throw new Error('Usage: replay --order-hash <hash> [--fixture <path>]');
+    if (args.journalId) {
+      if (!databaseUrl) {
+        throw new Error('--journal-id requires databaseUrl/runtime DB configuration');
+      }
+      const fromJournal = await (lookups.findFromJournalId ?? findFromJournalId)(databaseUrl, args.journalId);
+      if (fromJournal) {
+        return fromJournal;
+      }
+      throw new Error(`journal id not found or missing ORDER_SEEN payload: ${args.journalId}`);
+    }
+    throw new Error('Usage: replay --order-hash <hash> [--journal-id <id>] [--fixture <path>]');
   }
   if (databaseUrl) {
     const fromDb = await (lookups.findFromDatabase ?? findFromDatabase)(databaseUrl, args.orderHash);
@@ -182,12 +303,31 @@ export function formatReplayOutput(params: {
 export async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const config = loadRuntimeConfig(process.env);
-  const resolvedInput = await resolveInput(args, config.databaseUrl);
+  let resolvedInput: OrderLookupResult;
+  try {
+    resolvedInput = await resolveInput(args, config.databaseUrl);
+  } catch (error) {
+    if (
+      args.orderHash
+      && config.databaseUrl
+      && error instanceof Error
+      && (
+        error.message.includes('DeadlineReached')
+        || error.message.toLowerCase().includes('deadline reached')
+      )
+    ) {
+      const hasJournal = await hasJournalEntryForOrderHash(config.databaseUrl, args.orderHash);
+      if (hasJournal) {
+        throw new Error(`Replay failed on deadline context. Retry with --journal-id <id> for snapshot-based replay of ${args.orderHash}`);
+      }
+    }
+    throw error;
+  }
   const fixture = resolvedInput.fixture;
   const decoded = decodeSignedOrder(fixture.encodedOrder, fixture.signature);
   const hash = (fixture.orderHash ?? computeOrderHash(decoded.order)) as `0x${string}`;
 
-  const resolveSnapshot = {
+  const resolveSnapshot = resolvedInput.resolveSnapshot ?? {
     chainId: 42161n,
     blockNumber: 0n,
     blockNumberish: 0n,

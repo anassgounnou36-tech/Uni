@@ -4,6 +4,7 @@ import type { RouteBook } from '../routing/routeBook.js';
 import type { HedgeRoutePlan } from '../routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 import type { ResolveEnvProvider } from '../runtime/resolveEnvProvider.js';
+import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -17,6 +18,7 @@ export type BlockEvaluation = {
   grossEdgeOut: bigint;
   netEdgeOut: bigint;
   chosenRouteVenue?: HedgeRoutePlan['venue'];
+  chosenExecutionMode?: HedgeExecutionMode;
   selectionOk: boolean;
   selectionReason?: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE';
   venueAttempts: VenueRouteAttemptSummary[];
@@ -132,6 +134,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
       grossEdgeOut: route.grossEdgeOut,
       netEdgeOut: route.netEdgeOut,
       chosenRouteVenue: route.venue,
+      chosenExecutionMode: route.executionMode,
       selectionOk: true,
       venueAttempts: routeResult.venueAttempts
     };

@@ -7,6 +7,7 @@ import type { ConstraintBreakdown } from '../src/routing/constraintTypes.js';
 function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
   return {
     venue,
+    executionMode: 'EXACT_INPUT',
     pathKind: 'DIRECT',
     hopCount: 1,
     tokenIn: '0x0000000000000000000000000000000000000001',
@@ -97,6 +98,56 @@ describe('RouteBook', () => {
     if (!selected.ok) return;
     expect(selected.chosenRoute.pathKind).toBe('TWO_HOP');
     expect(selected.chosenRoute.hopCount).toBe(2);
+  });
+
+  it('routebook_can_choose_exact_output_candidate_over_rejected_exact_input_near_miss', async () => {
+    const exactOutputRoute = makeRoute('UNISWAP_V3', {
+      executionMode: 'EXACT_OUTPUT',
+      quotedAmountOut: 1_020n,
+      netEdgeOut: 20n,
+      grossEdgeOut: 30n
+    });
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: exactOutputRoute,
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', {
+            executionMode: 'EXACT_OUTPUT',
+            netEdgeOut: 20n
+          })
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'CONSTRAINT_REJECTED', {
+              executionMode: 'EXACT_INPUT',
+              constraintReason: 'REQUIRED_OUTPUT',
+              constraintBreakdown: constraintBreakdown({ nearMiss: true }),
+              exactOutputViability: {
+                status: 'SATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 999n,
+                availableInput: 1_000n,
+                inputDeficit: 0n,
+                inputSlack: 1n,
+                reason: 'required output satisfiable with available input'
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: exactOutputRoute.tokenIn, amount: 1_000n }, outputs: [{ token: exactOutputRoute.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.executionMode).toBe('EXACT_OUTPUT');
   });
 
   it('routeBookChoosesHigherNetEdgeVenue', async () => {

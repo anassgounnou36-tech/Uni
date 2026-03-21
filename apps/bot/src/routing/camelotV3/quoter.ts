@@ -66,6 +66,13 @@ function encodeCamelotPath(tokens: readonly Address[]): `0x${string}` {
   return concatHex(parts);
 }
 
+function encodeCamelotPathReverse(tokens: readonly Address[]): `0x${string}` {
+  if (tokens.length < 2 || tokens.length > 3) {
+    throw new Error('camelot path requires 2 or 3 tokens (1 or 2 hops)');
+  }
+  return encodeCamelotPath([...tokens].reverse() as Address[]);
+}
+
 function applyBpsFloor(amount: bigint, bpsToKeep: bigint): bigint {
   return (amount * bpsToKeep) / 10_000n;
 }
@@ -416,6 +423,101 @@ export class CamelotAmmv3Quoter {
       nearMiss: breakdown.nearMiss,
       nearMissBps: breakdown.nearMissBps
     });
+    if (
+      exactOutputViability.status === 'SATISFIABLE'
+      && exactOutputViability.requiredInputForTargetOutput <= params.amountIn
+    ) {
+      const targetOutput = requiredOutput;
+      const maxAmountIn = params.amountIn;
+      const leftoverInput = maxAmountIn - exactOutputViability.requiredInputForTargetOutput;
+      let leftoverInputValueOut = 0n;
+      if (leftoverInput > 0n) {
+        try {
+          const leftoverQuote = await this.context.client.readContract({
+            address: this.context.quoter,
+            abi: CAMELOT_AMMV3_QUOTER_ABI,
+            functionName: 'quoteExactInputSingle',
+            args: [params.tokenIn, params.tokenOut, leftoverInput, 0n]
+          });
+          if (typeof leftoverQuote === 'bigint') {
+            leftoverInputValueOut = leftoverQuote;
+          } else if (Array.isArray(leftoverQuote) && typeof leftoverQuote[0] === 'bigint') {
+            leftoverInputValueOut = leftoverQuote[0];
+          }
+        } catch {
+          leftoverInputValueOut = 0n;
+        }
+      }
+      const grossEdgeOutExactOutput = leftoverInputValueOut;
+      const riskBufferOutExactOutput = policy.riskBufferOut + (grossEdgeOutExactOutput * policy.riskBufferBps) / 10_000n;
+      const breakdownExactOutput = buildConstraintBreakdown({
+        requiredOutput: targetOutput,
+        quotedAmountOut: targetOutput + leftoverInputValueOut,
+        slippageBufferOut: 0n,
+        gasCostOut,
+        riskBufferOut: riskBufferOutExactOutput,
+        profitFloorOut,
+        nearMissBps: policy.nearMissBps
+      });
+      const netEdgeOutExactOutput = grossEdgeOutExactOutput - gasCostOut - riskBufferOutExactOutput - profitFloorOut;
+      if (netEdgeOutExactOutput > netEdgeOut && netEdgeOutExactOutput > 0n) {
+        return {
+          ok: true,
+          route: {
+            venue: 'CAMELOT_AMMV3',
+            executionMode: 'EXACT_OUTPUT',
+            pathKind: 'DIRECT',
+            hopCount: 1,
+            tokenIn: params.tokenIn,
+            tokenOut: params.tokenOut,
+            amountIn: maxAmountIn,
+            requiredOutput: targetOutput,
+            targetOutput,
+            maxAmountIn,
+            quotedAmountOut: targetOutput + leftoverInputValueOut,
+            minAmountOut: targetOutput,
+            limitSqrtPriceX96: 0n,
+            grossEdgeOut: grossEdgeOutExactOutput,
+            slippageBufferOut: 0n,
+            gasCostOut,
+            riskBufferOut: riskBufferOutExactOutput,
+            profitFloorOut,
+            netEdgeOut: netEdgeOutExactOutput,
+            quoteMetadata: {
+              venue: 'CAMELOT_AMMV3',
+              observedFee
+            }
+          },
+          summary: {
+            venue: 'CAMELOT_AMMV3',
+            executionMode: 'EXACT_OUTPUT',
+            pathKind: 'DIRECT',
+            hopCount: 1,
+            pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
+            status: 'ROUTEABLE',
+            reason: 'ROUTEABLE',
+            quotedAmountOut: targetOutput + leftoverInputValueOut,
+            minAmountOut: targetOutput,
+            grossEdgeOut: grossEdgeOutExactOutput,
+            netEdgeOut: netEdgeOutExactOutput,
+            constraintReason: undefined,
+            constraintBreakdown: undefined,
+            exactOutputViability,
+            hedgeGap: buildHedgeGapSummary({
+              pathKind: 'DIRECT',
+              hopCount: 1,
+              pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
+              requiredOutput: targetOutput,
+              quotedAmountOut: targetOutput + leftoverInputValueOut,
+              minAmountOut: targetOutput,
+              exactOutputViability,
+              nearMiss: breakdownExactOutput.nearMiss,
+              nearMissBps: breakdownExactOutput.nearMissBps
+            })
+          }
+        };
+      }
+    }
     if (quotedAmountOut < breakdown.requiredOutput) {
       return {
         ok: false,
@@ -510,6 +612,7 @@ export class CamelotAmmv3Quoter {
       ok: true,
       route: {
         venue: 'CAMELOT_AMMV3',
+        executionMode: 'EXACT_INPUT',
         pathKind: 'DIRECT',
         hopCount: 1,
         tokenIn: params.tokenIn,
@@ -532,6 +635,7 @@ export class CamelotAmmv3Quoter {
       },
       summary: {
         venue: 'CAMELOT_AMMV3',
+        executionMode: 'EXACT_INPUT',
         pathKind: 'DIRECT',
         hopCount: 1,
         pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
@@ -683,7 +787,12 @@ export class CamelotAmmv3Quoter {
 
     let exactOutputViability: ExactOutputViability;
     try {
-      const requiredInputForTargetOutput = await quoteExactOutputPath(this.context.client, this.context.quoter, encodedPath, requiredOutput);
+      const requiredInputForTargetOutput = await quoteExactOutputPath(
+        this.context.client,
+        this.context.quoter,
+        encodeCamelotPathReverse([params.tokenIn, params.bridgeToken, params.tokenOut]),
+        requiredOutput
+      );
       const inputDeficit = requiredInputForTargetOutput > params.amountIn ? requiredInputForTargetOutput - params.amountIn : 0n;
       const inputSlack = params.amountIn > requiredInputForTargetOutput ? params.amountIn - requiredInputForTargetOutput : 0n;
       exactOutputViability = {
@@ -743,6 +852,7 @@ export class CamelotAmmv3Quoter {
     });
     const summaryBase = {
       venue: 'CAMELOT_AMMV3' as const,
+      executionMode: 'EXACT_INPUT' as const,
       pathKind: 'TWO_HOP' as const,
       hopCount: 2 as const,
       bridgeToken: params.bridgeToken,
@@ -820,6 +930,7 @@ export class CamelotAmmv3Quoter {
       ok: true,
       route: {
         venue: 'CAMELOT_AMMV3',
+        executionMode: 'EXACT_INPUT',
         pathKind: 'TWO_HOP',
         hopCount: 2,
         bridgeToken: params.bridgeToken,
@@ -841,6 +952,7 @@ export class CamelotAmmv3Quoter {
       },
       summary: {
         ...summaryBase,
+        executionMode: 'EXACT_INPUT',
         status: 'ROUTEABLE',
         reason: 'ROUTEABLE'
       }

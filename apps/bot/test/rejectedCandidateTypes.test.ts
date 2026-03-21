@@ -146,4 +146,40 @@ describe('deriveRejectedCandidateClass', () => {
     expect(withClass.candidateClass).toBeDefined();
     expect(withClass.candidateClass.length).toBeGreaterThan(0);
   });
+
+  it('exact_output_satisfiable_but_unprofitable_candidates_are_policy_blocked_not_liquidity_blocked', () => {
+    const candidateClass = deriveRejectedCandidateClass({
+      venue: 'UNISWAP_V3',
+      status: 'CONSTRAINT_REJECTED',
+      reason: 'PROFITABILITY_FLOOR',
+      quotedAmountOut: 998n,
+      constraintReason: 'REQUIRED_OUTPUT',
+      constraintBreakdown: {
+        requiredOutput: 999n,
+        quotedAmountOut: 998n,
+        slippageBufferOut: 0n,
+        gasCostOut: 1n,
+        riskBufferOut: 1n,
+        profitFloorOut: 1n,
+        slippageFloorOut: 998n,
+        profitabilityFloorOut: 1001n,
+        minAmountOut: 1001n,
+        requiredOutputShortfallOut: 1n,
+        minAmountOutShortfallOut: 3n,
+        bindingFloor: 'PROFITABILITY_FLOOR',
+        nearMiss: true,
+        nearMissBps: 25n
+      },
+      exactOutputViability: {
+        status: 'SATISFIABLE',
+        targetOutput: 999n,
+        requiredInputForTargetOutput: 1000n,
+        availableInput: 1000n,
+        inputDeficit: 0n,
+        inputSlack: 0n,
+        reason: 'required output satisfiable with available input'
+      }
+    });
+    expect(candidateClass).toBe('POLICY_BLOCKED');
+  });
 });

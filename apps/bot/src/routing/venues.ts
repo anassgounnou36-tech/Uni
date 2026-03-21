@@ -4,6 +4,7 @@ import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViability } from './exactOutputTypes.js';
 import type { HedgeGapSummary } from './hedgeGapTypes.js';
+import type { HedgeExecutionMode } from './executionModeTypes.js';
 
 export const HEDGE_VENUES = ['UNISWAP_V3', 'CAMELOT_AMMV3'] as const;
 export type HedgeVenue = (typeof HEDGE_VENUES)[number];
@@ -21,6 +22,7 @@ export type RouteQuoteMetadata =
 
 export type HedgeRoutePlan = {
   venue: HedgeVenue;
+  executionMode?: HedgeExecutionMode;
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
   tokenIn: Address;
@@ -29,6 +31,8 @@ export type HedgeRoutePlan = {
   encodedPath?: `0x${string}`;
   amountIn: bigint;
   requiredOutput: bigint;
+  targetOutput?: bigint;
+  maxAmountIn?: bigint;
   quotedAmountOut: bigint;
   minAmountOut: bigint;
   limitSqrtPriceX96: bigint;
@@ -56,6 +60,7 @@ export type RouteCandidateFailureReason =
 
 export type RouteCandidateSummary = {
   venue: HedgeVenue;
+  executionMode?: HedgeExecutionMode;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;
   bridgeToken?: Address;

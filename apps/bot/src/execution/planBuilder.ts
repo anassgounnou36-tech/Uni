@@ -94,6 +94,7 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     conditionalEnvelope: params.conditionalEnvelope,
     requiredOutputOut: totalRequiredOutput(resolvedOrder.outputs),
     predictedNetEdgeOut: routeDecision.chosenRoute.netEdgeOut,
+    selectedExecutionMode: routeDecision.chosenRoute.executionMode ?? 'EXACT_INPUT',
     selectedPathKind: routeDecision.chosenRoute.pathKind,
     selectedHopCount: routeDecision.chosenRoute.hopCount,
     selectedBlock: params.blockNumberish,

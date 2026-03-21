@@ -100,11 +100,17 @@ contract ArbitrumForkSmokeTest {
             abi.encode(
                 ExecutorTypes.RoutePlan({
                     venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    executionMode: 0,
+                    pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                    hopCount: 1,
                     tokenIn: WETH,
                     tokenOut: WETH,
                     uniPoolFee: 500,
+                    encodedPath: "",
                     limitSqrtPriceX96: 0,
-                    minAmountOut: 1
+                    minAmountOut: 1,
+                    targetOutput: 0,
+                    maxAmountIn: 0
                 })
             )
         );
@@ -207,11 +213,17 @@ contract ArbitrumForkSmokeTest {
         return abi.encode(
             ExecutorTypes.RoutePlan({
                 venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                executionMode: 0,
+                pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                hopCount: 1,
                 tokenIn: WETH,
                 tokenOut: USDC,
                 uniPoolFee: fee,
+                encodedPath: "",
                 limitSqrtPriceX96: 0,
-                minAmountOut: minOut
+                minAmountOut: minOut,
+                targetOutput: 0,
+                maxAmountIn: 0
             })
         );
     }

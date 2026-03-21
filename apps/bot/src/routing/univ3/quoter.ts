@@ -26,6 +26,9 @@ export type QuotedExactOutputPath = {
 export function classifyQuoteFailure(error: unknown): string {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
+    if (message.includes('too much requested') || message.includes('insufficient input amount')) {
+      return 'INSUFFICIENT_INPUT';
+    }
     if (message.includes('execution reverted')) {
       return 'REVERTED';
     }

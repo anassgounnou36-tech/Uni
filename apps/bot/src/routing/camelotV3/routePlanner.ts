@@ -128,6 +128,11 @@ export class CamelotAmmv3RoutePlanner {
         const aOut = a.summary.quotedAmountOut ?? 0n;
         const bOut = b.summary.quotedAmountOut ?? 0n;
         if (aOut !== bOut) return aOut > bOut ? -1 : 1;
+        const aMode = a.summary.executionMode ?? 'EXACT_INPUT';
+        const bMode = b.summary.executionMode ?? 'EXACT_INPUT';
+        if (aMode !== bMode) {
+          return aMode === 'EXACT_OUTPUT' ? -1 : 1;
+        }
         return 0;
       })[0];
     if (!rejected) {

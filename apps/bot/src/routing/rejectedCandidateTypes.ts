@@ -56,16 +56,18 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
   }
   if (
     summary.constraintReason === 'REQUIRED_OUTPUT'
+    && summary.exactOutputViability?.status === 'SATISFIABLE'
+  ) {
+    return 'POLICY_BLOCKED';
+  }
+  if (
+    summary.constraintReason === 'REQUIRED_OUTPUT'
     && (
       (summary.hedgeGap?.requiredOutputShortfallOut ?? summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n) > 0n
       // Missing exact-output viability here still indicates required-output miss context and should stay liquidity-blocked.
       || summary.exactOutputViability === undefined
       || summary.exactOutputViability?.status === 'UNSATISFIABLE'
       || summary.exactOutputViability?.status === 'QUOTE_FAILED'
-      || (
-        summary.exactOutputViability?.status === 'SATISFIABLE'
-        && (summary.hedgeGap?.requiredOutputShortfallOut ?? summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n) > 0n
-      )
     )
   ) {
     return 'LIQUIDITY_BLOCKED';

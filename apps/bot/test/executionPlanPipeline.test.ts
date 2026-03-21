@@ -1138,6 +1138,9 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     });
 
     expect(routeResult.ok).toEqual(true);
+    if (routeResult.ok) {
+      expect(routeResult.route.executionMode).toBeDefined();
+    }
   });
 
   it('can read real Camelot AMMv3 single-hop quotes from forked pool state', async () => {
@@ -1174,6 +1177,9 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     });
 
     expect(routeResult.ok).toEqual(true);
+    if (routeResult.ok) {
+      expect(routeResult.route.executionMode).toBeDefined();
+    }
   });
 
   it('routeBook compares Uni and Camelot deterministically on fork', async () => {
@@ -1429,6 +1435,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         ok: true,
         chosenRoute: {
           venue: 'CAMELOT_AMMV3',
+          executionMode: 'EXACT_OUTPUT',
           pathKind: 'TWO_HOP',
           hopCount: 2,
           bridgeToken,
@@ -1446,6 +1453,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
           tokenOut: resolvedOrder.outputs[0]!.token,
           amountIn: resolvedOrder.input.amount,
           requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          targetOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          maxAmountIn: resolvedOrder.input.amount,
           quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
           minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
           limitSqrtPriceX96: 0n,

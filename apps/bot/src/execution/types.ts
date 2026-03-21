@@ -3,6 +3,7 @@ import type { ResolveEnv, ResolvedV3DutchOrder } from '@uni/protocol';
 import type { NormalizedOrder } from '../store/types.js';
 import type { HedgeRoutePlan, RouteCandidateSummary } from '../routing/venues.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
+import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
 
 export type ExecutionPlan = {
   orderHash: `0x${string}`;
@@ -27,6 +28,7 @@ export type ExecutionPlan = {
   conditionalEnvelope: ConditionalEnvelope;
   requiredOutputOut: bigint;
   predictedNetEdgeOut: bigint;
+  selectedExecutionMode: HedgeExecutionMode;
   selectedPathKind: HedgeRoutePlan['pathKind'];
   selectedHopCount: HedgeRoutePlan['hopCount'];
   selectedBlock: bigint;

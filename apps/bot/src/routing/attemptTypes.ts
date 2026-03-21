@@ -4,6 +4,7 @@ import type { ExactOutputViability } from './exactOutputTypes.js';
 import type { HedgeGapSummary } from './hedgeGapTypes.js';
 import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 import type { RoutePathKind } from './pathTypes.js';
+import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { Address } from 'viem';
 
 export type RouteAttemptStatus =
@@ -19,6 +20,7 @@ export type RejectedRouteAttemptStatus = Exclude<RouteAttemptStatus, 'ROUTEABLE'
 export type FeeTierAttemptSummary = {
   feeTier: number;
   secondFeeTier?: number;
+  executionMode?: HedgeExecutionMode;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;
   bridgeToken?: Address;
@@ -40,6 +42,7 @@ export type FeeTierAttemptSummary = {
 
 export type VenueRouteAttemptSummary = {
   venue: HedgeVenue;
+  executionMode?: HedgeExecutionMode;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;
   bridgeToken?: Address;

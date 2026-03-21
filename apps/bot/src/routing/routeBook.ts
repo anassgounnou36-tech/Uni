@@ -32,6 +32,7 @@ function venueTieBreak(a: HedgeVenue, b: HedgeVenue): number {
 function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
   return {
     venue: route.venue,
+    executionMode: route.executionMode,
     pathKind: route.pathKind,
     hopCount: route.hopCount,
     bridgeToken: route.bridgeToken,
@@ -86,6 +87,9 @@ function sortByBestEdge(routes: HedgeRoutePlan[]): HedgeRoutePlan[] {
     if (a.gasCostOut !== b.gasCostOut) {
       return a.gasCostOut < b.gasCostOut ? -1 : 1;
     }
+    if (a.executionMode !== b.executionMode) {
+      return a.executionMode === 'EXACT_OUTPUT' ? -1 : 1;
+    }
     return venueTieBreak(a.venue, b.venue);
   });
 }
@@ -112,8 +116,7 @@ function hasNearMiss(summary: VenueRouteAttemptSummary): boolean {
 }
 
 function isActionablePolicyBlocked(summary: VenueRouteAttemptSummary): boolean {
-  return (summary.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED'
-    && hasNearMiss(summary);
+  return (summary.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED';
 }
 
 function hasInputDeficit(summary: VenueRouteAttemptSummary): bigint | undefined {

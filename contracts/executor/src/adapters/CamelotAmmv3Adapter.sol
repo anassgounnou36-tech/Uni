@@ -65,6 +65,54 @@ contract CamelotAmmv3Adapter is ISettlementAdapter {
         );
     }
 
+    function executeExactOutputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24,
+        uint256 targetAmountOut,
+        uint256 maxAmountIn,
+        uint160 limitSqrtPriceX96,
+        address recipient
+    ) external returns (uint256 amountInUsed) {
+        _safeApprove(tokenIn, ROUTER, 0);
+        _safeApprove(tokenIn, ROUTER, maxAmountIn);
+        amountInUsed = ICamelotAmmv3Router(ROUTER).exactOutputSingle(
+            ICamelotAmmv3Router.ExactOutputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                recipient: recipient,
+                deadline: block.timestamp,
+                amountOut: targetAmountOut,
+                amountInMaximum: maxAmountIn,
+                limitSqrtPrice: limitSqrtPriceX96
+            })
+        );
+    }
+
+    function executeExactOutputPath(bytes calldata path, uint256 targetAmountOut, uint256 maxAmountIn, address recipient)
+        external
+        returns (uint256 amountInUsed)
+    {
+        if (path.length == 0) revert ExecutorErrors.BadRoute();
+        uint256 hops = ((path.length - 20) / 23);
+        if (hops == 0 || hops > 2 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
+        address tokenIn;
+        assembly {
+            tokenIn := shr(96, calldataload(path.offset))
+        }
+        _safeApprove(tokenIn, ROUTER, 0);
+        _safeApprove(tokenIn, ROUTER, maxAmountIn);
+        amountInUsed = ICamelotAmmv3Router(ROUTER).exactOutput(
+            ICamelotAmmv3Router.ExactOutputParams({
+                path: path,
+                recipient: recipient,
+                deadline: block.timestamp,
+                amountOut: targetAmountOut,
+                amountInMaximum: maxAmountIn
+            })
+        );
+    }
+
     function _safeApprove(address token, address spender, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20Camelot.approve, (spender, amount)));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {

@@ -29,6 +29,27 @@ interface ISwapRouter02 {
     }
 
     function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
+
+    struct ExactOutputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24 fee;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
+
+    struct ExactOutputParams {
+        bytes path;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+    }
+
+    function exactOutput(ExactOutputParams calldata params) external payable returns (uint256 amountIn);
 }
 
 contract UniV3SwapRouter02Adapter is ISettlementAdapter {
@@ -83,6 +104,53 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
                 recipient: recipient,
                 amountIn: amountIn,
                 amountOutMinimum: minAmountOut
+            })
+        );
+    }
+
+    function executeExactOutputSingle(
+        address tokenIn,
+        address tokenOut,
+        uint24 poolFee,
+        uint256 targetAmountOut,
+        uint256 maxAmountIn,
+        uint160 limitSqrtPriceX96,
+        address recipient
+    ) external returns (uint256 amountInUsed) {
+        _safeApprove(tokenIn, ROUTER, 0);
+        _safeApprove(tokenIn, ROUTER, maxAmountIn);
+        amountInUsed = ISwapRouter02(ROUTER).exactOutputSingle(
+            ISwapRouter02.ExactOutputSingleParams({
+                tokenIn: tokenIn,
+                tokenOut: tokenOut,
+                fee: poolFee,
+                recipient: recipient,
+                amountOut: targetAmountOut,
+                amountInMaximum: maxAmountIn,
+                sqrtPriceLimitX96: limitSqrtPriceX96
+            })
+        );
+    }
+
+    function executeExactOutputPath(bytes calldata path, uint256 targetAmountOut, uint256 maxAmountIn, address recipient)
+        external
+        returns (uint256 amountInUsed)
+    {
+        if (path.length == 0) revert ExecutorErrors.BadRoute();
+        uint256 hops = ((path.length - 20) / 23);
+        if (hops == 0 || hops > 2 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
+        address tokenIn;
+        assembly {
+            tokenIn := shr(96, calldataload(path.offset))
+        }
+        _safeApprove(tokenIn, ROUTER, 0);
+        _safeApprove(tokenIn, ROUTER, maxAmountIn);
+        amountInUsed = ISwapRouter02(ROUTER).exactOutput(
+            ISwapRouter02.ExactOutputParams({
+                path: path,
+                recipient: recipient,
+                amountOut: targetAmountOut,
+                amountInMaximum: maxAmountIn
             })
         );
     }
