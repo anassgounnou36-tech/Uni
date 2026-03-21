@@ -43,6 +43,8 @@ describe('replay runner', () => {
           ok: true,
           chosenRoute: {
             venue: 'UNISWAP_V3',
+            pathKind: 'DIRECT',
+            hopCount: 1,
             tokenIn: resolvedOrder.input.token,
             tokenOut: resolvedOrder.outputs[0]!.token,
             amountIn: resolvedOrder.input.amount,
@@ -191,6 +193,8 @@ describe('replay runner', () => {
         ok: true,
         chosenRoute: {
           venue: 'UNISWAP_V3',
+          pathKind: 'DIRECT',
+          hopCount: 1,
           tokenIn: corpus[0]!.decodedOrder.order.baseInput.token,
           tokenOut: corpus[0]!.decodedOrder.order.baseOutputs[0]!.token,
           amountIn: 1n,
@@ -215,6 +219,8 @@ describe('replay runner', () => {
         ok: true,
         chosenRoute: {
           venue: 'CAMELOT_AMMV3',
+          pathKind: 'DIRECT',
+          hopCount: 1,
           tokenIn: corpus[0]!.decodedOrder.order.baseInput.token,
           tokenOut: corpus[0]!.decodedOrder.order.baseOutputs[0]!.token,
           amountIn: 1n,

@@ -4,12 +4,17 @@ pragma solidity ^0.8.24;
 library ExecutorTypes {
     uint8 internal constant VENUE_UNISWAP_V3 = 0;
     uint8 internal constant VENUE_CAMELOT_AMMV3 = 1;
+    uint8 internal constant PATH_KIND_DIRECT = 0;
+    uint8 internal constant PATH_KIND_TWO_HOP = 1;
 
     struct RoutePlan {
         uint8 venue;
+        uint8 pathKind;
+        uint8 hopCount;
         address tokenIn;
         address tokenOut;
         uint24 uniPoolFee;
+        bytes encodedPath;
         uint160 limitSqrtPriceX96;
         uint256 minAmountOut;
     }

@@ -1,3 +1,6 @@
+import type { Address } from 'viem';
+import type { RoutePathKind } from './pathTypes.js';
+
 export type ExactOutputViabilityStatus =
   | 'SATISFIABLE'
   | 'UNSATISFIABLE'
@@ -13,5 +16,9 @@ export type ExactOutputViability = {
   inputDeficit?: bigint;
   inputSlack?: bigint;
   checkedFeeTier?: number;
+  pathKind?: RoutePathKind;
+  hopCount?: 1 | 2;
+  bridgeToken?: Address;
+  pathDescriptor?: string;
   reason: string;
 };

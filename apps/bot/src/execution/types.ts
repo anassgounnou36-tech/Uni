@@ -27,6 +27,8 @@ export type ExecutionPlan = {
   conditionalEnvelope: ConditionalEnvelope;
   requiredOutputOut: bigint;
   predictedNetEdgeOut: bigint;
+  selectedPathKind: HedgeRoutePlan['pathKind'];
+  selectedHopCount: HedgeRoutePlan['hopCount'];
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
 };

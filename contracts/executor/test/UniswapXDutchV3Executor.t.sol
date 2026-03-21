@@ -40,6 +40,7 @@ contract MockERC20 {
 contract MockSettlementAdapter {
     uint256 public amountOut;
     uint24 public lastPoolFee;
+    bytes public lastPath;
 
     function setAmountOut(uint256 amountOut_) external {
         amountOut = amountOut_;
@@ -56,6 +57,22 @@ contract MockSettlementAdapter {
     ) external returns (uint256) {
         lastPoolFee = poolFee;
         if (amountOut < minAmountOut) return amountOut;
+        MockERC20(tokenOut).mint(recipient, amountOut);
+        return amountOut;
+    }
+
+    function executeExactInputPath(bytes calldata path, uint256, uint256 minAmountOut, address recipient)
+        external
+        returns (uint256)
+    {
+        lastPath = path;
+        if (amountOut < minAmountOut) return amountOut;
+        address tokenOut;
+        uint256 len = path.length;
+        // Load the final 20-byte token address from the encoded path.
+        assembly {
+            tokenOut := shr(96, calldataload(add(path.offset, sub(len, 20))))
+        }
         MockERC20(tokenOut).mint(recipient, amountOut);
         return amountOut;
     }
@@ -83,6 +100,26 @@ contract MockSwapRouter02 {
             return amountOut;
         }
         MockERC20(params.tokenOut).mint(params.recipient, amountOut);
+        return amountOut;
+    }
+
+    struct ExactInputParams {
+        bytes path;
+        address recipient;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+    }
+
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256) {
+        if (amountOut < params.amountOutMinimum) {
+            return amountOut;
+        }
+        address tokenOut;
+        uint256 len = params.path.length;
+        assembly {
+            tokenOut := shr(96, mload(add(add(params.path, 32), sub(len, 20))))
+        }
+        MockERC20(tokenOut).mint(params.recipient, amountOut);
         return amountOut;
     }
 }
@@ -272,9 +309,12 @@ contract UniswapXDutchV3ExecutorTest {
             abi.encode(
                 ExecutorTypes.RoutePlan({
                     venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
+                    pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                    hopCount: 1,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
+                    encodedPath: "",
                     limitSqrtPriceX96: 0,
                     minAmountOut: 1e18
                 })
@@ -302,6 +342,61 @@ contract UniswapXDutchV3ExecutorTest {
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
 
         require(uniAdapter.lastPoolFee() == 500, "uniswap adapter not used");
+    }
+
+    function testExecutorDispatchesTwoHopPathToCorrectAdapter() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountOut(12e6);
+        camelotAdapter.setAmountOut(1);
+        vm.prank(REACTOR);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
+                    hopCount: 2,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 0,
+                    encodedPath: abi.encodePacked(address(tokenIn), bytes3(uint24(500)), address(0x1234), bytes3(uint24(3000)), address(tokenOut)),
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 9e6
+                })
+            )
+        );
+        require(uniAdapter.lastPath().length > 0, "path not dispatched to uni adapter");
+    }
+
+    function testBoundedPathValidationRejectsMoreThanTwoHops() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountOut(12e6);
+        vm.prank(REACTOR);
+        vm.expectRevert(ExecutorErrors.BadRoute.selector);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
+                    hopCount: 3,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 0,
+                    encodedPath: abi.encodePacked(
+                        address(tokenIn),
+                        bytes3(uint24(500)),
+                        address(0x1234),
+                        bytes3(uint24(500)),
+                        address(0x5678),
+                        bytes3(uint24(500)),
+                        address(tokenOut)
+                    ),
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 9e6
+                })
+            )
+        );
     }
 
     function testInsufficientOutputReverts() public {
@@ -422,9 +517,12 @@ contract UniswapXDutchV3ExecutorTest {
         return abi.encode(
             ExecutorTypes.RoutePlan({
                 venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                hopCount: 1,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
                 uniPoolFee: 500,
+                encodedPath: "",
                 limitSqrtPriceX96: 0,
                 minAmountOut: minAmountOut
             })
@@ -435,9 +533,12 @@ contract UniswapXDutchV3ExecutorTest {
         return abi.encode(
             ExecutorTypes.RoutePlan({
                 venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
+                pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                hopCount: 1,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
                 uniPoolFee: 0,
+                encodedPath: "",
                 limitSqrtPriceX96: 0,
                 minAmountOut: minAmountOut
             })

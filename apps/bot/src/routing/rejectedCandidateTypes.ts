@@ -36,7 +36,13 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
   }
   if (
     summary.constraintReason === 'REQUIRED_OUTPUT'
-    && summary.exactOutputViability?.status === 'UNSATISFIABLE'
+    && (
+      summary.exactOutputViability?.status === 'UNSATISFIABLE'
+      || (
+        summary.exactOutputViability?.status === 'SATISFIABLE'
+        && (summary.hedgeGap?.requiredOutputShortfallOut ?? summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n) > 0n
+      )
+    )
   ) {
     return 'LIQUIDITY_BLOCKED';
   }

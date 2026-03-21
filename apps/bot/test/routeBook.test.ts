@@ -7,6 +7,8 @@ import type { ConstraintBreakdown } from '../src/routing/constraintTypes.js';
 function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
   return {
     venue,
+    pathKind: 'DIRECT',
+    hopCount: 1,
     tokenIn: '0x0000000000000000000000000000000000000001',
     tokenOut: '0x0000000000000000000000000000000000000002',
     amountIn: 1_000n,
@@ -62,6 +64,41 @@ function constraintBreakdown(overrides: Partial<ConstraintBreakdown> = {}): Cons
 }
 
 describe('RouteBook', () => {
+  it('routebook_can_choose_two_hop_over_direct_when_better', async () => {
+    const twoHop = makeRoute('UNISWAP_V3', {
+      pathKind: 'TWO_HOP',
+      hopCount: 2,
+      bridgeToken: '0x000000000000000000000000000000000000000b',
+      encodedPath: '0x01',
+      netEdgeOut: 25n
+    });
+    const direct = makeRoute('CAMELOT_AMMV3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 10n });
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: twoHop,
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', { netEdgeOut: 25n, pathKind: 'TWO_HOP', hopCount: 2 })
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: direct,
+          summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 10n, pathKind: 'DIRECT', hopCount: 1 })
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: twoHop.tokenIn, amount: 1_000n }, outputs: [{ token: twoHop.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.pathKind).toBe('TWO_HOP');
+    expect(selected.chosenRoute.hopCount).toBe(2);
+  });
+
   it('routeBookChoosesHigherNetEdgeVenue', async () => {
     const routeBook = new RouteBook({
       uniswapV3: {

@@ -18,9 +18,11 @@ export type CamelotRoutePlanningResult =
 
 export class CamelotAmmv3RoutePlanner {
   private readonly quoter: CamelotAmmv3Quoter;
+  private readonly bridgeTokens: readonly Address[];
 
   constructor(context: CamelotAmmv3QuoterContext) {
     this.quoter = new CamelotAmmv3Quoter(context);
+    this.bridgeTokens = context.bridgeTokens ?? [];
   }
 
   async planBestRoute(input: RoutePlannerInput): Promise<CamelotRoutePlanningResult> {
@@ -70,27 +72,68 @@ export class CamelotAmmv3RoutePlanner {
       };
     }
 
-    const quote = await this.quoter.quoteExactInputSingle({
+    const directQuote = await this.quoter.quoteExactInputSingle({
       tokenIn: tokenIn as Address,
       tokenOut: tokenOut as Address,
       amountIn: resolvedOrder.input.amount,
       outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
       policy: input.policy
     });
-    if (!quote.ok) {
+    const bridgeTokens = input.policy?.bridgeTokens ?? this.bridgeTokens;
+    const bridgeQuotes = await Promise.all(
+      bridgeTokens
+        .filter((bridge) => bridge.toLowerCase() !== tokenIn.toLowerCase() && bridge.toLowerCase() !== tokenOut.toLowerCase())
+        .map((bridgeToken) => this.quoter.quoteExactInputPath({
+          tokenIn: tokenIn as Address,
+          tokenOut: tokenOut as Address,
+          bridgeToken,
+          amountIn: resolvedOrder.input.amount,
+          outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
+          policy: input.policy
+        }))
+    );
+    const routeable = [directQuote, ...bridgeQuotes].filter((quote): quote is Extract<typeof quote, { ok: true }> => quote.ok);
+    if (routeable.length > 0) {
+      const best = [...routeable].sort((a, b) => (a.route.netEdgeOut > b.route.netEdgeOut ? -1 : a.route.netEdgeOut < b.route.netEdgeOut ? 1 : 0))[0]!;
+      return { ok: true, route: best.route, summary: best.summary };
+    }
+    const rejected = [directQuote, ...bridgeQuotes]
+      .filter((quote): quote is Extract<typeof quote, { ok: false }> => !quote.ok)
+      .sort((a, b) => {
+        if (a.summary.candidateClass !== b.summary.candidateClass) {
+          if (a.summary.candidateClass === 'POLICY_BLOCKED') return -1;
+          if (b.summary.candidateClass === 'POLICY_BLOCKED') return 1;
+        }
+        const aOut = a.summary.quotedAmountOut ?? 0n;
+        const bOut = b.summary.quotedAmountOut ?? 0n;
+        if (aOut !== bOut) return aOut > bOut ? -1 : 1;
+        return 0;
+      })[0];
+    if (!rejected) {
       return {
         ok: false,
         failure: {
-          reason: quote.reason,
-          details: quote.details,
+          reason: 'NOT_ROUTEABLE',
+          details: 'no camelot route candidates',
           summary: {
-            ...quote.summary,
-            candidateClass: quote.summary.candidateClass ?? deriveRejectedCandidateClass(quote.summary)
+            venue: 'CAMELOT_AMMV3',
+            status: 'NOT_ROUTEABLE',
+            reason: 'POOL_MISSING',
+            candidateClass: 'ROUTE_MISSING'
           }
         }
       };
     }
-
-    return { ok: true, route: quote.route, summary: quote.summary };
+    return {
+      ok: false,
+      failure: {
+        reason: rejected.reason,
+        details: rejected.details,
+        summary: {
+          ...rejected.summary,
+          candidateClass: rejected.summary.candidateClass ?? deriveRejectedCandidateClass(rejected.summary)
+        }
+      }
+    };
   }
 }
