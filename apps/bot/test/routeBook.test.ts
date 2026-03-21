@@ -823,6 +823,89 @@ describe('RouteBook', () => {
     expect(selected.bestRejectedSummary?.candidateClass).toBe('POLICY_BLOCKED');
   });
 
+  it('bestRejected_prefers_near_miss_uniswap_liquidity_blocked_over_quote_failed_huge_gap_camelot', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'CONSTRAINT_REJECTED' as const,
+            summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+              reason: 'REQUIRED_OUTPUT',
+              constraintReason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 896n,
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 896n,
+                outputCoverageBps: 9_955n,
+                requiredOutputShortfallOut: 4n,
+                minAmountOutShortfallOut: 5n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                gapClass: 'SMALL',
+                nearMiss: true,
+                nearMissBps: 25n
+              },
+              exactOutputViability: {
+                status: 'UNSATISFIABLE',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 1_001n,
+                availableInput: 1_000n,
+                inputDeficit: 1n,
+                inputSlack: 0n,
+                reason: 'required output unsatisfiable'
+              }
+            })
+          }
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'QUOTE_FAILED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'QUOTE_FAILED', {
+              reason: 'QUOTE_CALL_FAILED',
+              constraintReason: 'REQUIRED_OUTPUT',
+              quotedAmountOut: 500n,
+              exactOutputViability: {
+                status: 'QUOTE_FAILED',
+                targetOutput: 900n,
+                requiredInputForTargetOutput: 0n,
+                availableInput: 1_000n,
+                reason: 'exact-output quote failed'
+              },
+              hedgeGap: {
+                requiredOutput: 900n,
+                quotedAmountOut: 500n,
+                outputCoverageBps: 5_555n,
+                requiredOutputShortfallOut: 400n,
+                inputDeficit: 0n,
+                inputSlack: 0n,
+                gapClass: 'HUGE',
+                nearMiss: false,
+                nearMissBps: 25n
+              }
+            })
+          }
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.bestRejectedSummary?.venue).toBe('UNISWAP_V3');
+    expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
+  });
+
   it('bestRejected_liquidity_blocked_prefers_smaller_input_deficit', async () => {
     const routeBook = new RouteBook({
       uniswapV3: {

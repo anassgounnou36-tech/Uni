@@ -2,9 +2,9 @@ import type { RoutePlannerInput } from './univ3/types.js';
 import type { UniV3RoutePlanner } from './univ3/routePlanner.js';
 import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
-import type { VenueRouteAttemptSummary } from './attemptTypes.js';
+import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
-import { deriveRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
+import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -52,14 +52,11 @@ function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
 }
 
-function ensureCandidateClass(summary: VenueRouteAttemptSummary): VenueRouteAttemptSummary {
-  if (summary.status === 'ROUTEABLE' || summary.candidateClass) {
-    return summary;
+function ensureCandidateClass(summary: RejectedVenueRouteAttemptSummary | VenueRouteAttemptSummary): RejectedVenueRouteAttemptSummary {
+  if (summary.status === 'ROUTEABLE') {
+    throw new Error('routeBook ensureCandidateClass received ROUTEABLE summary');
   }
-  return {
-    ...summary,
-    candidateClass: deriveRejectedCandidateClass(summary)
-  };
+  return ensureRejectedCandidateClass(summary) as RejectedVenueRouteAttemptSummary;
 }
 
 function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandidateSummary['reason'] {
@@ -106,13 +103,17 @@ function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): 
 
 function isHugeGapNonNearMiss(summary: VenueRouteAttemptSummary): boolean {
   return summary.hedgeGap?.gapClass === 'HUGE'
-    && !(summary.hedgeGap?.nearMiss ?? summary.constraintBreakdown?.nearMiss ?? false)
+    && !hasNearMiss(summary)
     && summary.constraintReason === 'REQUIRED_OUTPUT';
+}
+
+function hasNearMiss(summary: VenueRouteAttemptSummary): boolean {
+  return summary.hedgeGap?.nearMiss ?? summary.constraintBreakdown?.nearMiss ?? false;
 }
 
 function isActionablePolicyBlocked(summary: VenueRouteAttemptSummary): boolean {
   return (summary.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED'
-    && (summary.constraintBreakdown?.nearMiss ?? summary.hedgeGap?.nearMiss ?? false);
+    && hasNearMiss(summary);
 }
 
 function hasInputDeficit(summary: VenueRouteAttemptSummary): bigint | undefined {
@@ -132,8 +133,8 @@ function hasFloorShortfall(summary: VenueRouteAttemptSummary): bigint | undefine
 }
 
 function comparePolicyBlocked(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
-  const aNearMiss = a.constraintBreakdown?.nearMiss ?? a.hedgeGap?.nearMiss ?? false;
-  const bNearMiss = b.constraintBreakdown?.nearMiss ?? b.hedgeGap?.nearMiss ?? false;
+  const aNearMiss = hasNearMiss(a);
+  const bNearMiss = hasNearMiss(b);
   if (aNearMiss !== bNearMiss) return aNearMiss ? -1 : 1;
   const aFloorShortfall = hasFloorShortfall(a);
   const bFloorShortfall = hasFloorShortfall(b);
@@ -180,13 +181,15 @@ function compareLiquidityBlocked(a: VenueRouteAttemptSummary, b: VenueRouteAttem
 }
 
 function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttemptSummary): number {
-  const aClassPriority = rejectedCandidateClassPriority(a.candidateClass ?? 'UNKNOWN');
-  const bClassPriority = rejectedCandidateClassPriority(b.candidateClass ?? 'UNKNOWN');
+  const aClass = a.candidateClass ?? 'UNKNOWN';
+  const bClass = b.candidateClass ?? 'UNKNOWN';
+  const aClassPriority = rejectedCandidateClassPriority(aClass);
+  const bClassPriority = rejectedCandidateClassPriority(bClass);
 
-  const aDisfavored = (a.candidateClass ?? 'UNKNOWN') === 'QUOTE_FAILED' || isHugeGapNonNearMiss(a);
-  const bDisfavored = (b.candidateClass ?? 'UNKNOWN') === 'QUOTE_FAILED' || isHugeGapNonNearMiss(b);
-  const aActionable = isActionablePolicyBlocked(a) || (a.candidateClass ?? 'UNKNOWN') === 'LIQUIDITY_BLOCKED';
-  const bActionable = isActionablePolicyBlocked(b) || (b.candidateClass ?? 'UNKNOWN') === 'LIQUIDITY_BLOCKED';
+  const aDisfavored = aClass === 'QUOTE_FAILED' || isHugeGapNonNearMiss(a);
+  const bDisfavored = bClass === 'QUOTE_FAILED' || isHugeGapNonNearMiss(b);
+  const aActionable = isActionablePolicyBlocked(a) || aClass === 'LIQUIDITY_BLOCKED';
+  const bActionable = isActionablePolicyBlocked(b) || bClass === 'LIQUIDITY_BLOCKED';
   if (aActionable !== bActionable) {
     return aActionable ? -1 : 1;
   }
@@ -198,12 +201,12 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
     return aClassPriority - bClassPriority;
   }
 
-  if ((a.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED' && (b.candidateClass ?? 'UNKNOWN') === 'POLICY_BLOCKED') {
+  if (aClass === 'POLICY_BLOCKED' && bClass === 'POLICY_BLOCKED') {
     const comparison = comparePolicyBlocked(a, b);
     if (comparison !== 0) return comparison;
   }
 
-  if ((a.candidateClass ?? 'UNKNOWN') === 'LIQUIDITY_BLOCKED' && (b.candidateClass ?? 'UNKNOWN') === 'LIQUIDITY_BLOCKED') {
+  if (aClass === 'LIQUIDITY_BLOCKED' && bClass === 'LIQUIDITY_BLOCKED') {
     const comparison = compareLiquidityBlocked(a, b);
     if (comparison !== 0) return comparison;
   }
@@ -303,7 +306,7 @@ export class RouteBook {
         eligible.push(uniswapResult.route);
       }
     } else {
-      const failureSummary = ensureCandidateClass(uniswapResult.failure.summary);
+      const failureSummary = ensureCandidateClass(uniswapResult.failure.summary as RejectedVenueRouteAttemptSummary);
       venueAttempts.push(failureSummary);
       alternatives.push({
         venue: 'UNISWAP_V3',
@@ -331,7 +334,7 @@ export class RouteBook {
           eligible.push(camelotResult.route);
         }
       } else {
-        const failureSummary = ensureCandidateClass(camelotResult.failure.summary);
+        const failureSummary = ensureCandidateClass(camelotResult.failure.summary as RejectedVenueRouteAttemptSummary);
         venueAttempts.push(failureSummary);
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
@@ -355,11 +358,11 @@ export class RouteBook {
         venue: 'CAMELOT_AMMV3',
         status: 'NOT_ROUTEABLE',
         reason: 'CAMELOT_DISABLED',
-        candidateClass: deriveRejectedCandidateClass({
+        candidateClass: ensureRejectedCandidateClass({
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'CAMELOT_DISABLED'
-        }),
+        }).candidateClass,
         exactOutputViability: {
           status: 'NOT_CHECKED',
           targetOutput: requiredOutput,
@@ -377,13 +380,13 @@ export class RouteBook {
 
     if (eligible.length === 0) {
       const rejectedCandidates = venueAttempts
-        .filter((attempt) => attempt.status !== 'ROUTEABLE')
+        .filter((attempt): attempt is RejectedVenueRouteAttemptSummary => attempt.status !== 'ROUTEABLE')
         .map((attempt) => ensureCandidateClass(attempt));
       const bestRejectedSummary = [...rejectedCandidates].sort(rejectedCandidateSort)[0];
       const bestRejectedWithClass = bestRejectedSummary
         ? {
             ...bestRejectedSummary,
-            candidateClass: bestRejectedSummary.candidateClass ?? deriveRejectedCandidateClass(bestRejectedSummary)
+            candidateClass: ensureCandidateClass(bestRejectedSummary).candidateClass
           }
         : undefined;
       const statuses = venueAttempts.map((attempt) => attempt.status);

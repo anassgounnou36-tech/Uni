@@ -2,8 +2,8 @@ import type { Address } from 'viem';
 import type { RoutePlannerInput } from '../univ3/types.js';
 import { CamelotAmmv3Quoter, type CamelotAmmv3QuoterContext } from './quoter.js';
 import type { HedgeRoutePlan } from '../venues.js';
-import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
-import { deriveRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
+import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from '../attemptTypes.js';
+import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
 
 export type CamelotRoutePlanningResult =
   | { ok: true; route: HedgeRoutePlan & { venue: 'CAMELOT_AMMV3' }; summary: VenueRouteAttemptSummary }
@@ -32,11 +32,11 @@ export class CamelotAmmv3RoutePlanner {
         venue: 'CAMELOT_AMMV3',
         status: 'NOT_ROUTEABLE',
         reason: 'ORDER_HAS_NO_OUTPUTS',
-        candidateClass: deriveRejectedCandidateClass({
+        candidateClass: ensureRejectedCandidateClass({
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'ORDER_HAS_NO_OUTPUTS'
-        })
+        }).candidateClass
       };
       return {
         ok: false,
@@ -56,11 +56,11 @@ export class CamelotAmmv3RoutePlanner {
         venue: 'CAMELOT_AMMV3',
         status: 'NOT_ROUTEABLE',
         reason: 'OUTPUT_TOKEN_MISMATCH',
-        candidateClass: deriveRejectedCandidateClass({
+        candidateClass: ensureRejectedCandidateClass({
           venue: 'CAMELOT_AMMV3',
           status: 'NOT_ROUTEABLE',
           reason: 'OUTPUT_TOKEN_MISMATCH'
-        })
+        }).candidateClass
       };
       return {
         ok: false,
@@ -101,10 +101,7 @@ export class CamelotAmmv3RoutePlanner {
       .filter((quote): quote is Extract<typeof quote, { ok: false }> => !quote.ok)
       .map((quote) => ({
         ...quote,
-        summary: {
-          ...quote.summary,
-          candidateClass: quote.summary.candidateClass ?? deriveRejectedCandidateClass(quote.summary)
-        }
+        summary: ensureRejectedCandidateClass(quote.summary as RejectedVenueRouteAttemptSummary)
       }))
       .sort((a, b) => {
         const aClassPriority = rejectedCandidateClassPriority(a.summary.candidateClass ?? 'UNKNOWN');
@@ -143,8 +140,7 @@ export class CamelotAmmv3RoutePlanner {
         reason: rejected.reason,
         details: rejected.details,
         summary: {
-          ...rejected.summary,
-          candidateClass: rejected.summary.candidateClass ?? deriveRejectedCandidateClass(rejected.summary)
+          ...ensureRejectedCandidateClass(rejected.summary as RejectedVenueRouteAttemptSummary)
         }
       }
     };

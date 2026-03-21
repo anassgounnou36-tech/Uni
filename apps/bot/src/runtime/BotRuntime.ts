@@ -24,7 +24,11 @@ import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
-import { deriveRejectedCandidateClass, type RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import {
+  deriveRejectedCandidateClass,
+  ensureRejectedCandidateClass,
+  type RejectedCandidateClass
+} from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 
 export type SchedulerContext = {
@@ -87,6 +91,13 @@ export class BotRuntime {
       ...summary,
       candidateClass: deriveRejectedCandidateClass(summary)
     };
+  }
+
+  private withDerivedRejectedCandidateClass(summary: VenueRouteAttemptSummary): VenueRouteAttemptSummary {
+    if (summary.status === 'ROUTEABLE') {
+      return summary;
+    }
+    return ensureRejectedCandidateClass(summary);
   }
 
   private getPolicyInflightCount(): number {
@@ -357,7 +368,7 @@ export class BotRuntime {
       };
     }>;
   } {
-    const withCandidateClass = this.withDerivedCandidateClass(summary);
+    const withCandidateClass = this.withDerivedRejectedCandidateClass(summary);
     return {
       venue: summary.venue,
       status: summary.status,
@@ -613,8 +624,11 @@ export class BotRuntime {
       });
       if (!scheduleResult.ok) {
         const bestRejectedSummary = scheduleResult.bestObservedEvaluation?.bestRejectedSummary
-          ? this.withDerivedCandidateClass(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
+          ? this.withDerivedRejectedCandidateClass(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
           : undefined;
+        const venueAttempts = scheduleResult.bestObservedEvaluation?.venueAttempts.map(
+          (attempt) => this.withDerivedRejectedCandidateClass(attempt)
+        );
         await this.deps.store.transition(orderHash, 'DROPPED', 'SCHEDULER_NO_EDGE');
         this.deps.metrics.increment('orders_dropped_total{reason="SCHEDULER_NO_EDGE"}');
         this.deps.metrics.increment('scheduler_no_edge_total');
@@ -688,7 +702,7 @@ export class BotRuntime {
           bestRejectedOutputCoverageBps: bestRejectedSummary?.hedgeGap?.outputCoverageBps.toString(),
           bestRejectedRequiredOutputShortfallOut: bestRejectedSummary?.hedgeGap?.requiredOutputShortfallOut.toString(),
           bestRejectedCheckedFeeTier: bestRejectedSummary?.exactOutputViability?.checkedFeeTier,
-          venueAttemptStatuses: scheduleResult.bestObservedEvaluation?.venueAttempts.map((attempt) => ({
+          venueAttemptStatuses: venueAttempts?.map((attempt) => ({
             venue: attempt.venue,
             status: attempt.status,
             reason: attempt.reason
@@ -712,7 +726,13 @@ export class BotRuntime {
                   };
                 })()
               : undefined,
-            evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation(evaluation))
+            evaluations: scheduleResult.evaluations.map((evaluation) => this.toCompactDroppedEvaluation({
+              ...evaluation,
+              venueAttempts: evaluation.venueAttempts.map((attempt) => this.withDerivedRejectedCandidateClass(attempt)),
+              bestRejectedSummary: evaluation.bestRejectedSummary
+                ? this.withDerivedRejectedCandidateClass(evaluation.bestRejectedSummary)
+                : undefined
+            }))
           }
         });
         continue;

@@ -1,6 +1,6 @@
 import type { ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
-import type { VenueRouteAttemptSummary } from './attemptTypes.js';
+import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 
 export type RejectedCandidateClass =
   | 'POLICY_BLOCKED'
@@ -40,8 +40,12 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
   const hasQuote = summary.quotedAmountOut !== undefined;
   const nearSatisfiable = summary.constraintBreakdown?.nearMiss ?? summary.hedgeGap?.nearMiss ?? false;
   const satisfiable = summary.exactOutputViability?.status === 'SATISFIABLE';
+  const hugeGapNonNearMiss = summary.constraintReason === 'REQUIRED_OUTPUT'
+    && summary.hedgeGap?.gapClass === 'HUGE'
+    && !(summary.hedgeGap?.nearMiss ?? summary.constraintBreakdown?.nearMiss ?? false);
   if (
     hasQuote
+    && !hugeGapNonNearMiss
     && (satisfiable || nearSatisfiable)
     && (
       summary.constraintReason === 'PROFITABILITY_FLOOR'
@@ -54,6 +58,7 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
     summary.constraintReason === 'REQUIRED_OUTPUT'
     && (
       (summary.hedgeGap?.requiredOutputShortfallOut ?? summary.constraintBreakdown?.requiredOutputShortfallOut ?? 0n) > 0n
+      // Missing exact-output viability here still indicates required-output miss context and should stay liquidity-blocked.
       || summary.exactOutputViability === undefined
       || summary.exactOutputViability?.status === 'UNSATISFIABLE'
       || summary.exactOutputViability?.status === 'QUOTE_FAILED'
@@ -69,6 +74,18 @@ export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary):
     return 'ROUTE_MISSING';
   }
   return 'UNKNOWN';
+}
+
+export function ensureRejectedCandidateClass<T extends RejectedVenueRouteAttemptSummary | VenueRouteAttemptSummary>(
+  summary: T
+): T & { candidateClass: RejectedCandidateClass } {
+  if (summary.status === 'ROUTEABLE') {
+    throw new Error('ensureRejectedCandidateClass cannot be used with ROUTEABLE summary');
+  }
+  return {
+    ...summary,
+    candidateClass: summary.candidateClass ?? deriveRejectedCandidateClass(summary)
+  };
 }
 
 /** @deprecated Use deriveRejectedCandidateClass(summary) instead. */

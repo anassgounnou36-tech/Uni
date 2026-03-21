@@ -8,7 +8,7 @@ const baseEnv = {
 } as const;
 
 describe('runtime config', () => {
-  it('normalizes config-derived addresses to checksum format', () => {
+  it('normalizes checksum addresses for executorAddress, bridgeTokens, and canaryAllowlistedPairs', () => {
     const config = loadRuntimeConfig({
       ...baseEnv,
       EXECUTOR_ADDRESS: '0x3333333333333333333333333333333333333333',

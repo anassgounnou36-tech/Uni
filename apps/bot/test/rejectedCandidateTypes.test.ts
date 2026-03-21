@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveRejectedCandidateClass } from '../src/routing/rejectedCandidateTypes.js';
+import { deriveRejectedCandidateClass, ensureRejectedCandidateClass } from '../src/routing/rejectedCandidateTypes.js';
 
 describe('deriveRejectedCandidateClass', () => {
   it('returns non-empty class for representative rejected summaries', () => {
@@ -133,5 +133,17 @@ describe('deriveRejectedCandidateClass', () => {
         }
       })
     ).toBe('LIQUIDITY_BLOCKED');
+  });
+
+  it('ensureRejectedCandidateClass always fills class for rejected summary', () => {
+    const withClass = ensureRejectedCandidateClass({
+      venue: 'UNISWAP_V3',
+      status: 'CONSTRAINT_REJECTED',
+      reason: 'REQUIRED_OUTPUT',
+      constraintReason: 'REQUIRED_OUTPUT',
+      candidateClass: undefined
+    });
+    expect(withClass.candidateClass).toBeDefined();
+    expect(withClass.candidateClass.length).toBeGreaterThan(0);
   });
 });

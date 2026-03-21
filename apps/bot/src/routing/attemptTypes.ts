@@ -14,6 +14,8 @@ export type RouteAttemptStatus =
   | 'GAS_NOT_PRICEABLE'
   | 'CONSTRAINT_REJECTED';
 
+export type RejectedRouteAttemptStatus = Exclude<RouteAttemptStatus, 'ROUTEABLE'>;
+
 export type FeeTierAttemptSummary = {
   feeTier: number;
   secondFeeTier?: number;
@@ -57,4 +59,14 @@ export type VenueRouteAttemptSummary = {
   exactOutputViability?: ExactOutputViability;
   hedgeGap?: HedgeGapSummary;
   candidateClass?: RejectedCandidateClass;
+};
+
+export type RejectedFeeTierAttemptSummary = FeeTierAttemptSummary & {
+  status: RejectedRouteAttemptStatus;
+  candidateClass: RejectedCandidateClass;
+};
+
+export type RejectedVenueRouteAttemptSummary = VenueRouteAttemptSummary & {
+  status: RejectedRouteAttemptStatus;
+  candidateClass: RejectedCandidateClass;
 };
