@@ -144,6 +144,13 @@ const MOCK_CAMELOT_ROUTER_ABI = [
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'uint256' }]
+  },
+  {
+    type: 'function',
+    name: 'lastPath',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'bytes' }]
   }
 ] as const;
 
@@ -232,6 +239,7 @@ interface IMintableToken {
 contract MockSwapRouter02ForExecutorFlow {
   uint256 public amountOut;
   uint256 public swapCalls;
+  bytes public lastPath;
 
   struct ExactInputSingleParams {
     address tokenIn;
@@ -241,6 +249,13 @@ contract MockSwapRouter02ForExecutorFlow {
     uint256 amountIn;
     uint256 amountOutMinimum;
     uint160 sqrtPriceLimitX96;
+  }
+
+  struct ExactInputParams {
+    bytes path;
+    address recipient;
+    uint256 amountIn;
+    uint256 amountOutMinimum;
   }
 
   function setAmountOut(uint256 value) external {
@@ -257,6 +272,23 @@ contract MockSwapRouter02ForExecutorFlow {
     }
     return amountOut;
   }
+
+  function exactInput(ExactInputParams calldata params) external payable returns (uint256) {
+    swapCalls += 1;
+    lastPath = params.path;
+    if (amountOut < params.amountOutMinimum) {
+      return amountOut;
+    }
+    if (amountOut > 0) {
+      address tokenOut;
+      uint256 len = params.path.length;
+      assembly {
+        tokenOut := shr(96, mload(add(add(params.path, 32), sub(len, 20))))
+      }
+      IMintableToken(tokenOut).mint(params.recipient, amountOut);
+    }
+    return amountOut;
+  }
 }`
   };
   sources['MockCamelotAmmv3RouterForExecutorFlow.sol'] = {
@@ -270,6 +302,7 @@ interface IMintableToken {
 contract MockCamelotAmmv3RouterForExecutorFlow {
   uint256 public amountOut;
   uint256 public swapCalls;
+  bytes public lastPath;
 
   struct ExactInputSingleParams {
     address tokenIn;
@@ -279,6 +312,14 @@ contract MockCamelotAmmv3RouterForExecutorFlow {
     uint256 amountIn;
     uint256 amountOutMinimum;
     uint160 limitSqrtPrice;
+  }
+
+  struct ExactInputParams {
+    bytes path;
+    address recipient;
+    uint256 deadline;
+    uint256 amountIn;
+    uint256 amountOutMinimum;
   }
 
   function setAmountOut(uint256 value) external {
@@ -292,6 +333,23 @@ contract MockCamelotAmmv3RouterForExecutorFlow {
     }
     if (amountOut > 0) {
       IMintableToken(params.tokenOut).mint(params.recipient, amountOut);
+    }
+    return amountOut;
+  }
+
+  function exactInput(ExactInputParams calldata params) external payable returns (uint256) {
+    swapCalls += 1;
+    lastPath = params.path;
+    if (amountOut < params.amountOutMinimum) {
+      return amountOut;
+    }
+    if (amountOut > 0) {
+      address tokenOut;
+      uint256 len = params.path.length;
+      assembly {
+        tokenOut := shr(96, mload(add(add(params.path, 32), sub(len, 20))))
+      }
+      IMintableToken(tokenOut).mint(params.recipient, amountOut);
     }
     return amountOut;
   }
@@ -1351,5 +1409,182 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     const sendObservation = await sequencerClient.sendPreparedExecution(prepared);
     expect(sendObservation.records[0]?.serializedTransaction).toEqual(prepared.serializedTransaction);
     expect(sendObservation.records[0]?.serializedTransaction).toEqual(simResult.serializedTransaction);
+  });
+
+  it('bot_side_prepared_execution_sim_for_two_hop_candidate_uses_real_adapter_path', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const { fixture, decoded } = loadSigned();
+    const {
+      mockCamelotRouterAddress,
+      mockReactorAddress,
+      executorAddress
+    } = await deployRealExecutorStack(clients);
+
+    const bridgeToken = '0x00000000000000000000000000000000000000b0' as const;
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => ({
+        ok: true,
+        chosenRoute: {
+          venue: 'CAMELOT_AMMV3',
+          pathKind: 'TWO_HOP',
+          hopCount: 2,
+          bridgeToken,
+          encodedPath: encodePacked(
+            ['address', 'bytes3', 'address', 'bytes3', 'address'],
+            [
+              resolvedOrder.input.token,
+              '0x000000',
+              bridgeToken,
+              '0x000000',
+              resolvedOrder.outputs[0]!.token
+            ]
+          ),
+          tokenIn: resolvedOrder.input.token,
+          tokenOut: resolvedOrder.outputs[0]!.token,
+          amountIn: resolvedOrder.input.amount,
+          requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
+          minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          limitSqrtPriceX96: 0n,
+          slippageBufferOut: 0n,
+          gasCostOut: 0n,
+          riskBufferOut: 0n,
+          profitFloorOut: 0n,
+          grossEdgeOut: 10n,
+          netEdgeOut: 10n,
+          quoteMetadata: { venue: 'CAMELOT_AMMV3', observedFee: 30 }
+        },
+        alternativeRoutes: [{ venue: 'CAMELOT_AMMV3', eligible: true, netEdgeOut: 10n, pathKind: 'TWO_HOP', hopCount: 2, bridgeToken }]
+      })
+    } as RouteBook;
+
+    const planResult = await buildExecutionPlan({
+      normalizedOrder: {
+        orderHash: '0x3efd647626a32590eff1daa3d028ebcbd9553dbe2a144c50980cdcffc60a9c92',
+        orderType: 'Dutch_V3',
+        encodedOrder: fixture.encodedOrder,
+        signature: fixture.signature,
+        decodedOrder: decoded,
+        reactor: mockReactorAddress
+      },
+      routeBook,
+      executor: executorAddress,
+      blockNumberish: 1000n,
+      resolveEnv: {
+        timestamp: 1_900_000_000n,
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n }
+    });
+    expect(planResult.ok).toEqual(true);
+    if (!planResult.ok) return;
+    expect(planResult.plan.route.pathKind).toEqual('TWO_HOP');
+    expect(planResult.plan.selectedHopCount).toEqual(2);
+
+    await sendContractCall(
+      clients,
+      mockCamelotRouterAddress,
+      encodeFunctionData({
+        abi: MOCK_CAMELOT_ROUTER_ABI,
+        functionName: 'setAmountOut',
+        args: [0n]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'clearConfiguredResolvedOrders',
+        args: []
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'setShouldCallback',
+        args: [true]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'pushConfiguredResolvedOrder',
+        args: [
+          {
+            info: {
+              reactor: mockReactorAddress,
+              swapper: clients.sender,
+              nonce: 1n,
+              deadline: 2n ** 255n,
+              additionalValidationContract: '0x0000000000000000000000000000000000000000',
+              additionalValidationData: '0x'
+            },
+            input: {
+              token: planResult.plan.route.tokenIn,
+              amount: 0n,
+              maxAmount: 0n
+            },
+            outputs: [
+              {
+                token: planResult.plan.route.tokenOut,
+                amount: 0n,
+                recipient: clients.sender
+              }
+            ],
+            sig: '0x',
+            hash: '0x0000000000000000000000000000000000000000000000000000000000000000'
+          }
+        ]
+      })
+    );
+
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async (address) => BigInt(await clients.publicClient.getTransactionCount({ address, blockTag: 'pending' }))
+    });
+    const prepared = await prepareExecution({
+      executionPlan: planResult.plan,
+      account: clients.sender,
+      nonceManager,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      txPolicy: {
+        gasHeadroomBps: 100n,
+        maxGasCeiling: 2_000_000n
+      },
+      conditionalPolicy: {
+        currentL2TimestampSec: 1_900_000_000n,
+        scheduledWindowBlocks: 2n,
+        avgBlockTimeSec: 1n,
+        maxStalenessSec: 10n
+      }
+    });
+    const sim = new ForkSimService({ clients });
+    const simResult = await sim.simulatePrepared(prepared);
+    expect(simResult.ok).toEqual(true);
+
+    const camelotSwapCalls = await clients.publicClient.readContract({
+      address: mockCamelotRouterAddress,
+      abi: MOCK_CAMELOT_ROUTER_ABI,
+      functionName: 'swapCalls'
+    });
+    expect(camelotSwapCalls).toEqual(1n);
+    const lastPath = await clients.publicClient.readContract({
+      address: mockCamelotRouterAddress,
+      abi: MOCK_CAMELOT_ROUTER_ABI,
+      functionName: 'lastPath'
+    });
+    expect(typeof lastPath).toEqual('string');
+    expect((lastPath as string).startsWith('0x')).toEqual(true);
+    expect((lastPath as string).length).toBeGreaterThan(2);
   });
 });

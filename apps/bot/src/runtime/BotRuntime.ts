@@ -24,6 +24,7 @@ import type { FeeTierAttemptSummary, VenueRouteAttemptSummary } from '../routing
 import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
+import type { RoutePathKind } from '../routing/pathTypes.js';
 import {
   deriveRejectedCandidateClass,
   ensureRejectedCandidateClass,
@@ -106,6 +107,11 @@ export class BotRuntime {
 
   private toJournalFeeTierAttempt(summary: FeeTierAttemptSummary): {
     feeTier: number;
+    secondFeeTier?: number;
+    pathKind?: RoutePathKind;
+    hopCount?: 1 | 2;
+    bridgeToken?: string;
+    pathDescriptor?: string;
     poolExists: boolean;
     quoteSucceeded: boolean;
     quotedAmountOut?: string;
@@ -140,9 +146,17 @@ export class BotRuntime {
       inputDeficit?: string;
       inputSlack?: string;
       checkedFeeTier?: number;
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: string;
+      pathDescriptor?: string;
       reason: string;
     };
     hedgeGap?: {
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: string;
+      pathDescriptor?: string;
       requiredOutput: string;
       quotedAmountOut: string;
       outputCoverageBps: string;
@@ -168,6 +182,11 @@ export class BotRuntime {
     });
     return {
       feeTier: summary.feeTier,
+      secondFeeTier: summary.secondFeeTier,
+      pathKind: summary.pathKind,
+      hopCount: summary.hopCount,
+      bridgeToken: summary.bridgeToken,
+      pathDescriptor: summary.pathDescriptor,
       poolExists: summary.poolExists,
       quoteSucceeded: summary.quoteSucceeded,
       quotedAmountOut: summary.quotedAmountOut?.toString(),
@@ -192,6 +211,10 @@ export class BotRuntime {
     inputDeficit?: string;
     inputSlack?: string;
     checkedFeeTier?: number;
+    pathKind?: RoutePathKind;
+    hopCount?: 1 | 2;
+    bridgeToken?: string;
+    pathDescriptor?: string;
     reason: string;
   } {
     return {
@@ -202,11 +225,19 @@ export class BotRuntime {
       inputDeficit: viability.inputDeficit?.toString(),
       inputSlack: viability.inputSlack?.toString(),
       checkedFeeTier: viability.checkedFeeTier,
+      pathKind: viability.pathKind,
+      hopCount: viability.hopCount,
+      bridgeToken: viability.bridgeToken,
+      pathDescriptor: viability.pathDescriptor,
       reason: viability.reason
     };
   }
 
   private toJournalHedgeGap(summary: HedgeGapSummary): {
+    pathKind?: RoutePathKind;
+    hopCount?: 1 | 2;
+    bridgeToken?: string;
+    pathDescriptor?: string;
     requiredOutput: string;
     quotedAmountOut: string;
     outputCoverageBps: string;
@@ -219,6 +250,10 @@ export class BotRuntime {
     nearMissBps: string;
   } {
     return {
+      pathKind: summary.pathKind,
+      hopCount: summary.hopCount,
+      bridgeToken: summary.bridgeToken,
+      pathDescriptor: summary.pathDescriptor,
       requiredOutput: summary.requiredOutput.toString(),
       quotedAmountOut: summary.quotedAmountOut.toString(),
       outputCoverageBps: summary.outputCoverageBps.toString(),
@@ -268,6 +303,10 @@ export class BotRuntime {
 
   private toJournalVenueAttempt(summary: VenueRouteAttemptSummary): {
     venue: string;
+    pathKind?: RoutePathKind;
+    hopCount?: 1 | 2;
+    bridgeToken?: string;
+    pathDescriptor?: string;
     status: string;
     reason: string;
     quotedAmountOut?: string;
@@ -352,9 +391,17 @@ export class BotRuntime {
         inputDeficit?: string;
         inputSlack?: string;
         checkedFeeTier?: number;
+        pathKind?: RoutePathKind;
+        hopCount?: 1 | 2;
+        bridgeToken?: string;
+        pathDescriptor?: string;
         reason: string;
       };
       hedgeGap?: {
+        pathKind?: RoutePathKind;
+        hopCount?: 1 | 2;
+        bridgeToken?: string;
+        pathDescriptor?: string;
         requiredOutput: string;
         quotedAmountOut: string;
         outputCoverageBps: string;
@@ -371,6 +418,10 @@ export class BotRuntime {
     const withCandidateClass = this.withDerivedRejectedCandidateClass(summary);
     return {
       venue: summary.venue,
+      pathKind: summary.pathKind,
+      hopCount: summary.hopCount,
+      bridgeToken: summary.bridgeToken,
+      pathDescriptor: summary.pathDescriptor,
       status: summary.status,
       reason: summary.reason,
       quotedAmountOut: summary.quotedAmountOut?.toString(),
@@ -402,6 +453,10 @@ export class BotRuntime {
     netEdgeOut: string;
     venueAttempts: Array<{
       venue: string;
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: string;
+      pathDescriptor?: string;
       status: string;
       reason: string;
       quotedAmountOut?: string;
