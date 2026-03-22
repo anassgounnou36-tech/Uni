@@ -933,9 +933,9 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       schedulerRouteBook: routeBookWithNetEdge(30n),
       executionPreparer: async () => {
         prepareCalls += 1;
-        const prepareError = new Error('failed to prepare execution payload');
-        prepareError.name = 'PrepareExecutionError';
-        throw prepareError;
+        const error = new Error('failed to prepare execution payload');
+        error.name = 'PrepareExecutionError';
+        throw error;
       }
     });
 
