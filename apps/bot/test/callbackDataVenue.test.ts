@@ -21,6 +21,7 @@ describe('venue-aware callback data', () => {
       executionMode: 'EXACT_INPUT',
       pathKind: 'DIRECT',
       hopCount: 1,
+      pathDirection: 'FORWARD',
       tokenIn: '0x0000000000000000000000000000000000000001',
       tokenOut: '0x0000000000000000000000000000000000000002',
       uniPoolFee: 3000,
@@ -48,6 +49,7 @@ describe('venue-aware callback data', () => {
       executionMode: 'EXACT_INPUT',
       pathKind: 'DIRECT',
       hopCount: 1,
+      pathDirection: 'FORWARD',
       tokenIn: '0x0000000000000000000000000000000000000001',
       tokenOut: '0x0000000000000000000000000000000000000002',
       uniPoolFee: 0,
@@ -69,6 +71,7 @@ describe('venue-aware callback data', () => {
               { name: 'executionMode', type: 'uint8' },
               { name: 'pathKind', type: 'uint8' },
               { name: 'hopCount', type: 'uint8' },
+              { name: 'pathDirection', type: 'uint8' },
               { name: 'tokenIn', type: 'address' },
               { name: 'tokenOut', type: 'address' },
               { name: 'uniPoolFee', type: 'uint24' },
@@ -86,6 +89,7 @@ describe('venue-aware callback data', () => {
           executionMode: 0,
           pathKind: 0,
           hopCount: 1,
+          pathDirection: 0,
           tokenIn: '0x0000000000000000000000000000000000000001',
           tokenOut: '0x0000000000000000000000000000000000000002',
           uniPoolFee: 500,
@@ -108,6 +112,7 @@ describe('venue-aware callback data', () => {
         venue: 'UNISWAP_V3',
         pathKind: 'TWO_HOP',
         hopCount: 2,
+        pathDirection: 'FORWARD',
         tokenIn: '0x0000000000000000000000000000000000000001',
         tokenOut: '0x0000000000000000000000000000000000000003',
         encodedPath: '0x0000000000000000000000000000000000000001000bb80000000000000000000000000000000000000002000bb80000000000000000000000000000000000000003',
@@ -130,6 +135,7 @@ describe('venue-aware callback data', () => {
         executionMode: 'EXACT_OUTPUT',
         pathKind: 'DIRECT',
         hopCount: 1,
+        pathDirection: 'FORWARD',
         tokenIn: '0x0000000000000000000000000000000000000001',
         tokenOut: '0x0000000000000000000000000000000000000002',
         quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 },
@@ -151,6 +157,7 @@ describe('venue-aware callback data', () => {
         executionMode: 'EXACT_OUTPUT',
         pathKind: 'TWO_HOP',
         hopCount: 2,
+        pathDirection: 'REVERSE',
         tokenIn: '0x0000000000000000000000000000000000000001',
         tokenOut: '0x0000000000000000000000000000000000000003',
         encodedPath: '0x00000000000000000000000000000000000000010001f400000000000000000000000000000000000000020001f40000000000000000000000000000000000000003',
@@ -166,5 +173,6 @@ describe('venue-aware callback data', () => {
     expect(twoHop.executionMode).toBe('EXACT_OUTPUT');
     expect(twoHop.pathKind).toBe('TWO_HOP');
     expect(twoHop.maxAmountIn).toBe(1_000n);
+    expect(twoHop.pathDirection).toBe('REVERSE');
   });
 });

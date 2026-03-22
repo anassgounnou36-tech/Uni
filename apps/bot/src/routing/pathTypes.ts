@@ -4,6 +4,9 @@ import type { HedgeVenue } from './venues.js';
 export const ROUTE_PATH_KINDS = ['DIRECT', 'TWO_HOP'] as const;
 export type RoutePathKind = (typeof ROUTE_PATH_KINDS)[number];
 
+export const PATH_ENCODING_DIRECTIONS = ['FORWARD', 'REVERSE'] as const;
+export type PathEncodingDirection = (typeof PATH_ENCODING_DIRECTIONS)[number];
+
 export type HedgePathLeg = {
   tokenIn: Address;
   tokenOut: Address;
@@ -20,6 +23,7 @@ export type EncodedSwapPath = {
   bridgeToken?: Address;
   encodedPath: Hex;
   hopCount: 1 | 2;
+  pathDirection: PathEncodingDirection;
 };
 
 export function assertValidEncodedSwapPath(path: EncodedSwapPath): void {

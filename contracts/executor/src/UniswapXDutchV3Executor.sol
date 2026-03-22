@@ -207,12 +207,22 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         if (path.length <= 20 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
         uint256 hops = (path.length - 20) / 23;
         if (hops == 0 || hops > 2 || hops != route.hopCount) revert ExecutorErrors.BadRoute();
+        if (route.executionMode == 0 && route.pathDirection != ExecutorTypes.PATH_DIRECTION_FORWARD) {
+            revert ExecutorErrors.BadRoute();
+        }
+        if (route.executionMode == 1 && route.pathDirection != ExecutorTypes.PATH_DIRECTION_REVERSE) {
+            revert ExecutorErrors.BadRoute();
+        }
         address start;
         address finish;
         assembly {
             start := shr(96, mload(add(path, 32)))
             finish := shr(96, mload(add(add(path, 32), sub(mload(path), 20))))
         }
-        if (start != route.tokenIn || finish != route.tokenOut) revert ExecutorErrors.BadRoute();
+        if (route.executionMode == 1) {
+            if (start != route.tokenOut || finish != route.tokenIn) revert ExecutorErrors.BadRoute();
+        } else {
+            if (start != route.tokenIn || finish != route.tokenOut) revert ExecutorErrors.BadRoute();
+        }
     }
 }

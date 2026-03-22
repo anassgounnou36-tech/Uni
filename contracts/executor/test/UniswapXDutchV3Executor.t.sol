@@ -116,6 +116,7 @@ contract MockSettlementAdapter {
 
 contract MockSwapRouter02 {
     uint256 public amountOut;
+    bytes public lastPath;
 
     struct ExactInputSingleParams {
         address tokenIn;
@@ -158,6 +159,18 @@ contract MockSwapRouter02 {
         }
         MockERC20(tokenOut).mint(params.recipient, amountOut);
         return amountOut;
+    }
+
+    struct ExactOutputParams {
+        bytes path;
+        address recipient;
+        uint256 amountOut;
+        uint256 amountInMaximum;
+    }
+
+    function exactOutput(ExactOutputParams calldata params) external payable returns (uint256) {
+        lastPath = params.path;
+        return 1;
     }
 }
 
@@ -348,6 +361,7 @@ contract UniswapXDutchV3ExecutorTest {
                     venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
                     pathKind: ExecutorTypes.PATH_KIND_DIRECT,
                     hopCount: 1,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
@@ -396,6 +410,7 @@ contract UniswapXDutchV3ExecutorTest {
                     venue: ExecutorTypes.VENUE_UNISWAP_V3,
                     pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
                     hopCount: 2,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
@@ -423,6 +438,7 @@ contract UniswapXDutchV3ExecutorTest {
                     executionMode: 1,
                     pathKind: ExecutorTypes.PATH_KIND_DIRECT,
                     hopCount: 1,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
@@ -450,6 +466,7 @@ contract UniswapXDutchV3ExecutorTest {
                     executionMode: 1,
                     pathKind: ExecutorTypes.PATH_KIND_DIRECT,
                     hopCount: 1,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
@@ -475,6 +492,7 @@ contract UniswapXDutchV3ExecutorTest {
                     venue: ExecutorTypes.VENUE_UNISWAP_V3,
                     pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
                     hopCount: 3,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
@@ -495,6 +513,59 @@ contract UniswapXDutchV3ExecutorTest {
                 })
             )
         );
+    }
+
+    function testExecutorValidateBoundedPathAcceptsForwardExactInputAndReversedExactOutput() public {
+        tokenIn.mint(address(executor), 2e18);
+        uniAdapter.setAmountOut(12e6);
+        uniAdapter.setAmountInUsed(9e17);
+        bytes memory forwardPath =
+            abi.encodePacked(address(tokenIn), bytes3(uint24(500)), address(0x1234), bytes3(uint24(3000)), address(tokenOut));
+        vm.prank(REACTOR);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    executionMode: 0,
+                    pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
+                    hopCount: 2,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 0,
+                    encodedPath: forwardPath,
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 9e6,
+                    targetOutput: 0,
+                    maxAmountIn: 0
+                })
+            )
+        );
+        bytes memory reversePath =
+            abi.encodePacked(address(tokenOut), bytes3(uint24(3000)), address(0x1234), bytes3(uint24(500)), address(tokenIn));
+        vm.prank(REACTOR);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    executionMode: 1,
+                    pathKind: ExecutorTypes.PATH_KIND_TWO_HOP,
+                    hopCount: 2,
+                    pathDirection: ExecutorTypes.PATH_DIRECTION_REVERSE,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 0,
+                    encodedPath: reversePath,
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 0,
+                    targetOutput: 10e6,
+                    maxAmountIn: 1e18
+                })
+            )
+        );
+        require(uniAdapter.usedExactOutputPath(), "exact output path not used");
     }
 
     function testInsufficientOutputReverts() public {
@@ -581,6 +652,20 @@ contract UniswapXDutchV3ExecutorTest {
         executor.reactorCallback(_resolvedOrder(tokenIn, tokenOut, 1e18, 10e6), _route(tokenIn, tokenOut, 9e6));
     }
 
+    function testUniswapAdapterExactOutputPathApprovesRealInputTokenNotFirstPathToken() public {
+        MockERC20 tokenMid = new MockERC20();
+        MockSwapRouter02 router = new MockSwapRouter02();
+        UniV3SwapRouter02Adapter adapter = new UniV3SwapRouter02Adapter(address(router));
+        tokenIn.mint(address(this), 1e18);
+        tokenIn.transfer(address(adapter), 1e18);
+        bytes memory reversedPath =
+            abi.encodePacked(address(tokenOut), bytes3(uint24(3000)), address(tokenMid), bytes3(uint24(500)), address(tokenIn));
+        adapter.executeExactOutputPath(reversedPath, 10e6, 1e18, address(this));
+        require(tokenOut.allowance(address(adapter), address(router)) == 0, "approved first path token");
+        require(tokenIn.allowance(address(adapter), address(router)) == 1e18, "did not approve real input token");
+        require(keccak256(router.lastPath()) == keccak256(reversedPath), "path mutated");
+    }
+
     function _resolvedOrder(MockERC20 inToken, MockERC20 outToken, uint256 inputAmount, uint256 outputAmount)
         private
         pure
@@ -617,6 +702,7 @@ contract UniswapXDutchV3ExecutorTest {
                 venue: ExecutorTypes.VENUE_UNISWAP_V3,
                 pathKind: ExecutorTypes.PATH_KIND_DIRECT,
                 hopCount: 1,
+                pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
                 executionMode: 0,
@@ -636,6 +722,7 @@ contract UniswapXDutchV3ExecutorTest {
                 venue: ExecutorTypes.VENUE_CAMELOT_AMMV3,
                 pathKind: ExecutorTypes.PATH_KIND_DIRECT,
                 hopCount: 1,
+                pathDirection: ExecutorTypes.PATH_DIRECTION_FORWARD,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
                 executionMode: 0,

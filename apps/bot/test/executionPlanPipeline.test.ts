@@ -120,7 +120,14 @@ const MOCK_REACTOR_ABI = [
   }
 ] as const;
 
-const MOCK_UNI_ROUTER_ABI = [
+  const MOCK_UNI_ROUTER_ABI = [
+  {
+    type: 'function',
+    name: 'lastPath',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'bytes' }]
+  },
   {
     type: 'function',
     name: 'setAmountOut',
@@ -258,6 +265,13 @@ contract MockSwapRouter02ForExecutorFlow {
     uint256 amountOutMinimum;
   }
 
+  struct ExactOutputParams {
+    bytes path;
+    address recipient;
+    uint256 amountOut;
+    uint256 amountInMaximum;
+  }
+
   function setAmountOut(uint256 value) external {
     amountOut = value;
   }
@@ -288,6 +302,20 @@ contract MockSwapRouter02ForExecutorFlow {
       IMintableToken(tokenOut).mint(params.recipient, amountOut);
     }
     return amountOut;
+  }
+
+  function exactOutput(ExactOutputParams calldata params) external payable returns (uint256) {
+    swapCalls += 1;
+    lastPath = params.path;
+    if (amountOut > 0) {
+      address tokenOut;
+      uint256 len = params.path.length;
+      assembly {
+        tokenOut := shr(96, mload(add(params.path, 32)))
+      }
+      IMintableToken(tokenOut).mint(params.recipient, amountOut > params.amountOut ? amountOut : params.amountOut);
+    }
+    return params.amountInMaximum;
   }
 }`
   };
@@ -740,6 +768,7 @@ describe('execution plan pipeline integration', () => {
     expect(callbackDecoded.tokenOut.toLowerCase()).toEqual(built.plan.route.tokenOut.toLowerCase());
     expect(callbackDecoded.uniPoolFee).toEqual(3000);
     expect(callbackDecoded.pathKind).toEqual('DIRECT');
+    expect(callbackDecoded.pathDirection).toEqual('FORWARD');
 
     const executeDecoded = decodeFunctionData({ abi: EXECUTOR_ABI, data: built.plan.executeCalldata });
     expect(executeDecoded.functionName).toEqual('execute');
@@ -1493,6 +1522,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     if (!planResult.ok) return;
     expect(planResult.plan.route.pathKind).toEqual('TWO_HOP');
     expect(planResult.plan.selectedHopCount).toEqual(2);
+    expect(planResult.plan.route.pathDirection).toEqual('FORWARD');
 
     await sendContractCall(
       clients,
@@ -1595,5 +1625,177 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
     expect(typeof lastPath).toEqual('string');
     expect((lastPath as string).startsWith('0x')).toEqual(true);
     expect((lastPath as string).length).toBeGreaterThan(2);
+  });
+
+  it('fork_prepare_sim_uniswap_v3_two_hop_exact_output_uses_reversed_path', async () => {
+    const clients = createForkClients({
+      rpcUrl,
+      privateKey: '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+    });
+    const { fixture, decoded } = loadSigned();
+    const {
+      mockUniRouterAddress,
+      mockReactorAddress,
+      executorAddress
+    } = await deployRealExecutorStack(clients);
+
+    const bridgeToken = '0x00000000000000000000000000000000000000b0' as const;
+    const routeBook = {
+      selectBestRoute: async ({ resolvedOrder }: { resolvedOrder: { input: { token: `0x${string}`; amount: bigint }; outputs: Array<{ token: `0x${string}`; amount: bigint }> } }) => ({
+        ok: true,
+        chosenRoute: {
+          venue: 'UNISWAP_V3',
+          executionMode: 'EXACT_OUTPUT',
+          pathKind: 'TWO_HOP',
+          hopCount: 2,
+          pathDirection: 'REVERSE',
+          bridgeToken,
+          encodedPath: encodePacked(
+            ['address', 'bytes3', 'address', 'bytes3', 'address'],
+            [
+              resolvedOrder.outputs[0]!.token,
+              '0x0001f4',
+              bridgeToken,
+              '0x0001f4',
+              resolvedOrder.input.token
+            ]
+          ),
+          tokenIn: resolvedOrder.input.token,
+          tokenOut: resolvedOrder.outputs[0]!.token,
+          amountIn: resolvedOrder.input.amount,
+          requiredOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          targetOutput: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          maxAmountIn: resolvedOrder.input.amount,
+          quotedAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n) + 10n,
+          minAmountOut: resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n),
+          limitSqrtPriceX96: 0n,
+          slippageBufferOut: 0n,
+          gasCostOut: 0n,
+          riskBufferOut: 0n,
+          profitFloorOut: 0n,
+          grossEdgeOut: 10n,
+          netEdgeOut: 10n,
+          quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+        },
+        alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 10n, pathKind: 'TWO_HOP', hopCount: 2, bridgeToken }]
+      })
+    } as RouteBook;
+
+    const planResult = await buildExecutionPlan({
+      normalizedOrder: {
+        orderHash: '0x3efd647626a32590eff1daa3d028ebcbd9553dbe2a144c50980cdcffc60a9c92',
+        orderType: 'Dutch_V3',
+        encodedOrder: fixture.encodedOrder,
+        signature: fixture.signature,
+        decodedOrder: decoded,
+        reactor: mockReactorAddress
+      },
+      routeBook,
+      executor: executorAddress,
+      blockNumberish: 1000n,
+      resolveEnv: {
+        timestamp: 1_900_000_000n,
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n }
+    });
+    expect(planResult.ok).toEqual(true);
+    if (!planResult.ok) return;
+    expect(planResult.plan.route.pathDirection).toEqual('REVERSE');
+
+    await sendContractCall(
+      clients,
+      mockUniRouterAddress,
+      encodeFunctionData({
+        abi: MOCK_UNI_ROUTER_ABI,
+        functionName: 'setAmountOut',
+        args: [0n]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'clearConfiguredResolvedOrders',
+        args: []
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'setShouldCallback',
+        args: [true]
+      })
+    );
+    await sendContractCall(
+      clients,
+      mockReactorAddress,
+      encodeFunctionData({
+        abi: MOCK_REACTOR_ABI,
+        functionName: 'pushConfiguredResolvedOrder',
+        args: [
+          {
+            info: {
+              reactor: mockReactorAddress,
+              swapper: clients.sender,
+              nonce: 1n,
+              deadline: 2n ** 255n,
+              additionalValidationContract: '0x0000000000000000000000000000000000000000',
+              additionalValidationData: '0x'
+            },
+            input: {
+              token: planResult.plan.route.tokenIn,
+              amount: 0n,
+              maxAmount: 0n
+            },
+            outputs: [
+              {
+                token: planResult.plan.route.tokenOut,
+                amount: 0n,
+                recipient: clients.sender
+              }
+            ],
+            sig: '0x',
+            hash: '0x0000000000000000000000000000000000000000000000000000000000000000'
+          }
+        ]
+      })
+    );
+
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async (address) => BigInt(await clients.publicClient.getTransactionCount({ address, blockTag: 'pending' }))
+    });
+    const prepared = await prepareExecution({
+      executionPlan: planResult.plan,
+      account: clients.sender,
+      nonceManager,
+      publicClient: clients.publicClient,
+      walletClient: clients.walletClient,
+      txPolicy: {
+        gasHeadroomBps: 100n,
+        maxGasCeiling: 2_000_000n
+      },
+      conditionalPolicy: {
+        currentL2TimestampSec: 1_900_000_000n,
+        scheduledWindowBlocks: 2n,
+        avgBlockTimeSec: 1n,
+        maxStalenessSec: 10n
+      }
+    });
+    const sim = new ForkSimService({ clients });
+    const simResult = await sim.simulatePrepared(prepared);
+    expect(simResult.ok).toEqual(true);
+
+    const lastPath = await clients.publicClient.readContract({
+      address: mockUniRouterAddress,
+      abi: MOCK_UNI_ROUTER_ABI,
+      functionName: 'lastPath'
+    });
+    expect((lastPath as string).toLowerCase()).toEqual((planResult.plan.route.encodedPath ?? '').toLowerCase());
   });
 });
