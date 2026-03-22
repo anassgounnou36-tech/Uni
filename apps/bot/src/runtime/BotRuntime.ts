@@ -850,6 +850,10 @@ export class BotRuntime {
         this.hotQueue.splice(index, 1);
         continue;
       }
+      if (record.state !== 'SCHEDULED' && record.state !== 'PLAN_BUILT') {
+        this.hotQueue.splice(index, 1);
+        continue;
+      }
 
       const outputToken = normalized.decodedOrder.order.baseOutputs[0]?.token;
       if (!outputToken) {
@@ -915,6 +919,7 @@ export class BotRuntime {
       }
 
       this.deps.metrics.increment('plan_built_total');
+      await this.deps.store.transition(queued.orderHash, 'PLAN_BUILT');
       if ('chosenRouteVenue' in decision && decision.chosenRouteVenue) {
         this.deps.metrics.increment(`route_chosen_total{venue="${decision.chosenRouteVenue}"}`);
       }
@@ -951,6 +956,36 @@ export class BotRuntime {
           atMs: preparedAtMs,
           orderHash: queued.orderHash,
           payload: { ok: true, nonce: decision.preparedExecution.nonce.toString() }
+        });
+      }
+      if (decision.action === 'DROP' && decision.reason === 'PREPARE_FAILED') {
+        const error = decision.prepareError ?? 'PrepareError';
+        const message = decision.prepareMessage ?? 'executionPreparer failed';
+        this.deps.metrics.incrementOrdersPrepareFailed(decision.chosenRouteVenue, decision.pathKind, decision.executionMode);
+        this.deps.metrics.increment(`prepare_failure_reason_total{reason="${error}"}`);
+        await this.deps.journal.append({
+          type: 'PREPARED',
+          atMs: Date.now(),
+          orderHash: queued.orderHash,
+          payload: { ok: false, reason: decision.reason }
+        });
+        await this.deps.journal.append({
+          type: 'ORDER_PREPARE_FAILED',
+          atMs: Date.now(),
+          orderHash: queued.orderHash,
+          payload: {
+            orderHash: queued.orderHash,
+            venue: decision.chosenRouteVenue,
+            pathKind: decision.pathKind,
+            hopCount: decision.hopCount,
+            bridgeToken: decision.bridgeToken,
+            executionMode: decision.executionMode,
+            pathDescriptor: decision.pathDescriptor,
+            candidateClass: decision.chosenRouteCandidateClass,
+            constraintReason: decision.chosenRouteConstraintReason,
+            error,
+            message
+          }
         });
       }
 
@@ -1065,10 +1100,19 @@ export class BotRuntime {
           : undefined;
         if (decision.simResult && !decision.simResult.ok) {
           await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
+        } else if (decision.reason === 'PREPARE_FAILED') {
+          await this.deps.store.transition(queued.orderHash, 'PREPARE_FAILED', decision.reason);
         } else {
           await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
         }
         this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
+        const droppedErrorContext =
+          decision.reason === 'PREPARE_FAILED'
+            ? {
+                error: decision.prepareError ?? 'PrepareError',
+                message: decision.prepareMessage ?? 'executionPreparer failed'
+              }
+            : undefined;
         await this.deps.journal.append({
           type: 'ORDER_DROPPED',
           atMs: Date.now(),
@@ -1077,8 +1121,17 @@ export class BotRuntime {
             reason: decision.reason,
             resolveSnapshot: hotResolveSnapshot,
             chosenRouteVenue: decision.chosenRouteVenue,
+            chosenRoutePathKind: decision.pathKind,
+            chosenRouteHopCount: decision.hopCount,
+            chosenRouteBridgeToken: decision.bridgeToken,
+            chosenRouteExecutionMode: decision.executionMode,
+            chosenRoutePathDescriptor: decision.pathDescriptor,
+            chosenRouteCandidateClass: decision.chosenRouteCandidateClass,
+            chosenRouteConstraintReason: decision.chosenRouteConstraintReason,
             netEdgeOut: queued.predictedEdgeOut.toString(),
-            simReason: decision.simResult?.reason
+            simReason: decision.simResult?.reason,
+            error: droppedErrorContext?.error,
+            message: droppedErrorContext?.message
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);

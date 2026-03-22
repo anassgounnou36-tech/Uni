@@ -5,6 +5,10 @@ import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { ExecutionPlan } from '../execution/types.js';
 import type { RouteBook } from '../routing/routeBook.js';
 import type { RouteCandidateSummary } from '../routing/venues.js';
+import type { RoutePathKind } from '../routing/pathTypes.js';
+import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
+import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import type { ConstraintRejectReason } from '../routing/constraintTypes.js';
 import type { ForkSimResult, ForkSimService } from '../sim/forkSimService.js';
 import type { SequencerClient, SequencerClientResult } from '../send/sequencerClient.js';
 import { NonceManager } from '../send/nonceManager.js';
@@ -27,6 +31,15 @@ export type HotLaneDecision =
       preparedExecution?: PreparedExecution;
       sendResult?: SequencerClientResult;
       chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: `0x${string}`;
+      executionMode?: HedgeExecutionMode;
+      pathDescriptor?: string;
+      chosenRouteCandidateClass?: RejectedCandidateClass;
+      chosenRouteConstraintReason?: ConstraintRejectReason;
+      prepareError?: string;
+      prepareMessage?: string;
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -69,6 +82,38 @@ export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint
   return currentBlock >= scheduledBlock - leadBlocks;
 }
 
+function toPrepareErrorContext(error: unknown): { prepareError: string; prepareMessage: string } {
+  if (error instanceof Error) {
+    const cause = error.cause === undefined ? undefined : String(error.cause);
+    return {
+      prepareError: cause ? `${error.name} (cause=${cause})` : error.name,
+      prepareMessage: error.message
+    };
+  }
+  const normalized = String(error);
+  return {
+    prepareError: 'UnknownError',
+    prepareMessage: normalized
+  };
+}
+
+function toPathDescriptor(pathKind: 'DIRECT' | 'TWO_HOP', tokenIn: string, tokenOut: string, bridgeToken?: string): string {
+  if (pathKind === 'DIRECT') {
+    return `DIRECT: ${tokenIn} -> ${tokenOut}`;
+  }
+  return `TWO_HOP: ${tokenIn} -> ${bridgeToken ?? 'unknown'} -> ${tokenOut}`;
+}
+
+function chooseRouteContextCandidate(
+  routeAlternatives: RouteCandidateSummary[] | undefined,
+  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3'
+): RouteCandidateSummary | undefined {
+  if (!routeAlternatives || routeAlternatives.length === 0) {
+    return undefined;
+  }
+  return routeAlternatives.find((candidate) => candidate.venue === venue && candidate.eligible) ?? routeAlternatives[0];
+}
+
 export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLaneDecision> {
   if (!shouldMoveToHotLane(params.currentBlock, params.entry.scheduledBlock, params.leadBlocks ?? 2n)) {
     return { action: 'WAIT', reason: 'NOT_IN_HOT_WINDOW' };
@@ -105,8 +150,25 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     preparedExecution = await params.executionPreparer({
       executionPlan: result.plan
     });
-  } catch {
-    return { action: 'DROP', reason: 'PREPARE_FAILED' };
+  } catch (error) {
+    const prepareErrorContext = toPrepareErrorContext(error);
+    const route = result.plan.route;
+    const routeContextCandidate = chooseRouteContextCandidate(result.plan.routeAlternatives, route.venue);
+    return {
+      action: 'DROP',
+      reason: 'PREPARE_FAILED',
+      prepareError: prepareErrorContext.prepareError,
+      prepareMessage: prepareErrorContext.prepareMessage,
+      chosenRouteVenue: route.venue,
+      pathKind: route.pathKind,
+      hopCount: route.hopCount,
+      bridgeToken: route.bridgeToken,
+      executionMode: route.executionMode ?? result.plan.selectedExecutionMode,
+      pathDescriptor: toPathDescriptor(route.pathKind, route.tokenIn, route.tokenOut, route.bridgeToken),
+      chosenRouteCandidateClass: routeContextCandidate?.candidateClass,
+      chosenRouteConstraintReason: routeContextCandidate?.constraintReason,
+      routeAlternatives: result.plan.routeAlternatives
+    };
   }
 
   const simResult = await params.simService.simulatePrepared(preparedExecution);

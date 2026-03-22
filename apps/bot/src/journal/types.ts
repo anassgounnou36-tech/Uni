@@ -14,6 +14,7 @@ export type JournalEventType =
   | 'ORDER_SCHEDULED'
   | 'ORDER_REPRICED'
   | 'ORDER_DROPPED'
+  | 'ORDER_PREPARE_FAILED'
   | 'PLAN_BUILT'
   | 'PREPARED'
   | 'SIM_RESULT'
@@ -199,8 +200,33 @@ export type DecisionJournalEvent =
           bestRejectedSummary?: JournalVenueAttempt;
         }>;
         chosenRouteVenue?: string;
+        chosenRoutePathKind?: RoutePathKind;
+        chosenRouteHopCount?: 1 | 2;
+        chosenRouteBridgeToken?: string;
+        chosenRouteExecutionMode?: HedgeExecutionMode;
+        chosenRoutePathDescriptor?: string;
+        chosenRouteCandidateClass?: RejectedCandidateClass;
+        chosenRouteConstraintReason?: ConstraintRejectReason;
+        error?: string;
+        message?: string;
         netEdgeOut?: string;
         simReason?: string;
+      }
+    >
+  | BaseJournalEvent<
+      'ORDER_PREPARE_FAILED',
+      {
+        orderHash: `0x${string}`;
+        venue?: string;
+        pathKind?: RoutePathKind;
+        hopCount?: 1 | 2;
+        bridgeToken?: string;
+        executionMode?: HedgeExecutionMode;
+        pathDescriptor?: string;
+        candidateClass?: RejectedCandidateClass;
+        constraintReason?: ConstraintRejectReason;
+        error: string;
+        message: string;
       }
     >
   | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>

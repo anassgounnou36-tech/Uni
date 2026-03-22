@@ -18,6 +18,7 @@ import { BotMetrics } from '../src/telemetry/metrics.js';
 import { JsonConsoleLogger } from '../src/telemetry/logging.js';
 import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
+import type { ExecutionPlan } from '../src/execution/types.js';
 import type { NormalizedOrder } from '../src/store/types.js';
 import type { ResolveEnvProvider } from '../src/runtime/resolveEnvProvider.js';
 
@@ -529,6 +530,7 @@ function makeRuntime(params: {
   hotRouteBook?: RouteBook;
   simService?: ForkSimService;
   sequencerClient?: SequencerClient;
+  executionPreparer?: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
   logger?: JsonConsoleLogger;
 }) {
   const metrics = new BotMetrics();
@@ -586,33 +588,35 @@ function makeRuntime(params: {
           })
         } as SequencerClient),
       nonceManager,
-      executionPreparer: async ({ executionPlan }) => {
-        const lease = await nonceManager.lease('0x2222222222222222222222222222222222222222', executionPlan.orderHash);
-        return {
-          orderHash: executionPlan.orderHash,
-          executionPlan,
-          txRequest: {
-            from: '0x2222222222222222222222222222222222222222',
-            to: executionPlan.executor,
-            data: executionPlan.executeCalldata,
-            value: 0n,
+      executionPreparer:
+        params.executionPreparer
+        ?? (async ({ executionPlan }) => {
+          const lease = await nonceManager.lease('0x2222222222222222222222222222222222222222', executionPlan.orderHash);
+          return {
+            orderHash: executionPlan.orderHash,
+            executionPlan,
+            txRequest: {
+              from: '0x2222222222222222222222222222222222222222',
+              to: executionPlan.executor,
+              data: executionPlan.executeCalldata,
+              value: 0n,
+              nonce: lease.nonce,
+              gas: 21_000n,
+              chainId: 42161n,
+              maxFeePerGas: 1n,
+              maxPriorityFeePerGas: 1n,
+              type: 'eip1559'
+            },
+            serializedTransaction: '0x1234',
+            conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+            sender: '0x2222222222222222222222222222222222222222',
             nonce: lease.nonce,
             gas: 21_000n,
-            chainId: 42161n,
             maxFeePerGas: 1n,
             maxPriorityFeePerGas: 1n,
-            type: 'eip1559'
-          },
-          serializedTransaction: '0x1234',
-          conditionalEnvelope: { TimestampMax: 1_900_000_100n },
-          sender: '0x2222222222222222222222222222222222222222',
-          nonce: lease.nonce,
-          gas: 21_000n,
-          maxFeePerGas: 1n,
-          maxPriorityFeePerGas: 1n,
-          nonceLease: lease
-        };
-      }
+            nonceLease: lease
+          };
+        })
     },
     logger: params.logger
   });
@@ -918,5 +922,75 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
 
     const record = await store.get(payload.orderHash);
     expect(record?.state).toEqual('SUBMITTING');
+  });
+
+  it('prepare failure transitions to PREPARE_FAILED, emits rich prepare events, and avoids tight-loop retries', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        const error = new Error('failed to prepare execution payload');
+        error.name = 'PrepareExecutionError';
+        throw error;
+      }
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toEqual('PREPARE_FAILED');
+    expect(record?.reason).toEqual('PREPARE_FAILED');
+    expect(prepareCalls).toEqual(1);
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepared = events.find((event) => event.type === 'PREPARED');
+    expect(prepared?.payload).toMatchObject({ ok: false, reason: 'PREPARE_FAILED' });
+
+    const prepareFailed = events.find((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect(prepareFailed?.payload).toMatchObject({
+      orderHash: payload.orderHash,
+      venue: 'UNISWAP_V3',
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      executionMode: 'EXACT_INPUT',
+      pathDescriptor: `DIRECT: ${normalized.decodedOrder.order.baseInput.token} -> ${normalized.decodedOrder.order.baseOutputs[0]!.token}`,
+      error: 'PrepareExecutionError',
+      message: 'failed to prepare execution payload'
+    });
+
+    const dropped = events.find((event) => event.type === 'ORDER_DROPPED');
+    expect(dropped?.payload).toMatchObject({
+      reason: 'PREPARE_FAILED',
+      chosenRouteVenue: 'UNISWAP_V3',
+      chosenRoutePathKind: 'DIRECT',
+      chosenRouteHopCount: 1,
+      chosenRouteExecutionMode: 'EXACT_INPUT',
+      error: 'PrepareExecutionError',
+      message: 'failed to prepare execution payload'
+    });
+    expect((dropped?.payload as Record<string, unknown>).chosenRoutePathDescriptor).toEqual(
+      `DIRECT: ${normalized.decodedOrder.order.baseInput.token} -> ${normalized.decodedOrder.order.baseOutputs[0]!.token}`
+    );
+
+    const counters = metrics.snapshot().counters;
+    expect(counters.orders_prepare_failed_total).toBe(1);
+    expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
+    expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
   });
 });
