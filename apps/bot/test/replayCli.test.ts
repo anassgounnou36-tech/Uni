@@ -68,4 +68,32 @@ describe('replay cli input resolution', () => {
     expect(output.bestRejectedBridgeToken).toBe('0x000000000000000000000000000000000000000b');
     expect(output.bestRejectedReason).toBe('CONSTRAINT_REJECTED');
   });
+
+  it('replay_by_journal_id_uses_stored_snapshot_and_does_not_fail_immediately_with_DeadlineReached', async () => {
+    const resolved = await resolveInput(
+      { journalId: '123' },
+      'postgres://example',
+      {
+        findFromJournalId: async () => ({
+          source: 'DB_JOURNAL',
+          fixture: {
+            encodedOrder: '0x12',
+            signature: '0x34',
+            orderHash: '0x1111111111111111111111111111111111111111111111111111111111111111'
+          },
+          resolveSnapshot: {
+            chainId: 42161n,
+            blockNumber: 1000n,
+            blockNumberish: 1000n,
+            timestamp: 1_900_000_000n,
+            baseFeePerGas: 1n,
+            sampledAtMs: 123
+          }
+        })
+      }
+    );
+    expect(resolved.source).toBe('DB_JOURNAL');
+    expect(resolved.resolveSnapshot?.timestamp).toBe(1_900_000_000n);
+    expect(resolved.resolveSnapshot?.blockNumberish).toBe(1000n);
+  });
 });

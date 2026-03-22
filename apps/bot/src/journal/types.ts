@@ -5,6 +5,7 @@ import type { ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js'
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
 import type { RoutePathKind } from '../routing/pathTypes.js';
+import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
 
 export type JournalEventType =
   | 'ORDER_SEEN'
@@ -78,6 +79,7 @@ type JournalHedgeGapSummary = {
 type JournalFeeTierAttempt = {
   feeTier: number;
   secondFeeTier?: number;
+  executionMode?: HedgeExecutionMode;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;
   bridgeToken?: string;
@@ -99,6 +101,7 @@ type JournalFeeTierAttempt = {
 
 type JournalVenueAttempt = {
   venue: string;
+  executionMode?: HedgeExecutionMode;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;
   bridgeToken?: string;
@@ -146,12 +149,21 @@ export type DecisionJournalEvent =
       'ORDER_DROPPED',
       {
         reason: string;
+        resolveSnapshot?: {
+          chainId: string;
+          blockNumber: string;
+          blockNumberish: string;
+          timestamp: string;
+          baseFeePerGas: string;
+          sampledAtMs: number;
+        };
         thresholdOut?: string;
         candidateBlockOffsets?: string[];
         bestObservedNetEdgeOut?: string;
         bestObservedVenue?: string;
         bestRejectedSummary?: {
           venue: string;
+          executionMode?: HedgeExecutionMode;
           pathKind?: RoutePathKind;
           hopCount?: 1 | 2;
           bridgeToken?: string;

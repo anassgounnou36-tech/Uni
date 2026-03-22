@@ -11,6 +11,7 @@ library ExecutorErrors {
     error InsufficientInput();
     error InsufficientOutput();
     error SlippageExceeded();
+    error ExactOutputExceededMaxInput();
     error ZeroAddress();
     error NotOwner();
     error Reentrancy();

@@ -9,6 +9,7 @@ library ExecutorTypes {
 
     struct RoutePlan {
         uint8 venue;
+        uint8 executionMode;
         uint8 pathKind;
         uint8 hopCount;
         address tokenIn;
@@ -17,5 +18,7 @@ library ExecutorTypes {
         bytes encodedPath;
         uint160 limitSqrtPriceX96;
         uint256 minAmountOut;
+        uint256 targetOutput;
+        uint256 maxAmountIn;
     }
 }

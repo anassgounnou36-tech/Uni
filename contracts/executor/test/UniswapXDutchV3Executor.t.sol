@@ -39,11 +39,18 @@ contract MockERC20 {
 
 contract MockSettlementAdapter {
     uint256 public amountOut;
+    uint256 public amountInUsed;
     uint24 public lastPoolFee;
     bytes public lastPath;
+    bool public usedExactOutputSingle;
+    bool public usedExactOutputPath;
 
     function setAmountOut(uint256 amountOut_) external {
         amountOut = amountOut_;
+    }
+
+    function setAmountInUsed(uint256 amountInUsed_) external {
+        amountInUsed = amountInUsed_;
     }
 
     function executeExactInputSingle(
@@ -75,6 +82,35 @@ contract MockSettlementAdapter {
         }
         MockERC20(tokenOut).mint(recipient, amountOut);
         return amountOut;
+    }
+
+    function executeExactOutputSingle(
+        address,
+        address tokenOut,
+        uint24,
+        uint256 targetAmountOut,
+        uint256,
+        uint160,
+        address recipient
+    ) external returns (uint256) {
+        usedExactOutputSingle = true;
+        MockERC20(tokenOut).mint(recipient, targetAmountOut);
+        return amountInUsed;
+    }
+
+    function executeExactOutputPath(bytes calldata path, uint256 targetAmountOut, uint256, address recipient)
+        external
+        returns (uint256)
+    {
+        usedExactOutputPath = true;
+        lastPath = path;
+        address tokenOut;
+        uint256 len = path.length;
+        assembly {
+            tokenOut := shr(96, calldataload(add(path.offset, sub(len, 20))))
+        }
+        MockERC20(tokenOut).mint(recipient, targetAmountOut);
+        return amountInUsed;
     }
 }
 
@@ -114,10 +150,11 @@ contract MockSwapRouter02 {
         if (amountOut < params.amountOutMinimum) {
             return amountOut;
         }
+        bytes calldata path = params.path;
         address tokenOut;
-        uint256 len = params.path.length;
+        uint256 len = path.length;
         assembly {
-            tokenOut := shr(96, mload(add(add(params.path, 32), sub(len, 20))))
+            tokenOut := shr(96, calldataload(add(path.offset, sub(len, 20))))
         }
         MockERC20(tokenOut).mint(params.recipient, amountOut);
         return amountOut;
@@ -314,9 +351,12 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
+                    executionMode: 0,
                     encodedPath: "",
                     limitSqrtPriceX96: 0,
-                    minAmountOut: 1e18
+                    minAmountOut: 1e18,
+                    targetOutput: 0,
+                    maxAmountIn: 0
                 })
             )
         );
@@ -359,13 +399,68 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
+                    executionMode: 0,
                     encodedPath: abi.encodePacked(address(tokenIn), bytes3(uint24(500)), address(0x1234), bytes3(uint24(3000)), address(tokenOut)),
                     limitSqrtPriceX96: 0,
-                    minAmountOut: 9e6
+                    minAmountOut: 9e6,
+                    targetOutput: 0,
+                    maxAmountIn: 0
                 })
             )
         );
         require(uniAdapter.lastPath().length > 0, "path not dispatched to uni adapter");
+    }
+
+    function testExecutorDispatchesExactOutputToCorrectAdapter() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountInUsed(8e17);
+        vm.prank(REACTOR);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    executionMode: 1,
+                    pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                    hopCount: 1,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 500,
+                    encodedPath: "",
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 0,
+                    targetOutput: 10e6,
+                    maxAmountIn: 1e18
+                })
+            )
+        );
+        require(uniAdapter.usedExactOutputSingle(), "exact output single not used");
+    }
+
+    function testBoundedExactOutputRejectsSpendAboveMaxAmountIn() public {
+        tokenIn.mint(address(executor), 1e18);
+        uniAdapter.setAmountInUsed(1e18 + 1);
+        vm.prank(REACTOR);
+        vm.expectRevert(ExecutorErrors.ExactOutputExceededMaxInput.selector);
+        executor.reactorCallback(
+            _resolvedOrder(tokenIn, tokenOut, 1e18, 10e6),
+            abi.encode(
+                ExecutorTypes.RoutePlan({
+                    venue: ExecutorTypes.VENUE_UNISWAP_V3,
+                    executionMode: 1,
+                    pathKind: ExecutorTypes.PATH_KIND_DIRECT,
+                    hopCount: 1,
+                    tokenIn: address(tokenIn),
+                    tokenOut: address(tokenOut),
+                    uniPoolFee: 500,
+                    encodedPath: "",
+                    limitSqrtPriceX96: 0,
+                    minAmountOut: 0,
+                    targetOutput: 10e6,
+                    maxAmountIn: 1e18
+                })
+            )
+        );
     }
 
     function testBoundedPathValidationRejectsMoreThanTwoHops() public {
@@ -383,6 +478,7 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenIn: address(tokenIn),
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
+                    executionMode: 0,
                     encodedPath: abi.encodePacked(
                         address(tokenIn),
                         bytes3(uint24(500)),
@@ -393,7 +489,9 @@ contract UniswapXDutchV3ExecutorTest {
                         address(tokenOut)
                     ),
                     limitSqrtPriceX96: 0,
-                    minAmountOut: 9e6
+                    minAmountOut: 9e6,
+                    targetOutput: 0,
+                    maxAmountIn: 0
                 })
             )
         );
@@ -521,10 +619,13 @@ contract UniswapXDutchV3ExecutorTest {
                 hopCount: 1,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
+                executionMode: 0,
                 uniPoolFee: 500,
                 encodedPath: "",
                 limitSqrtPriceX96: 0,
-                minAmountOut: minAmountOut
+                minAmountOut: minAmountOut,
+                targetOutput: 0,
+                maxAmountIn: 0
             })
         );
     }
@@ -537,10 +638,13 @@ contract UniswapXDutchV3ExecutorTest {
                 hopCount: 1,
                 tokenIn: address(inToken),
                 tokenOut: address(outToken),
+                executionMode: 0,
                 uniPoolFee: 0,
                 encodedPath: "",
                 limitSqrtPriceX96: 0,
-                minAmountOut: minAmountOut
+                minAmountOut: minAmountOut,
+                targetOutput: 0,
+                maxAmountIn: 0
             })
         );
     }

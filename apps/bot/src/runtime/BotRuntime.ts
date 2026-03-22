@@ -25,6 +25,7 @@ import type { ConstraintBreakdown, ConstraintRejectReason } from '../routing/con
 import type { ExactOutputViability, ExactOutputViabilityStatus } from '../routing/exactOutputTypes.js';
 import type { HedgeGapClass, HedgeGapSummary } from '../routing/hedgeGapTypes.js';
 import type { RoutePathKind } from '../routing/pathTypes.js';
+import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
 import {
   deriveRejectedCandidateClass,
   ensureRejectedCandidateClass,
@@ -108,6 +109,7 @@ export class BotRuntime {
   private toJournalFeeTierAttempt(summary: FeeTierAttemptSummary): {
     feeTier: number;
     secondFeeTier?: number;
+    executionMode?: HedgeExecutionMode;
     pathKind?: RoutePathKind;
     hopCount?: 1 | 2;
     bridgeToken?: string;
@@ -183,6 +185,7 @@ export class BotRuntime {
     return {
       feeTier: summary.feeTier,
       secondFeeTier: summary.secondFeeTier,
+      executionMode: summary.executionMode,
       pathKind: summary.pathKind,
       hopCount: summary.hopCount,
       bridgeToken: summary.bridgeToken,
@@ -303,6 +306,7 @@ export class BotRuntime {
 
   private toJournalVenueAttempt(summary: VenueRouteAttemptSummary): {
     venue: string;
+    executionMode?: HedgeExecutionMode;
     pathKind?: RoutePathKind;
     hopCount?: 1 | 2;
     bridgeToken?: string;
@@ -418,6 +422,7 @@ export class BotRuntime {
     const withCandidateClass = this.withDerivedRejectedCandidateClass(summary);
     return {
       venue: summary.venue,
+      executionMode: summary.executionMode,
       pathKind: summary.pathKind,
       hopCount: summary.hopCount,
       bridgeToken: summary.bridgeToken,
@@ -668,6 +673,9 @@ export class BotRuntime {
       if (!record?.normalizedOrder) {
         continue;
       }
+      const resolveSnapshot = scheduler.resolveEnvProvider
+        ? await scheduler.resolveEnvProvider.getCurrent().catch(() => undefined)
+        : undefined;
       const scheduleResult = await findFirstProfitableBlock({
         order: record.normalizedOrder.decodedOrder.order,
         resolveEnvProvider: scheduler.resolveEnvProvider,
@@ -769,6 +777,16 @@ export class BotRuntime {
           orderHash,
           payload: {
             reason: 'SCHEDULER_NO_EDGE',
+            resolveSnapshot: resolveSnapshot
+              ? {
+                  chainId: resolveSnapshot.chainId.toString(),
+                  blockNumber: resolveSnapshot.blockNumber.toString(),
+                  blockNumberish: resolveSnapshot.blockNumberish.toString(),
+                  timestamp: resolveSnapshot.timestamp.toString(),
+                  baseFeePerGas: resolveSnapshot.baseFeePerGas.toString(),
+                  sampledAtMs: Date.now()
+                }
+              : undefined,
             thresholdOut: this.deps.config.thresholdOut.toString(),
             candidateBlockOffsets: this.deps.config.candidateBlockOffsets.map((offset) => offset.toString()),
             bestObservedNetEdgeOut: scheduleResult.bestObservedEvaluation?.netEdgeOut.toString(),
@@ -1034,6 +1052,17 @@ export class BotRuntime {
       }
 
       if (decision.action === 'DROP') {
+        const hotResolveEnv = this.deps.hotLaneContext?.resolveEnv;
+        const hotResolveSnapshot = hotResolveEnv
+          ? {
+              chainId: (hotResolveEnv.chainId ?? 42161n).toString(),
+              blockNumber: queued.scheduledBlock.toString(),
+              blockNumberish: queued.scheduledBlock.toString(),
+              timestamp: hotResolveEnv.timestamp.toString(),
+              baseFeePerGas: hotResolveEnv.basefee.toString(),
+              sampledAtMs: Date.now()
+            }
+          : undefined;
         if (decision.simResult && !decision.simResult.ok) {
           await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
         } else {
@@ -1046,6 +1075,7 @@ export class BotRuntime {
           orderHash: queued.orderHash,
           payload: {
             reason: decision.reason,
+            resolveSnapshot: hotResolveSnapshot,
             chosenRouteVenue: decision.chosenRouteVenue,
             netEdgeOut: queued.predictedEdgeOut.toString(),
             simReason: decision.simResult?.reason

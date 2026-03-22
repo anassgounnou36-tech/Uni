@@ -96,30 +96,57 @@ contract UniswapXDutchV3Executor is IReactorCallback {
 
         uint256 amountIn = order.input.amount;
         if (IERC20(route.tokenIn).balanceOf(address(this)) < amountIn) revert ExecutorErrors.InsufficientInput();
-
-        _safeTransfer(route.tokenIn, settlementAdapter, amountIn);
-
-        uint256 minimumOutput = route.minAmountOut > requiredOutput ? route.minAmountOut : requiredOutput;
+        uint256 executionMode = route.executionMode;
         uint256 settledOutput;
-        if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
-            settledOutput = ISettlementAdapter(settlementAdapter).executeExactInputSingle(
-                route.tokenIn,
-                route.tokenOut,
-                route.uniPoolFee,
-                amountIn,
-                minimumOutput,
-                route.limitSqrtPriceX96,
-                address(this)
-            );
-        } else if (route.pathKind == ExecutorTypes.PATH_KIND_TWO_HOP) {
-            if (route.hopCount != 2 || route.encodedPath.length == 0) revert ExecutorErrors.BadRoute();
-            _validateBoundedPath(route);
-            settledOutput =
-                ISettlementAdapter(settlementAdapter).executeExactInputPath(route.encodedPath, amountIn, minimumOutput, address(this));
+        if (executionMode == 1) {
+            uint256 targetOutput = route.targetOutput;
+            uint256 maxAmountIn = route.maxAmountIn;
+            if (targetOutput == 0 || maxAmountIn == 0 || maxAmountIn > amountIn) revert ExecutorErrors.BadRoute();
+            _safeTransfer(route.tokenIn, settlementAdapter, maxAmountIn);
+            uint256 usedAmountIn;
+            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
+                usedAmountIn = ISettlementAdapter(settlementAdapter).executeExactOutputSingle(
+                    route.tokenIn,
+                    route.tokenOut,
+                    route.uniPoolFee,
+                    targetOutput,
+                    maxAmountIn,
+                    route.limitSqrtPriceX96,
+                    address(this)
+                );
+            } else if (route.pathKind == ExecutorTypes.PATH_KIND_TWO_HOP) {
+                if (route.hopCount != 2 || route.encodedPath.length == 0) revert ExecutorErrors.BadRoute();
+                _validateBoundedPath(route);
+                usedAmountIn =
+                    ISettlementAdapter(settlementAdapter).executeExactOutputPath(route.encodedPath, targetOutput, maxAmountIn, address(this));
+            } else {
+                revert ExecutorErrors.BadRoute();
+            }
+            if (usedAmountIn > maxAmountIn) revert ExecutorErrors.ExactOutputExceededMaxInput();
+            settledOutput = targetOutput;
         } else {
-            revert ExecutorErrors.BadRoute();
+            _safeTransfer(route.tokenIn, settlementAdapter, amountIn);
+            uint256 minimumOutput = route.minAmountOut > requiredOutput ? route.minAmountOut : requiredOutput;
+            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
+                settledOutput = ISettlementAdapter(settlementAdapter).executeExactInputSingle(
+                    route.tokenIn,
+                    route.tokenOut,
+                    route.uniPoolFee,
+                    amountIn,
+                    minimumOutput,
+                    route.limitSqrtPriceX96,
+                    address(this)
+                );
+            } else if (route.pathKind == ExecutorTypes.PATH_KIND_TWO_HOP) {
+                if (route.hopCount != 2 || route.encodedPath.length == 0) revert ExecutorErrors.BadRoute();
+                _validateBoundedPath(route);
+                settledOutput =
+                    ISettlementAdapter(settlementAdapter).executeExactInputPath(route.encodedPath, amountIn, minimumOutput, address(this));
+            } else {
+                revert ExecutorErrors.BadRoute();
+            }
+            if (settledOutput < minimumOutput) revert ExecutorErrors.SlippageExceeded();
         }
-        if (settledOutput < minimumOutput) revert ExecutorErrors.SlippageExceeded();
 
         uint256 outputBalance = IERC20(route.tokenOut).balanceOf(address(this));
         if (outputBalance < requiredOutput) revert ExecutorErrors.InsufficientOutput();

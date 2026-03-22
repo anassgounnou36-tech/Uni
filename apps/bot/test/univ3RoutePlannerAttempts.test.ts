@@ -127,8 +127,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.route.quoteMetadata.poolFee).toBe(10000);
     expect(result.summary.status).toBe('ROUTEABLE');
     expect(result.summary.selectedFeeTier).toBe(10000);
-    expect(result.summary.feeTierAttempts).toHaveLength(3);
-    expect(result.summary.feeTierAttempts?.map((attempt) => attempt.feeTier)).toEqual([500, 3000, 10000]);
+    const exactInputAttempts = result.summary.feeTierAttempts?.filter((attempt) => (attempt.executionMode ?? 'EXACT_INPUT') === 'EXACT_INPUT');
+    expect(exactInputAttempts).toHaveLength(3);
+    expect(exactInputAttempts?.map((attempt) => attempt.feeTier)).toEqual([500, 3000, 10000]);
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 500)?.reason).toBe('POOL_MISSING');
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 3000)?.status).toBe('CONSTRAINT_REJECTED');
     expect(result.summary.feeTierAttempts?.find((attempt) => attempt.feeTier === 10000)?.status).toBe('ROUTEABLE');
@@ -153,10 +154,12 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       if (call.functionName === 'liquidity') return 1n;
       if (call.functionName === 'slot0') return [1n] as const;
       if (call.functionName === 'quoteExactInputSingle') {
-        return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        const param = call.args?.[0] as { amountIn: bigint } | undefined;
+        if (param?.amountIn === 1_000n) return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        return [0n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
       if (call.functionName === 'quoteExactOutputSingle') {
-        return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        return [1_001n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
       throw new Error(`unexpected call ${call.functionName}`);
     });
@@ -220,7 +223,9 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
       if (call.functionName === 'liquidity') return 1n;
       if (call.functionName === 'slot0') return [1n] as const;
       if (call.functionName === 'quoteExactInputSingle') {
-        return [920n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        const param = call.args?.[0] as { amountIn: bigint } | undefined;
+        if (param?.amountIn === 1_000n) return [920n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        return [0n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
       }
       if (call.functionName === 'quoteExactOutputSingle') {
         return [890n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
@@ -248,6 +253,61 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.failure.summary.constraintBreakdown?.requiredOutputShortfallOut).toBe(0n);
     expect(result.failure.summary.constraintBreakdown?.minAmountOutShortfallOut).toBeGreaterThan(0n);
     expect(result.failure.summary.exactOutputViability?.status).toBe('SATISFIABLE');
+  });
+
+  it('exact_output_satisfiable_candidate_generates_exact_output_execution_candidate', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') {
+        const param = call.args?.[0] as { amountIn: bigint } | undefined;
+        if (param?.amountIn === 1_000n) return [905n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        if (param?.amountIn === 100n) return [120n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.executionMode).toBe('EXACT_OUTPUT');
+    expect(result.route.targetOutput).toBe(900n);
+    expect(result.route.maxAmountIn).toBe(1_000n);
+    expect(result.route.quotedAmountOut).toBe(1_020n);
+  });
+
+  it('exact_output_candidate_profit_is_valued_from_leftover_input', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') {
+        const param = call.args?.[0] as { amountIn: bigint } | undefined;
+        if (param?.amountIn === 1_000n) return [901n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+        if (param?.amountIn === 100n) return [50n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      }
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        feeTiers: [3000] as const,
+        slippageBufferBps: 0n,
+        effectiveGasPriceWei: 0n,
+        riskBufferBps: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n
+      }
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.executionMode).toBe('EXACT_OUTPUT');
+    expect(result.route.grossEdgeOut).toBe(50n);
+    expect(result.route.netEdgeOut).toBe(50n);
   });
 
   it('gasCostOut_is_nonzero_when_gas_and_price_are_nonzero', async () => {
