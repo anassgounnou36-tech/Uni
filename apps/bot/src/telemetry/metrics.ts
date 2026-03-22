@@ -87,6 +87,15 @@ export class BotMetrics {
     this.increment('scheduler_policy_blocked_near_miss_total');
   }
 
+  incrementOrdersPrepareFailed(venue?: string, pathKind?: string, executionMode?: string): void {
+    this.increment('orders_prepare_failed_total');
+    if (venue && pathKind && executionMode) {
+      this.increment(
+        `orders_prepare_failed_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+      );
+    }
+  }
+
   observeIngestToSendLatency(ms: number): void {
     this.ingestToSendLatencies.push(ms);
   }

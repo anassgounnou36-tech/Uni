@@ -31,7 +31,10 @@ describe('order state and poller', () => {
 
   it('allows dropped transitions from scheduler and simulation states', () => {
     expect(() => assertLegalOrderTransition('SUPPORTED', 'DROPPED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('SUPPORTED', 'PLAN_BUILT')).not.toThrow();
     expect(() => assertLegalOrderTransition('SCHEDULED', 'DROPPED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('SCHEDULED', 'PREPARE_FAILED')).not.toThrow();
+    expect(() => assertLegalOrderTransition('PLAN_BUILT', 'PREPARE_FAILED')).not.toThrow();
     expect(() => assertLegalOrderTransition('SIM_OK', 'DROPPED')).not.toThrow();
     expect(() => assertLegalOrderTransition('SIM_FAIL', 'DROPPED')).not.toThrow();
   });

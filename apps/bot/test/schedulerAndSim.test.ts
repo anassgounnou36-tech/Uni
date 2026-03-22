@@ -334,4 +334,66 @@ describe('scheduler + prepared-execution gate', () => {
     expect(decision.reason).toEqual('SHADOW_MODE');
     expect(decision.preparedExecution.serializedTransaction.startsWith('0x')).toEqual(true);
   });
+
+  it('returns structured prepare-failure context when execution prepare throws', async () => {
+    const signed = loadSigned();
+    const routeBook = makeRouteBook(50n);
+    const orderHash = computeOrderHash(signed.order) as `0x${string}`;
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async () => 7n
+    });
+
+    const decision = await runHotLaneStep({
+      entry: {
+        orderHash,
+        scheduledBlock: 1000n,
+        competeWindowEnd: 1002n,
+        predictedEdgeOut: 50n
+      },
+      currentBlock: 1000n,
+      thresholdOut: 1n,
+      normalizedOrder: {
+        orderHash,
+        orderType: 'Dutch_V3',
+        encodedOrder: signed.encodedOrder,
+        signature: signed.signature,
+        decodedOrder: signed,
+        reactor: signed.order.info.reactor
+      },
+      order: signed.order,
+      routeBook,
+      resolveEnv: {
+        timestamp: 1_900_000_000n,
+        basefee: 100_000_000n,
+        chainId: 42161n
+      },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+      executor: '0x3333333333333333333333333333333333333333',
+      simService: { simulatePrepared: async () => ({ ok: true, reason: 'SUPPORTED', gasUsed: 1n }) } as ForkSimService,
+      sequencerClient: {
+        sendPreparedExecution: async () => ({ accepted: false, attempts: [], records: [] })
+      } as SequencerClient,
+      nonceManager,
+      executionPreparer: async () => {
+        const error = new Error('prepare step failed');
+        error.name = 'PrepareExecutionError';
+        throw error;
+      },
+      shadowMode: false
+    });
+
+    expect(decision.action).toEqual('DROP');
+    if (decision.action !== 'DROP') {
+      throw new Error('expected DROP decision');
+    }
+    expect(decision.reason).toEqual('PREPARE_FAILED');
+    expect(decision.prepareError).toEqual('PrepareExecutionError');
+    expect(decision.prepareMessage).toEqual('prepare step failed');
+    expect(decision.chosenRouteVenue).toEqual('UNISWAP_V3');
+    expect(decision.pathKind).toEqual('DIRECT');
+    expect(decision.hopCount).toEqual(1);
+    expect(decision.executionMode).toEqual('EXACT_INPUT');
+    expect(decision.pathDescriptor).toContain('DIRECT:');
+  });
 });
