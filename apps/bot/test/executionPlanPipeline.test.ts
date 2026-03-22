@@ -120,7 +120,7 @@ const MOCK_REACTOR_ABI = [
   }
 ] as const;
 
-  const MOCK_UNI_ROUTER_ABI = [
+const MOCK_UNI_ROUTER_ABI = [
   {
     type: 'function',
     name: 'lastPath',

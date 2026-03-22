@@ -127,7 +127,7 @@ export function reverseUniV3Path(encodedPath: `0x${string}`): `0x${string}` {
     throw new Error('UniV3 path must be token(20) + N*(fee(3)+token(20))');
   }
   const hopCount = (bodyLength - 20) / 23;
-  if (hopCount === 0 || hopCount > 2) {
+  if (hopCount > 2) {
     throw new Error('UniV3 path must have 1 or 2 hops');
   }
   const tokenCount = hopCount + 1;
@@ -144,8 +144,8 @@ export function reverseUniV3Path(encodedPath: `0x${string}`): `0x${string}` {
       offset += 6;
     }
   }
-  const reversedTokens = [...tokens].reverse();
-  const reversedFees = [...fees].reverse();
+  const reversedTokens = tokens.slice().reverse();
+  const reversedFees = fees.slice().reverse();
   const parts: Array<`0x${string}`> = [];
   for (let i = 0; i < reversedTokens.length; i += 1) {
     if (i === 0) {

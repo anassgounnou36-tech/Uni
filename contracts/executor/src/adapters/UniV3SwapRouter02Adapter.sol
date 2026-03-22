@@ -131,8 +131,7 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
         external
         returns (uint256 amountInUsed)
     {
-        (, address tokenIn, uint256 hops) = _decodeBoundedPath(path);
-        if (hops == 0) revert ExecutorErrors.BadRoute();
+        (, address tokenIn,) = _decodeBoundedPath(path);
         _safeApprove(tokenIn, ROUTER, 0);
         _safeApprove(tokenIn, ROUTER, maxAmountIn);
         amountInUsed = ISwapRouter02(ROUTER).exactOutput(
