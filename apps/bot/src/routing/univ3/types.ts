@@ -2,6 +2,8 @@ import type { Address, PublicClient } from 'viem';
 import type { ResolvedV3DutchOrder } from '@uni/protocol';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
+import type { RouteEvalRpcGate } from '../rpc/rpcGate.js';
+import type { RouteEvalReadCache } from '../rpc/readCache.js';
 
 export type UniV3FeeTier = 500 | 3000 | 10000;
 
@@ -25,7 +27,15 @@ export type UniV3RoutePlan = HedgeRoutePlan & {
 };
 
 export type RoutePlanningFailure = {
-  reason: 'NOT_ROUTEABLE' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' | 'CONSTRAINT_REJECTED';
+  reason:
+    | 'NOT_ROUTEABLE'
+    | 'QUOTE_FAILED'
+    | 'NOT_PROFITABLE'
+    | 'GAS_NOT_PRICEABLE'
+    | 'CONSTRAINT_REJECTED'
+    | 'RATE_LIMITED'
+    | 'RPC_UNAVAILABLE'
+    | 'RPC_FAILED';
   details?: string;
   summary: VenueRouteAttemptSummary;
 };
@@ -46,9 +56,18 @@ export type UniV3RoutingContext = {
   factory: Address;
   quoter: Address;
   bridgeTokens?: readonly Address[];
+  routeEvalChainId?: bigint;
+  routeEvalRpcGate?: RouteEvalRpcGate;
+  onRouteEvalCacheAccess?: (hit: boolean, venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalInfraError?: (category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED', venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
 };
 
 export type RoutePlannerInput = {
   resolvedOrder: ResolvedV3DutchOrder;
   policy?: RoutePlanningPolicy;
+  routeEval?: {
+    chainId?: bigint;
+    blockNumberish?: bigint;
+    readCache?: RouteEvalReadCache;
+  };
 };

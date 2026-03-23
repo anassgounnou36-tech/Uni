@@ -1,6 +1,7 @@
 import type { ResolveEnv } from '@uni/protocol';
 import { encodeFunctionData, type Address } from 'viem';
 import { resolveAt } from '@uni/protocol';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import { EXECUTOR_ABI } from './abi.js';
 import { encodeRoutePlanCallbackData } from './callbackData.js';
 import type { BuildExecutionPlanResult, ExecutionPlan } from './types.js';
@@ -39,7 +40,14 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     return { ok: false, reason: 'UNSUPPORTED_SHAPE', details: 'resolved output shape is not same-token' };
   }
 
-  const routeDecision = await params.routeBook.selectBestRoute({ resolvedOrder });
+  const routeDecision = await params.routeBook.selectBestRoute({
+    resolvedOrder,
+    routeEval: {
+      chainId: params.resolveEnv.chainId ?? ARBITRUM_ONE_CHAIN_ID,
+      blockNumberish: params.blockNumberish,
+      readCache: new RouteEvalReadCache()
+    }
+  });
   if (!routeDecision.ok) {
     return {
       ok: false,

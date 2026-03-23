@@ -52,6 +52,8 @@ export type RouteCandidateFailureReason =
   | 'NO_POOL'
   | 'POOL_DEAD'
   | 'QUOTE_FAILED'
+  | 'RATE_LIMITED'
+  | 'RPC_UNAVAILABLE'
   | 'NOT_PROFITABLE'
   | 'NOT_PRICEABLE_GAS'
   | 'CAMELOT_DISABLED'

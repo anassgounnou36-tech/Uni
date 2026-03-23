@@ -1,5 +1,6 @@
 import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
 import { resolveAt } from '@uni/protocol';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import { buildExecutionPlan, type BuildExecutionPlanParams } from '../execution/planBuilder.js';
 import type { PreparedExecution } from '../execution/preparedExecution.js';
 import type { ExecutionPlan } from '../execution/types.js';
@@ -26,7 +27,7 @@ export type HotLaneDecision =
   | { action: 'WAIT'; reason: 'NOT_IN_HOT_WINDOW' }
   | {
       action: 'DROP';
-      reason: 'EDGE_DISAPPEARED' | 'SIM_FAIL' | 'WINDOW_EXPIRED' | 'PLAN_BUILD_FAILED' | 'PREPARE_FAILED' | 'SEND_REJECTED';
+      reason: 'EDGE_DISAPPEARED' | 'SIM_FAIL' | 'WINDOW_EXPIRED' | 'PLAN_BUILD_FAILED' | 'PREPARE_FAILED' | 'SEND_REJECTED' | 'INFRA_BLOCKED';
       simResult?: ForkSimResult;
       preparedExecution?: PreparedExecution;
       sendResult?: SequencerClientResult;
@@ -126,8 +127,21 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     ...params.resolveEnv,
     blockNumberish: params.currentBlock
   });
-  const route = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
-  if (!route.ok || route.chosenRoute.netEdgeOut < params.thresholdOut) {
+  const route = await params.routeBook.selectBestRoute({
+    resolvedOrder: resolved,
+    routeEval: {
+      chainId: params.resolveEnv.chainId ?? 42161n,
+      blockNumberish: params.currentBlock,
+      readCache: new RouteEvalReadCache()
+    }
+  });
+  if (!route.ok) {
+    if (route.reason === 'RATE_LIMITED' || route.reason === 'RPC_UNAVAILABLE') {
+      return { action: 'DROP', reason: 'INFRA_BLOCKED' };
+    }
+    return { action: 'DROP', reason: 'EDGE_DISAPPEARED' };
+  }
+  if (route.chosenRoute.netEdgeOut < params.thresholdOut) {
     return { action: 'DROP', reason: 'EDGE_DISAPPEARED' };
   }
 

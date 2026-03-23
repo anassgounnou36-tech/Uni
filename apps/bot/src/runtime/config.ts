@@ -82,6 +82,8 @@ const baseSchema = z.object({
   CANDIDATE_BLOCK_OFFSETS: z.string().default('0,1,2'),
   COMPETE_WINDOW_BLOCKS: z.string().default('2'),
   THRESHOLD_OUT: z.string().default('1'),
+  ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
 
   SHADOW_MODE: z.string().optional(),
   CANARY_MODE: z.string().optional(),
@@ -122,6 +124,8 @@ export type RuntimeConfig = {
   candidateBlockOffsets: bigint[];
   competeWindowBlocks: bigint;
   thresholdOut: bigint;
+  routeEvalMaxConcurrency: number;
+  infraBlockedRetryCooldownTicks: number;
 
   shadowMode: boolean;
   canaryMode: boolean;
@@ -165,6 +169,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     candidateBlockOffsets: parseBigIntList(parsed.CANDIDATE_BLOCK_OFFSETS),
     competeWindowBlocks: parseBigInt(parsed.COMPETE_WINDOW_BLOCKS, 'COMPETE_WINDOW_BLOCKS'),
     thresholdOut: parseBigInt(parsed.THRESHOLD_OUT, 'THRESHOLD_OUT'),
+    routeEvalMaxConcurrency: parsed.ROUTE_EVAL_MAX_CONCURRENCY,
+    infraBlockedRetryCooldownTicks: parsed.INFRA_BLOCKED_RETRY_COOLDOWN_TICKS,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
     canaryMode: parseBoolean(parsed.CANARY_MODE, false),

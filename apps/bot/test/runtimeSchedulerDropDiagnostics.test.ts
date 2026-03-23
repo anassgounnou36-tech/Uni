@@ -68,10 +68,11 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxWebhookBodyBytes: 1000000,
     schedulerCadenceMs: 100,
     hotLaneCadenceMs: 100,
-    candidateBlocks: [1000n, 1001n],
     candidateBlockOffsets: [0n, 1n],
     competeWindowBlocks: 2n,
     thresholdOut: 20n,
+    routeEvalMaxConcurrency: 4,
+    infraBlockedRetryCooldownTicks: 2,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],
@@ -650,10 +651,100 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(events).toContain('routebook_no_edge_summary');
   });
 
+  it('infra-blocked evaluation does not become SCHEDULER_NO_EDGE and emits ORDER_EVALUATION_BLOCKED', async () => {
+    const payload = makePayload();
+    const routeBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'RATE_LIMITED' as const,
+        infraBlocked: true,
+        venueAttempts: [
+          {
+            venue: 'UNISWAP_V3' as const,
+            status: 'RATE_LIMITED' as const,
+            reason: 'RATE_LIMITED',
+            errorCategory: 'RATE_LIMITED' as const,
+            errorMessage: 'exceeded compute units'
+          }
+        ],
+        bestRejectedSummary: {
+          venue: 'UNISWAP_V3' as const,
+          status: 'RATE_LIMITED' as const,
+          reason: 'RATE_LIMITED',
+          errorCategory: 'RATE_LIMITED' as const,
+          errorMessage: 'exceeded compute units',
+          candidateClass: 'INFRA_BLOCKED' as const
+        },
+        alternativeRoutes: []
+      })
+    } as RouteBook;
+    const { runtime, store, journal, ingress } = makeRuntime({
+      config: runtimeConfig({ thresholdOut: 10n }),
+      schedulerRouteBook: routeBook
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toEqual('SUPPORTED');
+    expect(record?.reason).toEqual('SUPPORTED');
+    const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
+    expect(dropped).toBeUndefined();
+    const blocked = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_EVALUATION_BLOCKED');
+    expect(blocked).toBeDefined();
+    expect(blocked?.payload.reason).toEqual('RATE_LIMITED');
+  });
+
+  it('rate-limited candidates use cooldown and do not thrash each tick', async () => {
+    const payload = makePayload();
+    let calls = 0;
+    const routeBook = {
+      selectBestRoute: async () => {
+        calls += 1;
+        return {
+          ok: false as const,
+          reason: 'RATE_LIMITED' as const,
+          infraBlocked: true,
+          venueAttempts: [
+            {
+              venue: 'UNISWAP_V3' as const,
+              status: 'RATE_LIMITED' as const,
+              reason: 'RATE_LIMITED',
+              errorCategory: 'RATE_LIMITED' as const,
+              errorMessage: '429'
+            }
+          ],
+          bestRejectedSummary: {
+            venue: 'UNISWAP_V3' as const,
+            status: 'RATE_LIMITED' as const,
+            reason: 'RATE_LIMITED',
+            errorCategory: 'RATE_LIMITED' as const,
+            errorMessage: '429',
+            candidateClass: 'INFRA_BLOCKED' as const
+          },
+          alternativeRoutes: []
+        };
+      }
+    } as RouteBook;
+    const { runtime, ingress } = makeRuntime({
+      config: runtimeConfig({ infraBlockedRetryCooldownTicks: 2 }),
+      schedulerRouteBook: routeBook
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    // Two candidate blocks per evaluation tick; with cooldown we only evaluate on ticks 1 and 3.
+    expect(calls).toBe(4);
+  });
+
   it('scheduler no-edge dropped payload includes compact economics evaluations', async () => {
     const payload = makePayload();
     const { runtime, journal, ingress } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n, 1001n], candidateBlockOffsets: [0n, 1n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n, 1n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRouteBook()
     });
 
@@ -696,7 +787,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const logs: string[] = [];
     const logger = new JsonConsoleLogger((line) => logs.push(line));
     const { runtime, ingress } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRouteBook(),
       logger
     });
@@ -722,7 +813,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const logs: string[] = [];
     const logger = new JsonConsoleLogger((line) => logs.push(line));
     const { runtime, journal, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeNearMissRouteBook(),
       logger
     });
@@ -786,7 +877,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('candidateClass_is_serialized_in_bestRejectedSummary_and_dropped_payloads', async () => {
     const payload = makePayload();
     const { runtime, journal, ingress } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeNearMissRouteBook()
     });
 
@@ -815,7 +906,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('increments satisfiable-required-output counter only when best rejected viability is SATISFIABLE', async () => {
     const payload = makePayload();
     const { runtime, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeRequiredOutputSatisfiableRouteBook()
     });
 
@@ -830,7 +921,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
   it('increments camelot unsatisfiable counter when camelot is best REQUIRED_OUTPUT rejected', async () => {
     const payload = makePayload();
     const { runtime, ingress, metrics } = makeRuntime({
-      config: runtimeConfig({ candidateBlocks: [1000n], candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
       schedulerRouteBook: noEdgeCamelotUnsatisfiableRouteBook()
     });
 

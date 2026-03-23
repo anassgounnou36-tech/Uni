@@ -16,7 +16,16 @@ export type RouteBookSelection =
     }
   | {
       ok: false;
-      reason: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE';
+      reason:
+        | 'NOT_ROUTEABLE'
+        | 'CONSTRAINT_REJECTED'
+        | 'NOT_PROFITABLE'
+        | 'QUOTE_FAILED'
+        | 'GAS_NOT_PRICEABLE'
+        | 'RATE_LIMITED'
+        | 'RPC_UNAVAILABLE'
+        | 'RPC_FAILED';
+      infraBlocked?: boolean;
       venueAttempts: VenueRouteAttemptSummary[];
       bestRejectedSummary?: VenueRouteAttemptSummary;
       alternativeRoutes: RouteCandidateSummary[];
@@ -68,6 +77,15 @@ function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandi
     return 'CONSTRAINT_REJECTED';
   }
   if (summary.status === 'QUOTE_FAILED') {
+    return 'QUOTE_FAILED';
+  }
+  if (summary.status === 'RATE_LIMITED') {
+    return 'RATE_LIMITED';
+  }
+  if (summary.status === 'RPC_UNAVAILABLE') {
+    return 'RPC_UNAVAILABLE';
+  }
+  if (summary.status === 'RPC_FAILED') {
     return 'QUOTE_FAILED';
   }
   if (summary.status === 'GAS_NOT_PRICEABLE') {
@@ -394,24 +412,53 @@ export class RouteBook {
         : undefined;
       const statuses = venueAttempts.map((attempt) => attempt.status);
       const allNotRouteableOrQuoteFailed = statuses.every(
-        (status) => status === 'NOT_ROUTEABLE' || status === 'QUOTE_FAILED'
+        (status) =>
+          status === 'NOT_ROUTEABLE'
+          || status === 'QUOTE_FAILED'
+          || status === 'RATE_LIMITED'
+          || status === 'RPC_UNAVAILABLE'
+          || status === 'RPC_FAILED'
       );
+      const hasRateLimited = statuses.includes('RATE_LIMITED');
+      const hasRpcUnavailable = statuses.includes('RPC_UNAVAILABLE');
+      const hasRpcFailed = statuses.includes('RPC_FAILED');
       const hasGasNotPriceable = statuses.includes('GAS_NOT_PRICEABLE');
-      const reason: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE' =
+      const reason:
+        | 'NOT_ROUTEABLE'
+        | 'CONSTRAINT_REJECTED'
+        | 'NOT_PROFITABLE'
+        | 'QUOTE_FAILED'
+        | 'GAS_NOT_PRICEABLE'
+        | 'RATE_LIMITED'
+        | 'RPC_UNAVAILABLE'
+        | 'RPC_FAILED' =
         allNotRouteableOrQuoteFailed
-          ? statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
-            ? 'QUOTE_FAILED'
-            : 'NOT_ROUTEABLE'
+          ? hasRateLimited
+            ? 'RATE_LIMITED'
+            : hasRpcUnavailable
+              ? 'RPC_UNAVAILABLE'
+              : hasRpcFailed
+                ? 'QUOTE_FAILED'
+                : statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
+                  ? 'QUOTE_FAILED'
+                  : 'NOT_ROUTEABLE'
           : bestRejectedWithClass?.status === 'CONSTRAINT_REJECTED'
             ? 'CONSTRAINT_REJECTED'
             : bestRejectedWithClass?.status === 'NOT_PROFITABLE'
               ? 'NOT_PROFITABLE'
-              : hasGasNotPriceable
-                ? 'GAS_NOT_PRICEABLE'
-                : 'NOT_ROUTEABLE';
+              : bestRejectedWithClass?.status === 'RATE_LIMITED'
+                ? 'RATE_LIMITED'
+                : bestRejectedWithClass?.status === 'RPC_UNAVAILABLE'
+                  ? 'RPC_UNAVAILABLE'
+                  : bestRejectedWithClass?.status === 'RPC_FAILED'
+                    ? 'RPC_FAILED'
+                    : hasGasNotPriceable
+                      ? 'GAS_NOT_PRICEABLE'
+                      : 'NOT_ROUTEABLE';
       return {
         ok: false,
         reason,
+        infraBlocked: reason === 'RATE_LIMITED' || reason === 'RPC_UNAVAILABLE' || reason === 'RPC_FAILED',
         venueAttempts,
         bestRejectedSummary: bestRejectedWithClass,
         alternativeRoutes: alternatives

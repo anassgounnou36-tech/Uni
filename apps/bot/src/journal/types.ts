@@ -14,6 +14,7 @@ export type JournalEventType =
   | 'ORDER_SCHEDULED'
   | 'ORDER_REPRICED'
   | 'ORDER_DROPPED'
+  | 'ORDER_EVALUATION_BLOCKED'
   | 'ORDER_PREPARE_FAILED'
   | 'PLAN_BUILT'
   | 'PREPARED'
@@ -93,6 +94,8 @@ type JournalFeeTierAttempt = {
   netEdgeOut?: string;
   status: string;
   reason: string;
+  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+  errorMessage?: string;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: JournalConstraintBreakdown;
   exactOutputViability?: JournalExactOutputViability;
@@ -109,6 +112,8 @@ type JournalVenueAttempt = {
   pathDescriptor?: string;
   status: string;
   reason: string;
+  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+  errorMessage?: string;
   quotedAmountOut?: string;
   minAmountOut?: string;
   grossEdgeOut?: string;
@@ -211,6 +216,17 @@ export type DecisionJournalEvent =
         message?: string;
         netEdgeOut?: string;
         simReason?: string;
+      }
+    >
+  | BaseJournalEvent<
+      'ORDER_EVALUATION_BLOCKED',
+      {
+        orderHash: `0x${string}`;
+        reason: string;
+        candidateCount: number;
+        blockedCount: number;
+        errorMessage?: string;
+        venueAttempts?: JournalVenueAttempt[];
       }
     >
   | BaseJournalEvent<

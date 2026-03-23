@@ -2,6 +2,9 @@ import type { Address, PublicClient } from 'viem';
 import { encodePacked } from 'viem';
 import { UNIV3_QUOTER_V2_ABI } from './abi.js';
 import type { UniV3FeeTier } from './types.js';
+import { normalizeRouteEvalRpcError } from '../rpc/errors.js';
+import type { RouteEvalReadCache } from '../rpc/readCache.js';
+import type { RouteEvalRpcGate } from '../rpc/rpcGate.js';
 
 export type QuotedExactInputSingle = {
   amountOut: bigint;
@@ -24,6 +27,13 @@ export type QuotedExactOutputPath = {
 };
 
 export function classifyQuoteFailure(error: unknown): string {
+  const normalized = normalizeRouteEvalRpcError(error);
+  if (normalized.category === 'RATE_LIMITED') {
+    return 'RATE_LIMITED';
+  }
+  if (normalized.category === 'RPC_UNAVAILABLE') {
+    return 'RPC_UNAVAILABLE';
+  }
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
     if (message.includes('too much requested') || message.includes('insufficient input amount')) {
@@ -35,9 +45,55 @@ export function classifyQuoteFailure(error: unknown): string {
     if (message.includes('timeout')) {
       return 'TIMEOUT';
     }
-    return 'READ_ERROR';
+    return 'RPC_FAILED';
   }
-  return 'UNKNOWN_ERROR';
+  return 'RPC_FAILED';
+}
+
+type QuoteReadContext = {
+  chainId?: bigint;
+  blockNumberish?: bigint;
+  readCache?: RouteEvalReadCache;
+  rpcGate?: RouteEvalRpcGate;
+  onCacheAccess?: (hit: boolean) => void;
+};
+
+async function runQuoteRead<T>(
+  params: {
+    client: PublicClient;
+    quoter: Address;
+    fn: 'quoteExactInputSingle' | 'quoteExactOutputSingle' | 'quoteExactInput' | 'quoteExactOutput';
+    args: readonly unknown[];
+    context?: QuoteReadContext;
+    extraKey?: string;
+  }
+): Promise<T> {
+  const chainId = params.context?.chainId ?? 42161n;
+  const blockNumberish = params.context?.blockNumberish ?? 0n;
+  const loader = async () =>
+    params.client.readContract({
+      address: params.quoter,
+      abi: UNIV3_QUOTER_V2_ABI,
+      functionName: params.fn,
+      args: params.args
+    }) as Promise<T>;
+  const run = () => (params.context?.rpcGate ? params.context.rpcGate.run(loader) : loader());
+  if (!params.context?.readCache) {
+    return run();
+  }
+  const cached = await params.context.readCache.getOrSet<T>(
+    {
+      chainId,
+      blockNumberish,
+      target: params.quoter,
+      fn: params.fn,
+      args: params.args,
+      extraKey: params.extraKey
+    },
+    run,
+    params.context.onCacheAccess
+  );
+  return cached.value;
 }
 
 export async function quoteExactInputSingle(
@@ -46,22 +102,23 @@ export async function quoteExactInputSingle(
   tokenIn: Address,
   tokenOut: Address,
   feeTier: UniV3FeeTier,
-  amountIn: bigint
+  amountIn: bigint,
+  context?: QuoteReadContext
 ): Promise<QuotedExactInputSingle> {
-  const result = (await client.readContract({
-    address: quoter,
-    abi: UNIV3_QUOTER_V2_ABI,
-    functionName: 'quoteExactInputSingle',
-    args: [
-      {
-        tokenIn,
-        tokenOut,
-        amountIn,
-        fee: feeTier,
-        sqrtPriceLimitX96: 0n
-      }
-    ]
-  })) as [bigint, bigint, number, bigint];
+  const quoteInput = {
+    tokenIn,
+    tokenOut,
+    amountIn,
+    fee: feeTier,
+    sqrtPriceLimitX96: 0n
+  };
+  const result = await runQuoteRead<[bigint, bigint, number, bigint]>({
+    client,
+    quoter,
+    fn: 'quoteExactInputSingle',
+    args: [quoteInput],
+    context
+  });
   const [amountOut, , , gasUnitsEstimate] = result;
 
   return {
@@ -77,22 +134,23 @@ export async function quoteExactOutputSingle(
   tokenOut: Address,
   feeTier: UniV3FeeTier,
   amountOut: bigint,
-  limitSqrtPriceX96: bigint = 0n
+  limitSqrtPriceX96: bigint = 0n,
+  context?: QuoteReadContext
 ): Promise<QuotedExactOutputSingle> {
-  const result = (await client.readContract({
-    address: quoter,
-    abi: UNIV3_QUOTER_V2_ABI,
-    functionName: 'quoteExactOutputSingle',
-    args: [
-      {
-        tokenIn,
-        tokenOut,
-        amount: amountOut,
-        fee: feeTier,
-        sqrtPriceLimitX96: limitSqrtPriceX96
-      }
-    ]
-  })) as [bigint, bigint, number, bigint];
+  const quoteOutputInput = {
+    tokenIn,
+    tokenOut,
+    amount: amountOut,
+    fee: feeTier,
+    sqrtPriceLimitX96: limitSqrtPriceX96
+  };
+  const result = await runQuoteRead<[bigint, bigint, number, bigint]>({
+    client,
+    quoter,
+    fn: 'quoteExactOutputSingle',
+    args: [quoteOutputInput],
+    context
+  });
   const [amountIn, , , gasUnitsEstimate] = result;
   return {
     amountIn,
@@ -163,14 +221,17 @@ export async function quoteExactInputPath(
   client: PublicClient,
   quoter: Address,
   encodedPath: `0x${string}`,
-  amountIn: bigint
+  amountIn: bigint,
+  context?: QuoteReadContext
 ): Promise<QuotedExactInputPath> {
-  const result = (await client.readContract({
-    address: quoter,
-    abi: UNIV3_QUOTER_V2_ABI,
-    functionName: 'quoteExactInput',
-    args: [encodedPath, amountIn]
-  })) as [bigint, bigint[], number[], bigint];
+  const result = await runQuoteRead<[bigint, bigint[], number[], bigint]>({
+    client,
+    quoter,
+    fn: 'quoteExactInput',
+    args: [encodedPath, amountIn],
+    context,
+    extraKey: encodedPath
+  });
   const [amountOut, , , gasUnitsEstimate] = result;
   return { amountOut, gasUnitsEstimate };
 }
@@ -179,14 +240,17 @@ export async function quoteExactOutputPath(
   client: PublicClient,
   quoter: Address,
   encodedPath: `0x${string}`,
-  amountOut: bigint
+  amountOut: bigint,
+  context?: QuoteReadContext
 ): Promise<QuotedExactOutputPath> {
-  const result = (await client.readContract({
-    address: quoter,
-    abi: UNIV3_QUOTER_V2_ABI,
-    functionName: 'quoteExactOutput',
-    args: [encodedPath, amountOut]
-  })) as [bigint, bigint[], number[], bigint];
+  const result = await runQuoteRead<[bigint, bigint[], number[], bigint]>({
+    client,
+    quoter,
+    fn: 'quoteExactOutput',
+    args: [encodedPath, amountOut],
+    context,
+    extraKey: encodedPath
+  });
   const [amountIn, , , gasUnitsEstimate] = result;
   return { amountIn, gasUnitsEstimate };
 }
