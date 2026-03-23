@@ -1,5 +1,5 @@
 import type { Address } from 'viem';
-import type { RoutePathKind } from './pathTypes.js';
+import type { PathEncodingDirection, RoutePathKind } from './pathTypes.js';
 import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViability } from './exactOutputTypes.js';
@@ -25,6 +25,7 @@ export type HedgeRoutePlan = {
   executionMode?: HedgeExecutionMode;
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
+  pathDirection?: PathEncodingDirection;
   tokenIn: Address;
   tokenOut: Address;
   bridgeToken?: Address;

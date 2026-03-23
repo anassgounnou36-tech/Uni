@@ -3,6 +3,7 @@ import { discoverPoolWithStatus } from './poolDiscovery.js';
 import {
   classifyQuoteFailure,
   encodeUniV3Path,
+  reverseUniV3Path,
   quoteExactInputPath,
   quoteExactInputSingle,
   quoteExactOutputPath,
@@ -257,6 +258,7 @@ export class UniV3RoutePlanner {
       }
 
       try {
+        const exactOutputPath = shape.kind === 'TWO_HOP' ? reverseUniV3Path(shape.encodedPath!) : undefined;
         const exactOutputQuote = shape.kind === 'DIRECT'
           ? await quoteExactOutputSingle(
             this.context.client,
@@ -267,7 +269,7 @@ export class UniV3RoutePlanner {
             requiredOutput,
             0n
           )
-          : await quoteExactOutputPath(this.context.client, this.context.quoter, shape.encodedPath!, requiredOutput);
+          : await quoteExactOutputPath(this.context.client, this.context.quoter, exactOutputPath!, requiredOutput);
         const requiredInputForTargetOutput = exactOutputQuote.amountIn;
         const inputDeficit = requiredInputForTargetOutput > amountIn ? requiredInputForTargetOutput - amountIn : 0n;
         const inputSlack = amountIn > requiredInputForTargetOutput ? amountIn - requiredInputForTargetOutput : 0n;
@@ -431,6 +433,7 @@ export class UniV3RoutePlanner {
         executionMode: 'EXACT_INPUT',
         pathKind: shape.kind,
         hopCount: shape.hopCount,
+        pathDirection: 'FORWARD',
         bridgeToken: shape.bridgeToken,
         encodedPath: shape.encodedPath,
         tokenIn,
@@ -569,8 +572,9 @@ export class UniV3RoutePlanner {
         executionMode: 'EXACT_OUTPUT',
         pathKind: shape.kind,
         hopCount: shape.hopCount,
+        pathDirection: shape.kind === 'TWO_HOP' ? 'REVERSE' : 'FORWARD',
         bridgeToken: shape.bridgeToken,
-        encodedPath: shape.encodedPath,
+        encodedPath: shape.kind === 'TWO_HOP' ? reverseUniV3Path(shape.encodedPath!) : shape.encodedPath,
         tokenIn,
         tokenOut,
         amountIn: maxAmountIn,

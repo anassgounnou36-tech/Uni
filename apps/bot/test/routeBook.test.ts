@@ -10,6 +10,7 @@ function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<Hed
     executionMode: 'EXACT_INPUT',
     pathKind: 'DIRECT',
     hopCount: 1,
+    pathDirection: 'FORWARD',
     tokenIn: '0x0000000000000000000000000000000000000001',
     tokenOut: '0x0000000000000000000000000000000000000002',
     amountIn: 1_000n,

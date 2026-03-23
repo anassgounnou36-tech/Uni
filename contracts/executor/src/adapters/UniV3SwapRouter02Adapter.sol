@@ -89,13 +89,8 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
         external
         returns (uint256 amountOut)
     {
-        if (path.length == 0) revert ExecutorErrors.BadRoute();
-        uint256 hops = ((path.length - 20) / 23);
-        if (hops == 0 || hops > 2 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
-        address tokenIn;
-        assembly {
-            tokenIn := shr(96, calldataload(path.offset))
-        }
+        (address tokenIn,, uint256 hops) = _decodeBoundedPath(path);
+        if (hops == 0) revert ExecutorErrors.BadRoute();
         _safeApprove(tokenIn, ROUTER, 0);
         _safeApprove(tokenIn, ROUTER, amountIn);
         amountOut = ISwapRouter02(ROUTER).exactInput(
@@ -136,13 +131,7 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
         external
         returns (uint256 amountInUsed)
     {
-        if (path.length == 0) revert ExecutorErrors.BadRoute();
-        uint256 hops = ((path.length - 20) / 23);
-        if (hops == 0 || hops > 2 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
-        address tokenIn;
-        assembly {
-            tokenIn := shr(96, calldataload(path.offset))
-        }
+        (, address tokenIn,) = _decodeBoundedPath(path);
         _safeApprove(tokenIn, ROUTER, 0);
         _safeApprove(tokenIn, ROUTER, maxAmountIn);
         amountInUsed = ISwapRouter02(ROUTER).exactOutput(
@@ -153,6 +142,16 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
                 amountInMaximum: maxAmountIn
             })
         );
+    }
+
+    function _decodeBoundedPath(bytes calldata path) private pure returns (address firstToken, address lastToken, uint256 hops) {
+        if (path.length <= 20 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
+        hops = ((path.length - 20) / 23);
+        if (hops == 0 || hops > 2) revert ExecutorErrors.BadRoute();
+        assembly {
+            firstToken := shr(96, calldataload(path.offset))
+            lastToken := shr(96, calldataload(add(path.offset, sub(path.length, 20))))
+        }
     }
 
     function _safeApprove(address token, address spender, uint256 amount) private {

@@ -1,7 +1,7 @@
 import { decodeAbiParameters, encodeAbiParameters } from 'viem';
 import type { HedgeRoutePlan } from '../routing/venues.js';
 import { fromExecutorVenueCode, toExecutorVenueCode } from './venueTypes.js';
-import type { RoutePathKind } from '../routing/pathTypes.js';
+import type { PathEncodingDirection, RoutePathKind } from '../routing/pathTypes.js';
 import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
 
 const ROUTE_PLAN_TUPLE = [
@@ -12,6 +12,7 @@ const ROUTE_PLAN_TUPLE = [
       { name: 'executionMode', type: 'uint8' },
       { name: 'pathKind', type: 'uint8' },
       { name: 'hopCount', type: 'uint8' },
+      { name: 'pathDirection', type: 'uint8' },
       { name: 'tokenIn', type: 'address' },
       { name: 'tokenOut', type: 'address' },
       { name: 'uniPoolFee', type: 'uint24' },
@@ -32,6 +33,10 @@ const EXECUTION_MODE_TO_CODE: Record<HedgeExecutionMode, number> = {
   EXACT_INPUT: 0,
   EXACT_OUTPUT: 1
 };
+const PATH_DIRECTION_TO_CODE: Record<PathEncodingDirection, number> = {
+  FORWARD: 0,
+  REVERSE: 1
+};
 
 function fromPathKindCode(code: number): RoutePathKind {
   if (code === 0) return 'DIRECT';
@@ -45,11 +50,18 @@ function fromExecutionModeCode(code: number): HedgeExecutionMode {
   throw new Error(`unsupported execution mode code: ${code}`);
 }
 
+function fromPathDirectionCode(code: number): PathEncodingDirection {
+  if (code === 0) return 'FORWARD';
+  if (code === 1) return 'REVERSE';
+  throw new Error(`unsupported path direction code: ${code}`);
+}
+
 export type ExecutorRoutePlan = {
   venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
   executionMode: HedgeExecutionMode;
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
+  pathDirection: PathEncodingDirection;
   tokenIn: `0x${string}`;
   tokenOut: `0x${string}`;
   uniPoolFee: number;
@@ -66,6 +78,7 @@ export type RoutePlanCallbackInput = Pick<
   | 'executionMode'
   | 'pathKind'
   | 'hopCount'
+  | 'pathDirection'
   | 'tokenIn'
   | 'tokenOut'
   | 'encodedPath'
@@ -118,6 +131,7 @@ export function encodeRoutePlanCallbackData(route: RoutePlanCallbackInput): `0x$
     executionMode: route.executionMode ?? 'EXACT_INPUT',
     pathKind: route.pathKind,
     hopCount: route.hopCount,
+    pathDirection: route.pathDirection ?? 'FORWARD',
     tokenIn: route.tokenIn,
     tokenOut: route.tokenOut,
     uniPoolFee: route.pathKind === 'DIRECT' && route.quoteMetadata.venue === 'UNISWAP_V3' ? route.quoteMetadata.poolFee : 0,
@@ -134,6 +148,7 @@ export function encodeRoutePlanCallbackData(route: RoutePlanCallbackInput): `0x$
       executionMode: EXECUTION_MODE_TO_CODE[routePlan.executionMode],
       pathKind: PATH_KIND_TO_CODE[routePlan.pathKind],
       hopCount: routePlan.hopCount,
+      pathDirection: PATH_DIRECTION_TO_CODE[routePlan.pathDirection],
       tokenIn: routePlan.tokenIn,
       tokenOut: routePlan.tokenOut,
       uniPoolFee: routePlan.uniPoolFee,
@@ -153,6 +168,7 @@ export function decodeRoutePlanCallbackData(callbackData: `0x${string}`): Execut
     executionMode: fromExecutionModeCode(Number(decoded.executionMode)),
     pathKind: fromPathKindCode(Number(decoded.pathKind)),
     hopCount: Number(decoded.hopCount) as 1 | 2,
+    pathDirection: fromPathDirectionCode(Number(decoded.pathDirection)),
     tokenIn: decoded.tokenIn,
     tokenOut: decoded.tokenOut,
     uniPoolFee: Number(decoded.uniPoolFee),

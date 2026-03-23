@@ -36,6 +36,10 @@ const SAMPLE_PLAN: ExecutionPlan = {
   conditionalEnvelope: { TimestampMax: 100n },
   requiredOutputOut: 1n,
   predictedNetEdgeOut: 1n,
+  selectedExecutionMode: 'EXACT_INPUT',
+  selectedPathKind: 'DIRECT',
+  selectedHopCount: 1,
+  selectedPathDirection: 'FORWARD',
   selectedBlock: 1n,
   resolveEnv: { timestamp: 1n, basefee: 1n, chainId: 42161n }
 };

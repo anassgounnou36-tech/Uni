@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { PublicClient } from 'viem';
 import { UniV3RoutePlanner } from '../src/routing/univ3/routePlanner.js';
+import { reverseUniV3Path } from '../src/routing/univ3/quoter.js';
 
 type ContractCall = {
   functionName: string;
@@ -308,6 +309,54 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.route.executionMode).toBe('EXACT_OUTPUT');
     expect(result.route.grossEdgeOut).toBe(50n);
     expect(result.route.netEdgeOut).toBe(50n);
+  });
+
+  it('uniswap_exact_output_two_hop_path_is_encoded_reversed', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    let exactInputPath: string | undefined;
+    let exactOutputPath: string | undefined;
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') {
+        const [a, b] = [call.args?.[0] as string, call.args?.[1] as string];
+        if (
+          (a?.toLowerCase() === tokenIn.toLowerCase() && b?.toLowerCase() === bridge.toLowerCase())
+          || (a?.toLowerCase() === bridge.toLowerCase() && b?.toLowerCase() === tokenOut.toLowerCase())
+        ) return pool3000;
+        return '0x0000000000000000000000000000000000000000';
+      }
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInput') {
+        exactInputPath = call.args?.[0] as string;
+        return [905n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      }
+      if (call.functionName === 'quoteExactOutput') {
+        exactOutputPath = call.args?.[0] as string;
+        return [900n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      }
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({ client, factory, quoter, bridgeTokens: [bridge] });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        feeTiers: [3000] as const,
+        slippageBufferBps: 0n,
+        effectiveGasPriceWei: 0n,
+        riskBufferBps: 0n,
+        riskBufferOut: 0n,
+        profitFloorOut: 0n
+      }
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.pathKind).toBe('TWO_HOP');
+    expect(result.route.executionMode).toBe('EXACT_OUTPUT');
+    expect(result.route.pathDirection).toBe('REVERSE');
+    expect(result.route.encodedPath).toBe(exactOutputPath);
+    expect(exactOutputPath).toBeDefined();
+    expect(exactInputPath).toBeDefined();
+    expect(exactOutputPath).toBe(reverseUniV3Path(exactInputPath! as `0x${string}`));
   });
 
   it('gasCostOut_is_nonzero_when_gas_and_price_are_nonzero', async () => {

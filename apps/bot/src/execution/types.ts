@@ -4,6 +4,7 @@ import type { NormalizedOrder } from '../store/types.js';
 import type { HedgeRoutePlan, RouteCandidateSummary } from '../routing/venues.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
+import type { PathEncodingDirection } from '../routing/pathTypes.js';
 
 export type ExecutionPlan = {
   orderHash: `0x${string}`;
@@ -31,6 +32,7 @@ export type ExecutionPlan = {
   selectedExecutionMode: HedgeExecutionMode;
   selectedPathKind: HedgeRoutePlan['pathKind'];
   selectedHopCount: HedgeRoutePlan['hopCount'];
+  selectedPathDirection: PathEncodingDirection;
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
 };

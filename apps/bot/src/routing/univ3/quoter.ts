@@ -117,6 +117,48 @@ export function encodeUniV3Path(legs: ReadonlyArray<{ tokenIn: Address; fee: Uni
   return encodePacked(Array.from({ length: parts.length }, () => 'bytes'), parts);
 }
 
+export function reverseUniV3Path(encodedPath: `0x${string}`): `0x${string}` {
+  if (encodedPath.length <= 2) {
+    throw new Error('UniV3 path must be non-empty');
+  }
+  const body = encodedPath.slice(2);
+  const bodyLength = body.length / 2;
+  if (bodyLength <= 20 || ((bodyLength - 20) % 23) !== 0) {
+    throw new Error('UniV3 path must be token(20) + N*(fee(3)+token(20))');
+  }
+  const hopCount = (bodyLength - 20) / 23;
+  if (hopCount > 2) {
+    throw new Error('UniV3 path must have 1 or 2 hops');
+  }
+  const tokenCount = hopCount + 1;
+  const tokens: Address[] = [];
+  const fees: string[] = [];
+  let offset = 0;
+  for (let i = 0; i < tokenCount; i += 1) {
+    const tokenHex = body.slice(offset, offset + 40);
+    tokens.push(`0x${tokenHex}` as Address);
+    offset += 40;
+    if (i < hopCount) {
+      const feeHex = body.slice(offset, offset + 6);
+      fees.push(`0x${feeHex}`);
+      offset += 6;
+    }
+  }
+  const reversedTokens = tokens.slice().reverse();
+  const reversedFees = fees.slice().reverse();
+  const parts: Array<`0x${string}`> = [];
+  for (let i = 0; i < reversedTokens.length; i += 1) {
+    if (i === 0) {
+      parts.push(reversedTokens[i]!);
+    }
+    if (i < reversedFees.length) {
+      parts.push(reversedFees[i]! as `0x${string}`);
+      parts.push(reversedTokens[i + 1]!);
+    }
+  }
+  return encodePacked(Array.from({ length: parts.length }, () => 'bytes'), parts);
+}
+
 export async function quoteExactInputPath(
   client: PublicClient,
   quoter: Address,
