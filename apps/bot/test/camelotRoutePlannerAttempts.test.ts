@@ -68,6 +68,37 @@ describe('CamelotAmmv3RoutePlanner exact-output viability', () => {
     expect(result.route.executionMode).toBeDefined();
   });
 
+  it('skips camelot two-hop when enableTwoHop is false', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    let quotePathCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') return pool;
+      if (call.functionName === 'quoteExactInputSingle') return [900n, 30] as const;
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 30] as const;
+      if (call.functionName === 'quoteExactInput') {
+        quotePathCalls += 1;
+        return 980n;
+      }
+      if (call.functionName === 'quoteExactOutput') return 970n;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter,
+      bridgeTokens: [bridge],
+      enableTwoHop: false
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.pathKind).toBe('DIRECT');
+    expect(quotePathCalls).toBe(0);
+  });
+
   it('computes exact-output viability for successful exact-input quote attempts', async () => {
     const client = makeClient((call) => {
       if (call.functionName === 'poolByPair') {

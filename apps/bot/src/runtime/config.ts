@@ -92,6 +92,7 @@ const baseSchema = z.object({
   MAX_LIVE_INFLIGHT: z.coerce.number().int().nonnegative().default(0),
   MIN_LIVE_EDGE_OUT: z.string().default('0'),
   ENABLE_CAMELOT_AMMV3: z.string().optional(),
+  ENABLE_CAMELOT_TWO_HOP: z.string().optional(),
   BRIDGE_TOKENS: z.string().default(
     '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85EBE478A1C0b69FCBB9'
   ),
@@ -134,6 +135,7 @@ export type RuntimeConfig = {
   maxLiveInflight: number;
   minLiveEdgeOut: bigint;
   enableCamelotAmmv3: boolean;
+  enableCamelotTwoHop: boolean;
   bridgeTokens: Array<`0x${string}`>;
 
   enableMetricsServer: boolean;
@@ -179,6 +181,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxLiveInflight: parsed.MAX_LIVE_INFLIGHT,
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
     enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
+    enableCamelotTwoHop: parseBoolean(parsed.ENABLE_CAMELOT_TWO_HOP, false),
     bridgeTokens: normalizeAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),

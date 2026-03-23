@@ -77,6 +77,7 @@ export type HotLaneStepParams = {
   executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
   shadowMode: boolean;
   leadBlocks?: bigint;
+  routeEvalReadCache?: RouteEvalReadCache;
 };
 
 export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint, leadBlocks: bigint = 2n): boolean {
@@ -132,11 +133,11 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     routeEval: {
       chainId: params.resolveEnv.chainId ?? 42161n,
       blockNumberish: params.currentBlock,
-      readCache: new RouteEvalReadCache()
+      readCache: params.routeEvalReadCache ?? new RouteEvalReadCache()
     }
   });
   if (!route.ok) {
-    if (route.reason === 'RATE_LIMITED' || route.reason === 'RPC_UNAVAILABLE') {
+    if (route.reason === 'RATE_LIMITED' || route.reason === 'RPC_UNAVAILABLE' || route.reason === 'RPC_FAILED') {
       return { action: 'DROP', reason: 'INFRA_BLOCKED' };
     }
     return { action: 'DROP', reason: 'EDGE_DISAPPEARED' };
@@ -151,7 +152,8 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     executor: params.executor,
     blockNumberish: params.currentBlock,
     resolveEnv: params.resolveEnv,
-    conditionalEnvelope: params.conditionalEnvelope
+    conditionalEnvelope: params.conditionalEnvelope,
+    routeEvalReadCache: params.routeEvalReadCache
   } satisfies BuildExecutionPlanParams;
   const result = await buildExecutionPlan(planInput);
 

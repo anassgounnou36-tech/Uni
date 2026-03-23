@@ -262,6 +262,7 @@ export async function buildRuntimeFromConfig(
           univ3Factory: UNIV3_FACTORY,
           univ3Quoter: UNIV3_QUOTER_V2,
           bridgeTokens: config.bridgeTokens,
+          enableTwoHop: config.enableCamelotTwoHop,
           routeEvalChainId: 42161n,
           routeEvalRpcGate,
           onRouteEvalCacheAccess: (hit, venue, pathKind) => {

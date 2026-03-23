@@ -1044,4 +1044,40 @@ describe('RouteBook', () => {
     expect(selected.bestRejectedSummary?.candidateClass).toBe('LIQUIDITY_BLOCKED');
     expect(selected.bestRejectedSummary?.hedgeGap?.inputDeficit).toBe(1n);
   });
+
+  it('returns RPC_FAILED when all candidates are infra rpc failures', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'RPC_FAILED' as const,
+            summary: venueSummary('UNISWAP_V3', 'RPC_FAILED', { reason: 'RPC_FAILED' })
+          }
+        })
+      } as unknown as UniV3RoutePlanner,
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: {
+            reason: 'RPC_FAILED' as const,
+            summary: venueSummary('CAMELOT_AMMV3', 'RPC_FAILED', { reason: 'RPC_FAILED' })
+          }
+        })
+      } as unknown as CamelotAmmv3RoutePlanner,
+      enableCamelotAmmv3: true
+    });
+
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.reason).toBe('RPC_FAILED');
+    expect(selected.infraBlocked).toBe(true);
+  });
 });

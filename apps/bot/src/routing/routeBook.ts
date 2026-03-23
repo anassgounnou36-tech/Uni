@@ -438,7 +438,7 @@ export class RouteBook {
             : hasRpcUnavailable
               ? 'RPC_UNAVAILABLE'
               : hasRpcFailed
-                ? 'QUOTE_FAILED'
+                ? 'RPC_FAILED'
                 : statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
                   ? 'QUOTE_FAILED'
                   : 'NOT_ROUTEABLE'

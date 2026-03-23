@@ -30,6 +30,7 @@ export type BlockEvaluation = {
     | 'RATE_LIMITED'
     | 'RPC_UNAVAILABLE'
     | 'RPC_FAILED';
+  infraBlocked?: boolean;
   venueAttempts: VenueRouteAttemptSummary[];
   bestRejectedSummary?: VenueRouteAttemptSummary;
 };
@@ -89,8 +90,8 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
     ? (params.candidateBlockOffsets ?? [0n, 1n, 2n]).map((offset) => currentEnv.blockNumberish + offset)
     : (params.candidateBlocks ?? []);
 
+  const readCache = new RouteEvalReadCache();
   for (const block of [...candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
-    const readCache = new RouteEvalReadCache();
     const resolved = await resolveAt(params.order, {
       ...baseEnv,
       blockNumberish: block
@@ -130,6 +131,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         netEdgeOut: bestRejectedSummary?.netEdgeOut ?? -1n,
         selectionOk: false,
         selectionReason: routeResult.reason,
+        infraBlocked: routeResult.infraBlocked ?? false,
         venueAttempts: routeResult.venueAttempts,
         bestRejectedSummary
       });
@@ -176,11 +178,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
   let bestObservedEvaluation: BlockEvaluation | undefined;
   let hasInfraBlocked = false;
   for (const evaluation of evaluations) {
-    if (
-      evaluation.selectionReason === 'RATE_LIMITED'
-      || evaluation.selectionReason === 'RPC_UNAVAILABLE'
-      || evaluation.selectionReason === 'RPC_FAILED'
-    ) {
+    if (evaluation.infraBlocked === true) {
       hasInfraBlocked = true;
     }
     if (!bestObservedEvaluation || evaluation.netEdgeOut > bestObservedEvaluation.netEdgeOut) {

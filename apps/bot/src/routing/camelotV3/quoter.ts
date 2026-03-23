@@ -26,6 +26,7 @@ export type CamelotAmmv3QuoterContext = {
   univ3Factory: Address;
   univ3Quoter: Address;
   bridgeTokens?: readonly Address[];
+  enableTwoHop?: boolean;
   routeEvalChainId?: bigint;
   routeEvalRpcGate?: RouteEvalRpcGate;
   onRouteEvalCacheAccess?: (hit: boolean, venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
@@ -789,6 +790,24 @@ export class CamelotAmmv3Quoter {
     policy?: RoutePlanningPolicy;
     routeEval?: RouteEvalContext;
   }): Promise<CamelotAmmv3QuoteResult> {
+    if (this.context.enableTwoHop === false) {
+      const requiredOutput = sumRequiredOutput(params.outputs);
+      return {
+        ok: false,
+        reason: 'NOT_ROUTEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          pathKind: 'TWO_HOP',
+          hopCount: 2,
+          bridgeToken: params.bridgeToken,
+          pathDescriptor: `TWO_HOP: ${params.tokenIn} -> ${params.bridgeToken} -> ${params.tokenOut}`,
+          status: 'NOT_ROUTEABLE',
+          reason: 'CAMELOT_TWO_HOP_DISABLED',
+          candidateClass: 'ROUTE_MISSING',
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+        }
+      };
+    }
     const pathDescriptor = `TWO_HOP: ${params.tokenIn} -> ${params.bridgeToken} -> ${params.tokenOut}`;
     if (!this.context.enabled) {
       const requiredOutput = sumRequiredOutput(params.outputs);

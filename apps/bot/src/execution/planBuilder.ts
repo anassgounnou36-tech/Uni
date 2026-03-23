@@ -19,6 +19,7 @@ export type BuildExecutionPlanParams = {
   blockNumberish: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   conditionalEnvelope: ConditionalEnvelope;
+  routeEvalReadCache?: RouteEvalReadCache;
 };
 
 function totalRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
@@ -45,7 +46,7 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     routeEval: {
       chainId: params.resolveEnv.chainId ?? ARBITRUM_ONE_CHAIN_ID,
       blockNumberish: params.blockNumberish,
-      readCache: new RouteEvalReadCache()
+      readCache: params.routeEvalReadCache ?? new RouteEvalReadCache()
     }
   });
   if (!routeDecision.ok) {

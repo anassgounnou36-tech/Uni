@@ -32,6 +32,7 @@ import {
   type RejectedCandidateClass
 } from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -972,7 +973,8 @@ export class BotRuntime {
         sequencerClient: hotLane.sequencerClient,
         nonceManager: hotLane.nonceManager,
         executionPreparer: hotLane.executionPreparer,
-        shadowMode: policy.mode !== 'LIVE'
+        shadowMode: policy.mode !== 'LIVE',
+        routeEvalReadCache: new RouteEvalReadCache()
       });
 
       if (decision.action === 'WAIT') {

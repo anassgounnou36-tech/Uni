@@ -111,6 +111,84 @@ describe('scheduler + prepared-execution gate', () => {
     expect(scheduleResult.evaluations[0]?.block).toBe(5555n);
   });
 
+  it('returns INCONCLUSIVE when route evaluation is infraBlocked via routeBook flag', async () => {
+    const signed = loadSigned();
+    const routeBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'NOT_ROUTEABLE' as const,
+        infraBlocked: true,
+        venueAttempts: [
+          {
+            venue: 'UNISWAP_V3' as const,
+            status: 'RPC_FAILED' as const,
+            reason: 'RPC_FAILED'
+          }
+        ],
+        alternativeRoutes: []
+      })
+    } as RouteBook;
+    const scheduleResult = await findFirstProfitableBlock({
+      order: signed.order,
+      resolveEnvProvider: {
+        getCurrent: async () => ({
+          chainId: 42161n,
+          blockNumber: 1234n,
+          blockNumberish: 5555n,
+          timestamp: 1_900_000_000n,
+          baseFeePerGas: 100_000_000n,
+          sampledAtMs: 1
+        })
+      },
+      routeBook,
+      candidateBlockOffsets: [0n],
+      threshold: 1n,
+      competeWindowBlocks: 2n
+    });
+    expect(scheduleResult.ok).toBe(false);
+    if (scheduleResult.ok) return;
+    expect(scheduleResult.reason).toBe('INCONCLUSIVE');
+  });
+
+  it('reuses one read cache across candidate blocks in a scheduler pass', async () => {
+    const signed = loadSigned();
+    const seenCaches = new Set<object>();
+    const routeBook = {
+      selectBestRoute: async ({ routeEval }) => {
+        if (routeEval?.readCache) {
+          seenCaches.add(routeEval.readCache as object);
+        }
+        return {
+          ok: false as const,
+          reason: 'NOT_ROUTEABLE' as const,
+          infraBlocked: false,
+          venueAttempts: [
+            { venue: 'UNISWAP_V3' as const, status: 'NOT_ROUTEABLE' as const, reason: 'POOL_MISSING' }
+          ],
+          alternativeRoutes: []
+        };
+      }
+    } as RouteBook;
+    await findFirstProfitableBlock({
+      order: signed.order,
+      resolveEnvProvider: {
+        getCurrent: async () => ({
+          chainId: 42161n,
+          blockNumber: 1234n,
+          blockNumberish: 5555n,
+          timestamp: 1_900_000_000n,
+          baseFeePerGas: 100_000_000n,
+          sampledAtMs: 1
+        })
+      },
+      routeBook,
+      candidateBlockOffsets: [0n, 1n, 2n],
+      threshold: 1n,
+      competeWindowBlocks: 2n
+    });
+    expect(seenCaches.size).toBe(1);
+  });
+
   it('uses the exact same serialized tx for simulation and live send', async () => {
     const signed = loadSigned();
     const routeBook = makeRouteBook(50n);
@@ -333,6 +411,61 @@ describe('scheduler + prepared-execution gate', () => {
     expect(decision.action).toEqual('NO_SEND');
     expect(decision.reason).toEqual('SHADOW_MODE');
     expect(decision.preparedExecution.serializedTransaction.startsWith('0x')).toEqual(true);
+  });
+
+  it('maps routeBook RPC_FAILED to hot-lane INFRA_BLOCKED', async () => {
+    const signed = loadSigned();
+    const orderHash = computeOrderHash(signed.order) as `0x${string}`;
+    const nonceManager = new NonceManager({
+      ledger: new InMemoryNonceLedger(),
+      chainNonceReader: async () => 7n
+    });
+    const routeBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'RPC_FAILED' as const,
+        infraBlocked: true,
+        venueAttempts: [
+          { venue: 'UNISWAP_V3' as const, status: 'RPC_FAILED' as const, reason: 'RPC_FAILED' }
+        ],
+        alternativeRoutes: []
+      })
+    } as RouteBook;
+
+    const decision = await runHotLaneStep({
+      entry: {
+        orderHash,
+        scheduledBlock: 1000n,
+        competeWindowEnd: 1002n,
+        predictedEdgeOut: 50n
+      },
+      currentBlock: 1000n,
+      thresholdOut: 1n,
+      normalizedOrder: {
+        orderHash,
+        orderType: 'Dutch_V3',
+        encodedOrder: signed.encodedOrder,
+        signature: signed.signature,
+        decodedOrder: signed,
+        reactor: signed.order.info.reactor
+      },
+      order: signed.order,
+      routeBook,
+      resolveEnv: { timestamp: 1_900_000_000n, basefee: 100_000_000n, chainId: 42161n },
+      conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+      executor: '0x3333333333333333333333333333333333333333',
+      simService: { simulatePrepared: async () => ({ ok: true, reason: 'SUPPORTED', gasUsed: 1n }) } as ForkSimService,
+      sequencerClient: { sendPreparedExecution: async () => ({ accepted: false, attempts: [], records: [] }) } as SequencerClient,
+      nonceManager,
+      executionPreparer: async () => {
+        throw new Error('should not prepare');
+      },
+      shadowMode: false
+    });
+
+    expect(decision.action).toEqual('DROP');
+    if (decision.action !== 'DROP') return;
+    expect(decision.reason).toEqual('INFRA_BLOCKED');
   });
 
   it('returns structured prepare-failure context when execution prepare throws', async () => {

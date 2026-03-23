@@ -108,6 +108,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxLiveInflight: 100,
     minLiveEdgeOut: 1n,
     enableCamelotAmmv3: false,
+    enableCamelotTwoHop: false,
     bridgeTokens: ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'],
     enableMetricsServer: false,
     metricsHost: '127.0.0.1',
