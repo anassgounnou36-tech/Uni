@@ -12,6 +12,7 @@ export type RouteAttemptStatus =
   | 'NOT_ROUTEABLE'
   | 'NOT_PROFITABLE'
   | 'QUOTE_FAILED'
+  | 'QUOTE_REVERTED'
   | 'RATE_LIMITED'
   | 'RPC_UNAVAILABLE'
   | 'RPC_FAILED'
@@ -36,7 +37,7 @@ export type FeeTierAttemptSummary = {
   netEdgeOut?: bigint;
   status: RouteAttemptStatus;
   reason: string;
-  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
   errorMessage?: string;
   constraintReason?: ConstraintRejectReason;
   constraintBreakdown?: ConstraintBreakdown;
@@ -54,7 +55,7 @@ export type VenueRouteAttemptSummary = {
   pathDescriptor?: string;
   status: RouteAttemptStatus;
   reason: string;
-  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+  errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
   errorMessage?: string;
   quotedAmountOut?: bigint;
   minAmountOut?: bigint;

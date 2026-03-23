@@ -18,7 +18,8 @@ export type CamelotRoutePlanningResult =
           | 'CONSTRAINT_REJECTED'
           | 'RATE_LIMITED'
           | 'RPC_UNAVAILABLE'
-          | 'RPC_FAILED';
+          | 'RPC_FAILED'
+          | 'QUOTE_REVERTED';
         details?: string;
         summary: VenueRouteAttemptSummary;
       };
@@ -168,7 +169,12 @@ export class CamelotAmmv3RoutePlanner {
         }
       };
     }
-    if (rejected.reason === 'RATE_LIMITED' || rejected.reason === 'RPC_UNAVAILABLE') {
+    if (
+      rejected.reason === 'RATE_LIMITED'
+      || rejected.reason === 'RPC_UNAVAILABLE'
+      || rejected.reason === 'RPC_FAILED'
+      || rejected.reason === 'QUOTE_REVERTED'
+    ) {
       return {
         ok: false,
         failure: {

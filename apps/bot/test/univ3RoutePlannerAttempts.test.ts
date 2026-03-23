@@ -64,6 +64,34 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(result.route.bridgeToken?.toLowerCase()).toBe(bridge.toLowerCase());
   });
 
+  it('does not unlock two-hop when direct coverage is below configured threshold', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    let twoHopQuoteCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') return [800n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactOutputSingle') return [1_100n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactInput') {
+        twoHopQuoteCalls += 1;
+        return [1_050n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      }
+      if (call.functionName === 'quoteExactOutput') return [890n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({
+      client,
+      factory,
+      quoter,
+      bridgeTokens: [bridge],
+      twoHopUnlockMinCoverageBps: 9_000n
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(false);
+    expect(twoHopQuoteCalls).toBe(0);
+  });
+
   it('two_hop_rejected_candidates_preserve_constraint_reason_exact_output_viability_hedge_gap_and_candidate_class', async () => {
     const bridge = '0x000000000000000000000000000000000000000b';
     const client = makeClient((call) => {

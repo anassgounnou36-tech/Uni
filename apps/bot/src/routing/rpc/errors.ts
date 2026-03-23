@@ -1,4 +1,4 @@
-export type RouteEvalRpcErrorCategory = 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+export type RouteEvalRpcErrorCategory = 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
 
 export type NormalizedRouteEvalRpcError = {
   category: RouteEvalRpcErrorCategory;
@@ -14,6 +14,14 @@ function asMessage(error: unknown): string {
 export function normalizeRouteEvalRpcError(error: unknown): NormalizedRouteEvalRpcError {
   const message = asMessage(error);
   const lower = message.toLowerCase();
+  if (
+    lower.includes('execution reverted')
+    || lower.includes('transaction reverted')
+    || lower.includes('error code 3')
+    || lower.includes('reverted with reason string')
+  ) {
+    return { category: 'QUOTE_REVERTED', message };
+  }
 
   if (
     lower.includes('429')

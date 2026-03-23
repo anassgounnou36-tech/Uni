@@ -26,13 +26,25 @@ export type QuotedExactOutputPath = {
   gasUnitsEstimate: bigint;
 };
 
-export function classifyQuoteFailure(error: unknown): string {
+export type QuoteFailureCategory =
+  | 'RATE_LIMITED'
+  | 'RPC_UNAVAILABLE'
+  | 'RPC_FAILED'
+  | 'QUOTE_REVERTED'
+  | 'INSUFFICIENT_INPUT'
+  | 'REVERTED'
+  | 'TIMEOUT';
+
+export function classifyQuoteFailure(error: unknown): QuoteFailureCategory {
   const normalized = normalizeRouteEvalRpcError(error);
   if (normalized.category === 'RATE_LIMITED') {
     return 'RATE_LIMITED';
   }
   if (normalized.category === 'RPC_UNAVAILABLE') {
     return 'RPC_UNAVAILABLE';
+  }
+  if (normalized.category === 'QUOTE_REVERTED') {
+    return 'QUOTE_REVERTED';
   }
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
@@ -56,6 +68,7 @@ type QuoteReadContext = {
   readCache?: RouteEvalReadCache;
   rpcGate?: RouteEvalRpcGate;
   onCacheAccess?: (hit: boolean) => void;
+  onNegativeCacheAccess?: (hit: boolean) => void;
 };
 
 async function runQuoteRead<T>(
@@ -81,7 +94,11 @@ async function runQuoteRead<T>(
   if (!params.context?.readCache) {
     return run();
   }
-  const cached = await params.context.readCache.getOrSet<T>(
+  const shouldMemoizeNegative = (error: unknown): boolean => {
+    const failure = classifyQuoteFailure(error);
+    return failure === 'QUOTE_REVERTED' || failure === 'INSUFFICIENT_INPUT' || failure === 'REVERTED';
+  };
+  const cached = await params.context.readCache.getOrSetNegative<T>(
     {
       chainId,
       blockNumberish,
@@ -91,7 +108,9 @@ async function runQuoteRead<T>(
       extraKey: params.extraKey
     },
     run,
-    params.context.onCacheAccess
+    shouldMemoizeNegative,
+    params.context.onCacheAccess,
+    params.context.onNegativeCacheAccess
   );
   return cached.value;
 }

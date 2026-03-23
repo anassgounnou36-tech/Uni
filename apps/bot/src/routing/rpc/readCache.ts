@@ -37,6 +37,7 @@ function buildCacheKey(params: ReadCacheParams): string {
 
 export class RouteEvalReadCache {
   private readonly entries = new Map<string, Promise<CacheValue>>();
+  private readonly negativeEntries = new Map<string, Promise<never>>();
 
   async getOrSet<T>(
     params: ReadCacheParams,
@@ -57,5 +58,32 @@ export class RouteEvalReadCache {
     this.entries.set(key, promise);
     onAccess?.(false);
     return { value: (await promise) as T, hit: false };
+  }
+
+  async getOrSetNegative<T>(
+    params: ReadCacheParams,
+    loader: () => Promise<T>,
+    shouldMemoizeNegative: (error: unknown) => boolean,
+    onAccess?: (hit: boolean) => void,
+    onNegativeAccess?: (hit: boolean) => void
+  ): Promise<{ value: T; hit: boolean }> {
+    const key = buildCacheKey(params);
+    const cachedNegative = this.negativeEntries.get(key);
+    if (cachedNegative) {
+      onNegativeAccess?.(true);
+      return { value: (await cachedNegative) as never, hit: true };
+    }
+    try {
+      return await this.getOrSet(params, loader, onAccess);
+    } catch (error) {
+      if (!shouldMemoizeNegative(error)) {
+        throw error;
+      }
+      const rejection = Promise.reject(error) as Promise<never>;
+      rejection.catch(() => undefined);
+      this.negativeEntries.set(key, rejection);
+      onNegativeAccess?.(false);
+      throw error;
+    }
   }
 }

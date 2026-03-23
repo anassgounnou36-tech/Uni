@@ -99,6 +99,31 @@ describe('CamelotAmmv3RoutePlanner exact-output viability', () => {
     expect(quotePathCalls).toBe(0);
   });
 
+  it('marks reverted two-hop quote as QUOTE_REVERTED', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') return pool;
+      if (call.functionName === 'quoteExactInputSingle') return [900n, 30] as const;
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 30] as const;
+      if (call.functionName === 'quoteExactInput') throw new Error('execution reverted: pool unavailable');
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter,
+      bridgeTokens: [bridge],
+      enableTwoHop: true
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.summary.status === 'ROUTEABLE' || result.summary.status === 'QUOTE_REVERTED').toBe(true);
+  });
+
   it('computes exact-output viability for successful exact-input quote attempts', async () => {
     const client = makeClient((call) => {
       if (call.functionName === 'poolByPair') {

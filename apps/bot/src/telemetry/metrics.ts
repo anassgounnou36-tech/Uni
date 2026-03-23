@@ -97,11 +97,40 @@ export class BotMetrics {
     }
   }
 
+  incrementRouteEvalQuoteReverted(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_quote_reverted_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_quote_reverted_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
   incrementRouteEvalCacheHit(venue?: string, pathKind?: string): void {
     this.increment('route_eval_cache_hit_total');
     if (venue && pathKind) {
       this.increment(`route_eval_cache_hit_total{venue="${venue}",path_kind="${pathKind}"}`);
     }
+  }
+
+  incrementRouteEvalNegativeCacheHit(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_negative_cache_hit_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_negative_cache_hit_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalNegativeCacheMiss(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_negative_cache_miss_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_negative_cache_miss_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementOrderEvalRevertedProbeBudgetExhausted(): void {
+    this.increment('order_eval_reverted_probe_budget_exhausted_total');
+  }
+
+  incrementCamelotTwoHopSkipped(reason: 'CONFIG_DISABLED'): void {
+    this.increment(`camelot_two_hop_skipped_total{reason="${reason}"}`);
   }
 
   incrementRouteEvalCacheMiss(venue?: string, pathKind?: string): void {

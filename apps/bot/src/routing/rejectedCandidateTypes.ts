@@ -20,6 +20,7 @@ function isQuoteFailedLike(summary: VenueRouteAttemptSummary): boolean {
     'UNEXPECTED_QUOTE_SCALAR'
   ]);
   return summary.status === 'QUOTE_FAILED'
+    || summary.status === 'QUOTE_REVERTED'
     || summary.status === 'RATE_LIMITED'
     || summary.status === 'RPC_UNAVAILABLE'
     || summary.exactOutputViability?.status === 'QUOTE_FAILED'
@@ -27,7 +28,12 @@ function isQuoteFailedLike(summary: VenueRouteAttemptSummary): boolean {
 }
 
 export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary): RejectedCandidateClass {
-  if (summary.status === 'RATE_LIMITED' || summary.status === 'RPC_UNAVAILABLE' || summary.status === 'RPC_FAILED') {
+  if (
+    summary.status === 'RATE_LIMITED'
+    || summary.status === 'RPC_UNAVAILABLE'
+    || summary.status === 'RPC_FAILED'
+    || summary.status === 'QUOTE_REVERTED'
+  ) {
     return 'INFRA_BLOCKED';
   }
   if (summary.status === 'GAS_NOT_PRICEABLE') {

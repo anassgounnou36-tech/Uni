@@ -21,11 +21,14 @@ export type RouteBookSelection =
         | 'CONSTRAINT_REJECTED'
         | 'NOT_PROFITABLE'
         | 'QUOTE_FAILED'
+        | 'QUOTE_REVERTED'
         | 'GAS_NOT_PRICEABLE'
         | 'RATE_LIMITED'
         | 'RPC_UNAVAILABLE'
         | 'RPC_FAILED';
       infraBlocked?: boolean;
+      revertedProbeCount?: number;
+      revertedProbeBudgetExhausted?: boolean;
       venueAttempts: VenueRouteAttemptSummary[];
       bestRejectedSummary?: VenueRouteAttemptSummary;
       alternativeRoutes: RouteCandidateSummary[];
@@ -79,6 +82,9 @@ function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandi
   if (summary.status === 'QUOTE_FAILED') {
     return 'QUOTE_FAILED';
   }
+  if (summary.status === 'QUOTE_REVERTED') {
+    return 'QUOTE_REVERTED';
+  }
   if (summary.status === 'RATE_LIMITED') {
     return 'RATE_LIMITED';
   }
@@ -86,7 +92,7 @@ function toCandidateFailureReason(summary: VenueRouteAttemptSummary): RouteCandi
     return 'RPC_UNAVAILABLE';
   }
   if (summary.status === 'RPC_FAILED') {
-    return 'QUOTE_FAILED';
+    return 'RPC_FAILED';
   }
   if (summary.status === 'GAS_NOT_PRICEABLE') {
     return 'NOT_PRICEABLE_GAS';
@@ -304,6 +310,7 @@ export class RouteBook {
       uniswapV3: UniV3RoutePlanner;
       camelotAmmv3?: CamelotAmmv3RoutePlanner;
       enableCamelotAmmv3: boolean;
+      maxRevertedProbesPerOrder?: number;
     }
   ) {}
 
@@ -400,6 +407,13 @@ export class RouteBook {
     }
 
     if (eligible.length === 0) {
+      const revertedProbeCount = venueAttempts.reduce((sum, attempt) => {
+        const attemptLevel = attempt.status === 'QUOTE_REVERTED' ? 1 : 0;
+        const tierLevel = (attempt.feeTierAttempts ?? []).filter((tier) => tier.status === 'QUOTE_REVERTED').length;
+        return sum + attemptLevel + tierLevel;
+      }, 0);
+      const revertedProbeBudget = this.planners.maxRevertedProbesPerOrder ?? Number.MAX_SAFE_INTEGER;
+      const revertedProbeBudgetExhausted = revertedProbeCount > revertedProbeBudget;
       const rejectedCandidates = venueAttempts
         .filter((attempt): attempt is RejectedVenueRouteAttemptSummary => attempt.status !== 'ROUTEABLE')
         .map((attempt) => ensureCandidateClass(attempt));
@@ -415,30 +429,44 @@ export class RouteBook {
         (status) =>
           status === 'NOT_ROUTEABLE'
           || status === 'QUOTE_FAILED'
+          || status === 'QUOTE_REVERTED'
           || status === 'RATE_LIMITED'
           || status === 'RPC_UNAVAILABLE'
           || status === 'RPC_FAILED'
       );
+      const hasQuoteReverted = statuses.includes('QUOTE_REVERTED');
       const hasRateLimited = statuses.includes('RATE_LIMITED');
       const hasRpcUnavailable = statuses.includes('RPC_UNAVAILABLE');
       const hasRpcFailed = statuses.includes('RPC_FAILED');
       const hasGasNotPriceable = statuses.includes('GAS_NOT_PRICEABLE');
+      const blockedCount = statuses.filter(
+        (status) =>
+          status === 'RATE_LIMITED'
+          || status === 'RPC_UNAVAILABLE'
+          || status === 'RPC_FAILED'
+          || status === 'QUOTE_REVERTED'
+      ).length;
       const reason:
         | 'NOT_ROUTEABLE'
         | 'CONSTRAINT_REJECTED'
         | 'NOT_PROFITABLE'
         | 'QUOTE_FAILED'
+        | 'QUOTE_REVERTED'
         | 'GAS_NOT_PRICEABLE'
         | 'RATE_LIMITED'
         | 'RPC_UNAVAILABLE'
         | 'RPC_FAILED' =
-        allNotRouteableOrQuoteFailed
+        revertedProbeBudgetExhausted
+          ? 'QUOTE_REVERTED'
+          : allNotRouteableOrQuoteFailed
           ? hasRateLimited
             ? 'RATE_LIMITED'
             : hasRpcUnavailable
               ? 'RPC_UNAVAILABLE'
               : hasRpcFailed
                 ? 'RPC_FAILED'
+                : hasQuoteReverted
+                  ? 'QUOTE_REVERTED'
                 : statuses.includes('QUOTE_FAILED') && !statuses.includes('NOT_ROUTEABLE')
                   ? 'QUOTE_FAILED'
                   : 'NOT_ROUTEABLE'
@@ -452,13 +480,23 @@ export class RouteBook {
                   ? 'RPC_UNAVAILABLE'
                   : bestRejectedWithClass?.status === 'RPC_FAILED'
                     ? 'RPC_FAILED'
+                    : bestRejectedWithClass?.status === 'QUOTE_REVERTED'
+                      ? 'QUOTE_REVERTED'
                     : hasGasNotPriceable
                       ? 'GAS_NOT_PRICEABLE'
                       : 'NOT_ROUTEABLE';
       return {
         ok: false,
         reason,
-        infraBlocked: reason === 'RATE_LIMITED' || reason === 'RPC_UNAVAILABLE' || reason === 'RPC_FAILED',
+        infraBlocked:
+          reason === 'RATE_LIMITED'
+          || reason === 'RPC_UNAVAILABLE'
+          || reason === 'RPC_FAILED'
+          || reason === 'QUOTE_REVERTED'
+          || revertedProbeBudgetExhausted
+          || blockedCount >= Math.max(1, Math.floor(venueAttempts.length / 2)),
+        revertedProbeCount,
+        revertedProbeBudgetExhausted,
         venueAttempts,
         bestRejectedSummary: bestRejectedWithClass,
         alternativeRoutes: alternatives

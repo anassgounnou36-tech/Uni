@@ -26,11 +26,14 @@ export type BlockEvaluation = {
     | 'CONSTRAINT_REJECTED'
     | 'NOT_PROFITABLE'
     | 'QUOTE_FAILED'
+    | 'QUOTE_REVERTED'
     | 'GAS_NOT_PRICEABLE'
     | 'RATE_LIMITED'
     | 'RPC_UNAVAILABLE'
     | 'RPC_FAILED';
   infraBlocked?: boolean;
+  revertedProbeCount?: number;
+  revertedProbeBudgetExhausted?: boolean;
   venueAttempts: VenueRouteAttemptSummary[];
   bestRejectedSummary?: VenueRouteAttemptSummary;
 };
@@ -132,6 +135,8 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         selectionOk: false,
         selectionReason: routeResult.reason,
         infraBlocked: routeResult.infraBlocked ?? false,
+        revertedProbeCount: routeResult.revertedProbeCount ?? 0,
+        revertedProbeBudgetExhausted: routeResult.revertedProbeBudgetExhausted ?? false,
         venueAttempts: routeResult.venueAttempts,
         bestRejectedSummary
       });

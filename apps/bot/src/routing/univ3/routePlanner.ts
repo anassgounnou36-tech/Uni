@@ -29,6 +29,7 @@ import type { HedgeExecutionMode } from '../executionModeTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
+const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 5_000n;
 
 function sumRequiredOutput(outputs: ReadonlyArray<{ token: Address; amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
@@ -47,8 +48,29 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
     riskBufferBps: policy?.riskBufferBps ?? 10n,
     riskBufferOut: policy?.riskBufferOut ?? 0n,
     profitFloorOut: policy?.profitFloorOut ?? 0n,
-    nearMissBps: policy?.nearMissBps ?? DEFAULT_NEAR_MISS_BPS
+    nearMissBps: policy?.nearMissBps ?? DEFAULT_NEAR_MISS_BPS,
+    twoHopUnlockMinCoverageBps: policy?.twoHopUnlockMinCoverageBps ?? DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS
   };
+}
+
+function shouldUnlockTwoHop(
+  requiredOutput: bigint,
+  attempts: FeeTierAttemptSummary[],
+  thresholdBps: bigint
+): boolean {
+  const directSuccessful = attempts.filter((attempt) => attempt.pathKind === 'DIRECT' && attempt.quoteSucceeded);
+  if (directSuccessful.length === 0) {
+    return true;
+  }
+  const bestDirectOut = directSuccessful.reduce((best, attempt) => {
+    const value = attempt.quotedAmountOut ?? 0n;
+    return value > best ? value : best;
+  }, 0n);
+  if (requiredOutput <= 0n) {
+    return true;
+  }
+  const coverageBps = (bestDirectOut * 10_000n) / requiredOutput;
+  return coverageBps >= thresholdBps;
 }
 
 function makeFailure(
@@ -60,7 +82,8 @@ function makeFailure(
     | 'CONSTRAINT_REJECTED'
     | 'RATE_LIMITED'
     | 'RPC_UNAVAILABLE'
-    | 'RPC_FAILED',
+    | 'RPC_FAILED'
+    | 'QUOTE_REVERTED',
   details: string,
   summary: VenueRouteAttemptSummary
 ): RoutePlanningResult {
@@ -314,10 +337,11 @@ export class UniV3RoutePlanner {
 
       let quote: { amountOut: bigint; gasUnitsEstimate: bigint };
       let exactOutputViability: ExactOutputViability;
-      const quoteReadContext = {
-        ...routeEvalContext,
-        onCacheAccess: (hit: boolean) => this.context.onRouteEvalCacheAccess?.(hit, 'UNISWAP_V3', shape.kind)
-      };
+        const quoteReadContext = {
+          ...routeEvalContext,
+          onCacheAccess: (hit: boolean) => this.context.onRouteEvalCacheAccess?.(hit, 'UNISWAP_V3', shape.kind),
+          onNegativeCacheAccess: (hit: boolean) => this.context.onRouteEvalNegativeCacheAccess?.(hit, 'UNISWAP_V3', shape.kind)
+        };
       try {
         quote = shape.kind === 'DIRECT'
           ? await quoteExactInputSingle(
@@ -333,7 +357,11 @@ export class UniV3RoutePlanner {
       } catch (error) {
         const normalized = normalizeRouteEvalRpcError(error);
         const failureClass = classifyQuoteFailure(error);
-        const infraBlocked = failureClass === 'RATE_LIMITED' || failureClass === 'RPC_UNAVAILABLE' || failureClass === 'RPC_FAILED';
+        const infraBlocked =
+          failureClass === 'RATE_LIMITED'
+          || failureClass === 'RPC_UNAVAILABLE'
+          || failureClass === 'RPC_FAILED'
+          || failureClass === 'QUOTE_REVERTED';
         attempts.push({
           feeTier: shape.feeTier,
           secondFeeTier: shape.secondFeeTier,
@@ -343,7 +371,13 @@ export class UniV3RoutePlanner {
           pathDescriptor,
           poolExists: true,
           quoteSucceeded: false,
-          status: infraBlocked ? failureClass : 'QUOTE_FAILED',
+          status:
+            failureClass === 'RATE_LIMITED'
+            || failureClass === 'RPC_UNAVAILABLE'
+            || failureClass === 'RPC_FAILED'
+            || failureClass === 'QUOTE_REVERTED'
+              ? failureClass
+              : 'QUOTE_FAILED',
           reason: failureClass,
           errorCategory: normalized.category,
           errorMessage: normalized.message.slice(0, 220),
@@ -359,7 +393,7 @@ export class UniV3RoutePlanner {
           },
           candidateClass: infraBlocked ? 'INFRA_BLOCKED' : 'QUOTE_FAILED'
         });
-      if (infraBlocked) {
+        if (infraBlocked) {
           this.context.onRouteEvalInfraError?.(normalized.category, 'UNISWAP_V3', shape.kind);
         }
         return;
@@ -594,7 +628,11 @@ export class UniV3RoutePlanner {
         } catch (error) {
           const normalized = normalizeRouteEvalRpcError(error);
           const failureClass = classifyQuoteFailure(error);
-          const infraBlocked = failureClass === 'RATE_LIMITED' || failureClass === 'RPC_UNAVAILABLE' || failureClass === 'RPC_FAILED';
+          const infraBlocked =
+            failureClass === 'RATE_LIMITED'
+            || failureClass === 'RPC_UNAVAILABLE'
+            || failureClass === 'RPC_FAILED'
+            || failureClass === 'QUOTE_REVERTED';
           attempts.push({
             feeTier: shape.feeTier,
             secondFeeTier: shape.secondFeeTier,
@@ -605,7 +643,13 @@ export class UniV3RoutePlanner {
             pathDescriptor,
             poolExists: true,
             quoteSucceeded: false,
-            status: infraBlocked ? failureClass : 'QUOTE_FAILED',
+            status:
+              failureClass === 'RATE_LIMITED'
+              || failureClass === 'RPC_UNAVAILABLE'
+              || failureClass === 'RPC_FAILED'
+              || failureClass === 'QUOTE_REVERTED'
+                ? failureClass
+                : 'QUOTE_FAILED',
             reason: `EXACT_OUTPUT_LEFTOVER_QUOTE_FAILED:${failureClass}`,
             errorCategory: normalized.category,
             errorMessage: normalized.message.slice(0, 220),
@@ -726,25 +770,28 @@ export class UniV3RoutePlanner {
     for (const feeTier of policy.feeTiers) {
       await evaluatePathCandidate({ kind: 'DIRECT', hopCount: 1, feeTier });
     }
-    const bridgeTokens = input.policy?.bridgeTokens ?? this.context.bridgeTokens ?? [];
-    for (const bridgeToken of bridgeTokens) {
-      if (bridgeToken.toLowerCase() === tokenIn.toLowerCase() || bridgeToken.toLowerCase() === tokenOut.toLowerCase()) {
-        continue;
-      }
-      for (const feeTier of policy.feeTiers) {
-        for (const secondFeeTier of policy.feeTiers) {
-          const encodedPath = encodeUniV3Path([
-            { tokenIn, fee: feeTier, tokenOut: bridgeToken },
-            { tokenIn: bridgeToken, fee: secondFeeTier, tokenOut }
-          ]);
-          await evaluatePathCandidate({
-            kind: 'TWO_HOP',
-            hopCount: 2,
-            bridgeToken,
-            feeTier,
-            secondFeeTier,
-            encodedPath
-          });
+    const unlockThresholdBps = this.context.twoHopUnlockMinCoverageBps ?? policy.twoHopUnlockMinCoverageBps;
+    if (shouldUnlockTwoHop(requiredOutput, attempts, unlockThresholdBps)) {
+      const bridgeTokens = input.policy?.bridgeTokens ?? this.context.bridgeTokens ?? [];
+      for (const bridgeToken of bridgeTokens) {
+        if (bridgeToken.toLowerCase() === tokenIn.toLowerCase() || bridgeToken.toLowerCase() === tokenOut.toLowerCase()) {
+          continue;
+        }
+        for (const feeTier of policy.feeTiers) {
+          for (const secondFeeTier of policy.feeTiers) {
+            const encodedPath = encodeUniV3Path([
+              { tokenIn, fee: feeTier, tokenOut: bridgeToken },
+              { tokenIn: bridgeToken, fee: secondFeeTier, tokenOut }
+            ]);
+            await evaluatePathCandidate({
+              kind: 'TWO_HOP',
+              hopCount: 2,
+              bridgeToken,
+              feeTier,
+              secondFeeTier,
+              encodedPath
+            });
+          }
         }
       }
     }
@@ -907,14 +954,20 @@ export class UniV3RoutePlanner {
     }
 
     const infraOnly = attempts.length > 0 && attempts.every(
-      (attempt) => attempt.status === 'RATE_LIMITED' || attempt.status === 'RPC_UNAVAILABLE' || attempt.status === 'RPC_FAILED'
+      (attempt) =>
+        attempt.status === 'RATE_LIMITED'
+        || attempt.status === 'RPC_UNAVAILABLE'
+        || attempt.status === 'RPC_FAILED'
+        || attempt.status === 'QUOTE_REVERTED'
     );
     if (infraOnly) {
       const infraStatus = attempts.some((attempt) => attempt.status === 'RATE_LIMITED')
         ? 'RATE_LIMITED'
         : attempts.some((attempt) => attempt.status === 'RPC_UNAVAILABLE')
           ? 'RPC_UNAVAILABLE'
-          : 'RPC_FAILED';
+          : attempts.some((attempt) => attempt.status === 'RPC_FAILED')
+            ? 'RPC_FAILED'
+            : 'QUOTE_REVERTED';
       const firstInfra = attempts.find((attempt) => attempt.status === infraStatus) ?? attempts[0]!;
       const summary = ensureRejectedCandidateClass({
         venue: 'UNISWAP_V3',

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RouteEvalReadCache } from '../src/routing/rpc/readCache.js';
 import { RouteEvalRpcGate } from '../src/routing/rpc/rpcGate.js';
 import { normalizeRouteEvalRpcError } from '../src/routing/rpc/errors.js';
+import { classifyQuoteFailure } from '../src/routing/univ3/quoter.js';
 
 describe('routing rpc infra helpers', () => {
   it('repeated identical reads hit cache within one block snapshot', async () => {
@@ -97,5 +98,50 @@ describe('routing rpc infra helpers', () => {
 
     expect(rateLimited.category).toBe('RATE_LIMITED');
     expect(unavailable.category).toBe('RPC_UNAVAILABLE');
+  });
+
+  it('classifies execution reverted as QUOTE_REVERTED', () => {
+    const reverted = normalizeRouteEvalRpcError(new Error("execution reverted: SafeCast: value doesn't fit in 128 bits"));
+    expect(reverted.category).toBe('QUOTE_REVERTED');
+    expect(classifyQuoteFailure(new Error('execution reverted: quote path failed'))).toBe('QUOTE_REVERTED');
+  });
+
+  it('memoizes deterministic reverted probe negatives in same snapshot', async () => {
+    const cache = new RouteEvalReadCache();
+    let calls = 0;
+    const loader = async () => {
+      calls += 1;
+      throw new Error('execution reverted: Quote call reverted');
+    };
+
+    await expect(
+      cache.getOrSetNegative(
+        {
+          chainId: 42161n,
+          blockNumberish: 1000n,
+          target: '0x0000000000000000000000000000000000000001',
+          fn: 'quoteExactInputSingle',
+          args: ['0x1', '0x2', 1000n]
+        },
+        loader,
+        (error) => classifyQuoteFailure(error) === 'QUOTE_REVERTED'
+      )
+    ).rejects.toThrow('execution reverted');
+
+    await expect(
+      cache.getOrSetNegative(
+        {
+          chainId: 42161n,
+          blockNumberish: 1000n,
+          target: '0x0000000000000000000000000000000000000001',
+          fn: 'quoteExactInputSingle',
+          args: ['0x1', '0x2', 1000n]
+        },
+        loader,
+        (error) => classifyQuoteFailure(error) === 'QUOTE_REVERTED'
+      )
+    ).rejects.toThrow('execution reverted');
+
+    expect(calls).toBe(1);
   });
 });

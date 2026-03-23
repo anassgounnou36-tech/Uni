@@ -53,10 +53,12 @@ export type HotLaneContext = SchedulerContext & {
 type ScheduledOrder = HotLaneEntry;
 type BlockedRetryState = {
   nextEligibleTick: number;
-  reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+  reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
   errorMessage?: string;
   candidateCount: number;
   blockedCount: number;
+  revertedProbeCount: number;
+  revertedProbeBudgetExhausted: boolean;
 };
 
 export type BotRuntimeDeps = {
@@ -323,7 +325,7 @@ export class BotRuntime {
     pathDescriptor?: string;
     status: string;
     reason: string;
-    errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED';
+    errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
     errorMessage?: string;
     quotedAmountOut?: string;
     minAmountOut?: string;
@@ -713,27 +715,50 @@ export class BotRuntime {
               attempt.status === 'RATE_LIMITED'
               || attempt.status === 'RPC_UNAVAILABLE'
               || attempt.status === 'RPC_FAILED'
+              || attempt.status === 'QUOTE_REVERTED'
           )
         );
         const blockedCount = blockedAttempts.length;
-        const reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' = blockedAttempts.some((attempt) => attempt.status === 'RATE_LIMITED')
+        const revertedProbeCount = scheduleResult.evaluations.reduce((sum, evaluation) => sum + (evaluation.revertedProbeCount ?? 0), 0);
+        const revertedProbeBudgetExhausted = scheduleResult.evaluations.some((evaluation) => evaluation.revertedProbeBudgetExhausted === true);
+        let hasRateLimited = false;
+        let hasRpcUnavailable = false;
+        let hasRpcFailed = false;
+        for (const attempt of blockedAttempts) {
+          if (attempt.status === 'RATE_LIMITED') hasRateLimited = true;
+          else if (attempt.status === 'RPC_UNAVAILABLE') hasRpcUnavailable = true;
+          else if (attempt.status === 'RPC_FAILED') hasRpcFailed = true;
+        }
+        const reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED' =
+          revertedProbeBudgetExhausted
+            ? 'QUOTE_REVERTED'
+            : hasRateLimited
           ? 'RATE_LIMITED'
-          : blockedAttempts.some((attempt) => attempt.status === 'RPC_UNAVAILABLE')
+          : hasRpcUnavailable
             ? 'RPC_UNAVAILABLE'
-            : 'RPC_FAILED';
+            : hasRpcFailed
+              ? 'RPC_FAILED'
+              : 'QUOTE_REVERTED';
         const errorMessage = blockedAttempts.find((attempt) => attempt.errorMessage)?.errorMessage;
         this.blockedRetryByOrder.set(orderHash, {
           nextEligibleTick: this.schedulerTickCounter + this.deps.config.infraBlockedRetryCooldownTicks,
           reason,
           errorMessage,
           candidateCount: scheduleResult.evaluations.length,
-          blockedCount
+          blockedCount,
+          revertedProbeCount,
+          revertedProbeBudgetExhausted
         });
         this.deps.metrics.incrementOrdersEvaluationBlocked();
         if (reason === 'RATE_LIMITED') {
           this.deps.metrics.incrementRouteEvalRateLimited();
+        } else if (reason === 'QUOTE_REVERTED') {
+          this.deps.metrics.incrementRouteEvalQuoteReverted();
         } else {
           this.deps.metrics.incrementRouteEvalRpcFailed();
+        }
+        if (revertedProbeBudgetExhausted) {
+          this.deps.metrics.incrementOrderEvalRevertedProbeBudgetExhausted();
         }
         await this.deps.journal.append({
           type: 'ORDER_EVALUATION_BLOCKED',
@@ -744,6 +769,8 @@ export class BotRuntime {
             reason,
             candidateCount: scheduleResult.evaluations.length,
             blockedCount,
+            revertedProbeCount,
+            revertedProbeBudgetExhausted,
             errorMessage,
             venueAttempts: blockedAttempts.map((attempt) => this.toJournalVenueAttempt(attempt))
           }
@@ -1051,7 +1078,9 @@ export class BotRuntime {
             candidateClass: decision.chosenRouteCandidateClass,
             constraintReason: decision.chosenRouteConstraintReason,
             error,
-            message
+            message,
+            errorCategory: error,
+            errorMessage: message
           }
         });
       }
@@ -1181,7 +1210,9 @@ export class BotRuntime {
               orderHash: queued.orderHash,
               reason: 'INFRA_BLOCKED',
               candidateCount: 1,
-              blockedCount: 1
+              blockedCount: 1,
+              revertedProbeCount: 0,
+              revertedProbeBudgetExhausted: false
             }
           });
         } else {
@@ -1199,7 +1230,9 @@ export class BotRuntime {
           decision.reason === 'PREPARE_FAILED'
             ? {
                 error: decision.prepareError ?? 'PrepareError',
-                message: decision.prepareMessage ?? 'executionPreparer failed'
+                message: decision.prepareMessage ?? 'executionPreparer failed',
+                errorCategory: decision.prepareError ?? 'PrepareError',
+                errorMessage: decision.prepareMessage ?? 'executionPreparer failed'
               }
             : undefined;
         await this.deps.journal.append({
@@ -1220,7 +1253,9 @@ export class BotRuntime {
             netEdgeOut: queued.predictedEdgeOut.toString(),
             simReason: decision.simResult?.reason,
             error: droppedErrorContext?.error,
-            message: droppedErrorContext?.message
+            message: droppedErrorContext?.message,
+            errorCategory: droppedErrorContext?.errorCategory,
+            errorMessage: droppedErrorContext?.errorMessage
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);

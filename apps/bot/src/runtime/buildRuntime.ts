@@ -237,6 +237,7 @@ export async function buildRuntimeFromConfig(
           factory: UNIV3_FACTORY,
           quoter: UNIV3_QUOTER_V2,
           bridgeTokens: config.bridgeTokens,
+          twoHopUnlockMinCoverageBps: config.twoHopUnlockMinCoverageBps,
           routeEvalChainId: 42161n,
           routeEvalRpcGate,
           onRouteEvalCacheAccess: (hit, venue, pathKind) => {
@@ -246,9 +247,18 @@ export async function buildRuntimeFromConfig(
               metrics.incrementRouteEvalCacheMiss(venue, pathKind);
             }
           },
+          onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
+            }
+          },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
               metrics.incrementRouteEvalRateLimited(venue, pathKind);
+            } else if (category === 'QUOTE_REVERTED') {
+              metrics.incrementRouteEvalQuoteReverted(venue, pathKind);
             } else {
               metrics.incrementRouteEvalRpcFailed(venue, pathKind);
             }
@@ -272,15 +282,28 @@ export async function buildRuntimeFromConfig(
               metrics.incrementRouteEvalCacheMiss(venue, pathKind);
             }
           },
+          onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
+            }
+          },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
               metrics.incrementRouteEvalRateLimited(venue, pathKind);
+            } else if (category === 'QUOTE_REVERTED') {
+              metrics.incrementRouteEvalQuoteReverted(venue, pathKind);
             } else {
               metrics.incrementRouteEvalRpcFailed(venue, pathKind);
             }
+          },
+          onTwoHopSkipped: (reason) => {
+            metrics.incrementCamelotTwoHopSkipped(reason);
           }
         }),
-        enableCamelotAmmv3: config.enableCamelotAmmv3
+        enableCamelotAmmv3: config.enableCamelotAmmv3,
+        maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };
 

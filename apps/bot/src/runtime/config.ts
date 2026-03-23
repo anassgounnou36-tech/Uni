@@ -84,6 +84,8 @@ const baseSchema = z.object({
   THRESHOLD_OUT: z.string().default('1'),
   ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
   INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
+  TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(5_000),
+  MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
   CANARY_MODE: z.string().optional(),
@@ -127,6 +129,8 @@ export type RuntimeConfig = {
   thresholdOut: bigint;
   routeEvalMaxConcurrency: number;
   infraBlockedRetryCooldownTicks: number;
+  twoHopUnlockMinCoverageBps: bigint;
+  maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
   canaryMode: boolean;
@@ -173,6 +177,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     thresholdOut: parseBigInt(parsed.THRESHOLD_OUT, 'THRESHOLD_OUT'),
     routeEvalMaxConcurrency: parsed.ROUTE_EVAL_MAX_CONCURRENCY,
     infraBlockedRetryCooldownTicks: parsed.INFRA_BLOCKED_RETRY_COOLDOWN_TICKS,
+    twoHopUnlockMinCoverageBps: BigInt(parsed.TWO_HOP_UNLOCK_MIN_COVERAGE_BPS),
+    maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
     canaryMode: parseBoolean(parsed.CANARY_MODE, false),

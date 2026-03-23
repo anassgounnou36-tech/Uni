@@ -137,7 +137,12 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     }
   });
   if (!route.ok) {
-    if (route.reason === 'RATE_LIMITED' || route.reason === 'RPC_UNAVAILABLE' || route.reason === 'RPC_FAILED') {
+    if (
+      route.reason === 'RATE_LIMITED'
+      || route.reason === 'RPC_UNAVAILABLE'
+      || route.reason === 'RPC_FAILED'
+      || route.reason === 'QUOTE_REVERTED'
+    ) {
       return { action: 'DROP', reason: 'INFRA_BLOCKED' };
     }
     return { action: 'DROP', reason: 'EDGE_DISAPPEARED' };

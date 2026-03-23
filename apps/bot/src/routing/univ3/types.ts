@@ -16,6 +16,7 @@ export type RoutePlanningPolicy = {
   riskBufferOut?: bigint;
   profitFloorOut?: bigint;
   nearMissBps?: bigint;
+  twoHopUnlockMinCoverageBps?: bigint;
 };
 
 export type UniV3RoutePlan = HedgeRoutePlan & {
@@ -35,7 +36,8 @@ export type RoutePlanningFailure = {
     | 'CONSTRAINT_REJECTED'
     | 'RATE_LIMITED'
     | 'RPC_UNAVAILABLE'
-    | 'RPC_FAILED';
+    | 'RPC_FAILED'
+    | 'QUOTE_REVERTED';
   details?: string;
   summary: VenueRouteAttemptSummary;
 };
@@ -56,10 +58,16 @@ export type UniV3RoutingContext = {
   factory: Address;
   quoter: Address;
   bridgeTokens?: readonly Address[];
+  twoHopUnlockMinCoverageBps?: bigint;
   routeEvalChainId?: bigint;
   routeEvalRpcGate?: RouteEvalRpcGate;
   onRouteEvalCacheAccess?: (hit: boolean, venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
-  onRouteEvalInfraError?: (category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED', venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalNegativeCacheAccess?: (hit: boolean, venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalInfraError?: (
+    category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
+    venue: 'UNISWAP_V3',
+    pathKind: 'DIRECT' | 'TWO_HOP'
+  ) => void;
 };
 
 export type RoutePlannerInput = {
