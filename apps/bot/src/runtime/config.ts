@@ -84,7 +84,7 @@ const baseSchema = z.object({
   THRESHOLD_OUT: z.string().default('1'),
   ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
   INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
-  TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(5_000),
+  TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(9_800),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
@@ -96,7 +96,7 @@ const baseSchema = z.object({
   ENABLE_CAMELOT_AMMV3: z.string().optional(),
   ENABLE_CAMELOT_TWO_HOP: z.string().optional(),
   BRIDGE_TOKENS: z.string().default(
-    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85EBE478A1C0b69FCBB9'
+    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'
   ),
 
   ENABLE_METRICS_SERVER: z.string().optional(),

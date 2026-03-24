@@ -5,6 +5,27 @@ import type { HedgeRoutePlan } from '../venues.js';
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
 
+const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 9_800n;
+
+function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
+  return outputs.reduce((sum, output) => sum + output.amount, 0n);
+}
+
+function shouldUnlockCamelotTwoHop(params: {
+  directQuote: Awaited<ReturnType<CamelotAmmv3Quoter['quoteExactInputSingle']>>;
+  requiredOutput: bigint;
+  thresholdBps: bigint;
+}): boolean {
+  if (!params.directQuote.ok) {
+    return true;
+  }
+  if (params.requiredOutput <= 0n) {
+    return true;
+  }
+  const coverageBps = (params.directQuote.route.quotedAmountOut * 10_000n) / params.requiredOutput;
+  return coverageBps >= params.thresholdBps;
+}
+
 export type CamelotRoutePlanningResult =
   | { ok: true; route: HedgeRoutePlan & { venue: 'CAMELOT_AMMV3' }; summary: VenueRouteAttemptSummary }
   | {
@@ -97,20 +118,28 @@ export class CamelotAmmv3RoutePlanner {
       policy: input.policy,
       routeEval
     });
+    const requiredOutput = sumRequiredOutput(resolvedOrder.outputs as ReadonlyArray<{ amount: bigint }>);
+    const twoHopUnlockThresholdBps = input.policy?.twoHopUnlockMinCoverageBps ?? DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS;
     const bridgeTokens = input.policy?.bridgeTokens ?? this.bridgeTokens;
-    const bridgeQuotes = await Promise.all(
-      bridgeTokens
-        .filter((bridge) => bridge.toLowerCase() !== tokenIn.toLowerCase() && bridge.toLowerCase() !== tokenOut.toLowerCase())
-        .map((bridgeToken) => this.quoter.quoteExactInputPath({
-          tokenIn: tokenIn as Address,
-          tokenOut: tokenOut as Address,
-          bridgeToken,
-          amountIn: resolvedOrder.input.amount,
-          outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
-          policy: input.policy,
-          routeEval
-        }))
-    );
+    const bridgeQuotes = shouldUnlockCamelotTwoHop({
+      directQuote,
+      requiredOutput,
+      thresholdBps: twoHopUnlockThresholdBps
+    })
+      ? await Promise.all(
+        bridgeTokens
+          .filter((bridge) => bridge.toLowerCase() !== tokenIn.toLowerCase() && bridge.toLowerCase() !== tokenOut.toLowerCase())
+          .map((bridgeToken) => this.quoter.quoteExactInputPath({
+            tokenIn: tokenIn as Address,
+            tokenOut: tokenOut as Address,
+            bridgeToken,
+            amountIn: resolvedOrder.input.amount,
+            outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
+            policy: input.policy,
+            routeEval
+          }))
+      )
+      : [];
     const routeable = [directQuote, ...bridgeQuotes].filter((quote): quote is Extract<typeof quote, { ok: true }> => quote.ok);
     if (routeable.length > 0) {
       const best = [...routeable].sort((a, b) => {

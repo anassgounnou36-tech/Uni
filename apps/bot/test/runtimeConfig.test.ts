@@ -27,7 +27,7 @@ describe('runtime config', () => {
       outputToken: getAddress('0xff970a61a04b1ca14834a43f5de4533ebddb5cc8')
     }]);
     expect(config.enableCamelotTwoHop).toBe(false);
-    expect(config.twoHopUnlockMinCoverageBps).toBe(5_000n);
+    expect(config.twoHopUnlockMinCoverageBps).toBe(9_800n);
     expect(config.maxRevertedProbesPerOrder).toBe(3);
   });
 

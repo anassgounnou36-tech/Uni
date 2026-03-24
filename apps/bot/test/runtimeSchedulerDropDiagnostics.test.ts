@@ -73,7 +73,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     thresholdOut: 20n,
     routeEvalMaxConcurrency: 4,
     infraBlockedRetryCooldownTicks: 2,
-    twoHopUnlockMinCoverageBps: 5_000n,
+    twoHopUnlockMinCoverageBps: 9_800n,
     maxRevertedProbesPerOrder: 3,
     shadowMode: true,
     canaryMode: false,
@@ -697,6 +697,67 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const blocked = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_EVALUATION_BLOCKED');
     expect(blocked).toBeDefined();
     expect(blocked?.payload.reason).toEqual('RATE_LIMITED');
+    expect((blocked?.payload as Record<string, unknown>).revertedProbeCount).toEqual(0);
+    expect((blocked?.payload as Record<string, unknown>).revertedProbeBudgetExhausted).toEqual(false);
+  });
+
+  it('reverted-probe-budget exhaustion emits ORDER_EVALUATION_BLOCKED and not SCHEDULER_NO_EDGE', async () => {
+    const payload = makePayload();
+    const routeBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'QUOTE_REVERTED' as const,
+        infraBlocked: true,
+        revertedProbeCount: 4,
+        revertedProbeBudgetExhausted: true,
+        venueAttempts: [
+          {
+            venue: 'UNISWAP_V3' as const,
+            status: 'QUOTE_REVERTED' as const,
+            reason: 'QUOTE_REVERTED',
+            errorCategory: 'QUOTE_REVERTED' as const,
+            errorMessage: 'execution reverted',
+            feeTierAttempts: [
+              {
+                feeTier: 3000,
+                poolExists: true,
+                quoteSucceeded: false,
+                status: 'QUOTE_REVERTED' as const,
+                reason: 'QUOTE_REVERTED',
+                errorCategory: 'QUOTE_REVERTED' as const,
+                errorMessage: 'execution reverted'
+              }
+            ]
+          }
+        ],
+        bestRejectedSummary: {
+          venue: 'UNISWAP_V3' as const,
+          status: 'QUOTE_REVERTED' as const,
+          reason: 'QUOTE_REVERTED',
+          errorCategory: 'QUOTE_REVERTED' as const,
+          errorMessage: 'execution reverted',
+          candidateClass: 'INFRA_BLOCKED' as const
+        },
+        alternativeRoutes: []
+      })
+    } as RouteBook;
+    const { runtime, store, journal, ingress } = makeRuntime({
+      config: runtimeConfig({ thresholdOut: 10n }),
+      schedulerRouteBook: routeBook
+    });
+
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toEqual('SUPPORTED');
+    const dropped = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_DROPPED');
+    expect(dropped).toBeUndefined();
+    const blocked = (await journal.byOrderHash(payload.orderHash)).find((event) => event.type === 'ORDER_EVALUATION_BLOCKED');
+    expect(blocked).toBeDefined();
+    expect(blocked?.payload.reason).toEqual('QUOTE_REVERTED');
+    expect((blocked?.payload as Record<string, unknown>).revertedProbeCount).toEqual(8);
+    expect((blocked?.payload as Record<string, unknown>).revertedProbeBudgetExhausted).toEqual(true);
   });
 
   it('rate-limited candidates use cooldown and do not thrash each tick', async () => {

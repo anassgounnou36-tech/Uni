@@ -408,9 +408,11 @@ export class RouteBook {
 
     if (eligible.length === 0) {
       const revertedProbeCount = venueAttempts.reduce((sum, attempt) => {
-        const attemptLevel = attempt.status === 'QUOTE_REVERTED' ? 1 : 0;
-        const tierLevel = (attempt.feeTierAttempts ?? []).filter((tier) => tier.status === 'QUOTE_REVERTED').length;
-        return sum + attemptLevel + tierLevel;
+        const tierAttempts = attempt.feeTierAttempts ?? [];
+        if (tierAttempts.length > 0) {
+          return sum + tierAttempts.filter((tier) => tier.status === 'QUOTE_REVERTED').length;
+        }
+        return sum + (attempt.status === 'QUOTE_REVERTED' ? 1 : 0);
       }, 0);
       const revertedProbeBudget = this.planners.maxRevertedProbesPerOrder ?? Number.MAX_SAFE_INTEGER;
       const revertedProbeBudgetExhausted = revertedProbeCount > revertedProbeBudget;

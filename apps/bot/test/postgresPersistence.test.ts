@@ -36,7 +36,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     thresholdOut: 1n,
     routeEvalMaxConcurrency: 4,
     infraBlockedRetryCooldownTicks: 2,
-    twoHopUnlockMinCoverageBps: 5_000n,
+    twoHopUnlockMinCoverageBps: 9_800n,
     maxRevertedProbesPerOrder: 3,
     shadowMode: false,
     canaryMode: false,

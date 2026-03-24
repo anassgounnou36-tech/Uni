@@ -124,6 +124,66 @@ describe('CamelotAmmv3RoutePlanner exact-output viability', () => {
     expect(result.summary.status === 'ROUTEABLE' || result.summary.status === 'QUOTE_REVERTED').toBe(true);
   });
 
+  it('does not unlock camelot two-hop when direct coverage is below threshold', async () => {
+    const bridge = '0x000000000000000000000000000000000000000b';
+    let twoHopCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') return pool;
+      if (call.functionName === 'quoteExactInputSingle') return [700n, 30] as const;
+      if (call.functionName === 'quoteExactOutputSingle') return [1_100n, 30] as const;
+      if (call.functionName === 'quoteExactInput') {
+        twoHopCalls += 1;
+        return 980n;
+      }
+      if (call.functionName === 'quoteExactOutput') return 970n;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter,
+      bridgeTokens: [bridge],
+      enableTwoHop: true
+    });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        ...routeInput().policy,
+        twoHopUnlockMinCoverageBps: 9_800n
+      }
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(twoHopCalls).toBe(1);
+  });
+
+  it('reuses camelot direct leg lookup across exact-input and exact-output path', async () => {
+    let poolLookupCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') {
+        poolLookupCalls += 1;
+        return pool;
+      }
+      if (call.functionName === 'quoteExactInputSingle') return [920n, 30] as const;
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 30] as const;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    expect(poolLookupCalls).toBe(1);
+  });
+
   it('computes exact-output viability for successful exact-input quote attempts', async () => {
     const client = makeClient((call) => {
       if (call.functionName === 'poolByPair') {

@@ -29,7 +29,7 @@ import type { HedgeExecutionMode } from '../executionModeTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
-const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 5_000n;
+const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 9_800n;
 
 function sumRequiredOutput(outputs: ReadonlyArray<{ token: Address; amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
