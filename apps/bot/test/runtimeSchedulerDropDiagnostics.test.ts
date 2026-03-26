@@ -1148,4 +1148,120 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
     expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
   });
+
+  it('terminal PREPARE_FAILED order in hot queue is skipped, removed, and not rebuilt', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const logs: string[] = [];
+    const logger = new JsonConsoleLogger((line) => logs.push(line));
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new Error('prepare should not run for terminal state');
+      },
+      logger
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    await store.transition(payload.orderHash, 'PREPARE_FAILED', 'PREPARE_FAILED');
+
+    const hotQueueRef = runtime as unknown as { hotQueue: Array<Record<string, unknown>> };
+    hotQueueRef.hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+
+    expect(prepareCalls).toBe(0);
+    expect(hotQueueRef.hotQueue).toHaveLength(0);
+    const terminalSkipped = logs
+      .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
+      .find((entry) => entry.event === 'terminal_order_skipped');
+    expect(terminalSkipped?.fields).toMatchObject({
+      orderHash: payload.orderHash,
+      state: 'PREPARE_FAILED',
+      attemptedAction: 'hot_lane_queue_processing'
+    });
+  });
+
+  it('rechecks state immediately before PLAN_BUILT and avoids illegal PREPARE_FAILED -> PLAN_BUILT transition', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    let storeRef: InMemoryOrderStore | undefined;
+    const logs: string[] = [];
+    const logger = new JsonConsoleLogger((line) => logs.push(line));
+    const { runtime, store, journal } = makeRuntime({
+      config: runtimeConfig({ shadowMode: true, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async ({ executionPlan }) => {
+        prepareCalls += 1;
+        await storeRef?.transition(payload.orderHash, 'PREPARE_FAILED', 'PREPARE_FAILED');
+        return {
+          orderHash: payload.orderHash,
+          executionPlan,
+          txRequest: {
+            chainId: 42161n,
+            to: executionPlan.executor,
+            data: executionPlan.executeCalldata,
+            value: 0n
+          },
+          serializedTransaction: '0x02',
+          conditionalEnvelope: { TimestampMax: 1_900_000_100n },
+          sender: '0x3333333333333333333333333333333333333333',
+          nonce: 1n,
+          gas: 21_000n,
+          maxFeePerGas: 1n,
+          maxPriorityFeePerGas: 1n,
+          nonceLease: {
+            account: '0x3333333333333333333333333333333333333333',
+            nonce: 1n,
+            orderId: payload.orderHash,
+            leasedAtMs: Date.now()
+          }
+        };
+      },
+      logger
+    });
+    storeRef = store;
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    const hotQueueRef = runtime as unknown as { hotQueue: Array<Record<string, unknown>> };
+    hotQueueRef.hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+
+    const finalRecord = await store.get(payload.orderHash);
+    expect(finalRecord?.state).toBe('PREPARE_FAILED');
+    expect(prepareCalls).toBe(1);
+    expect(hotQueueRef.hotQueue).toHaveLength(0);
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    expect(events.some((event) => event.type === 'PLAN_BUILT')).toBe(false);
+
+    const terminalSkipped = logs
+      .map((line) => JSON.parse(line) as { event: string; fields?: Record<string, unknown> })
+      .find((entry) => entry.event === 'terminal_order_skipped' && entry.fields?.attemptedAction === 'plan_build_transition');
+    expect(terminalSkipped?.fields).toMatchObject({
+      orderHash: payload.orderHash,
+      state: 'PREPARE_FAILED',
+      attemptedAction: 'plan_build_transition'
+    });
+  });
 });

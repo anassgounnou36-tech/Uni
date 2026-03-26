@@ -108,6 +108,9 @@ contract ArbitrumForkSmokeTest {
                     tokenOut: WETH,
                     uniPoolFee: 500,
                     encodedPath: "",
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 1,
                     targetOutput: 0,
@@ -172,7 +175,7 @@ contract ArbitrumForkSmokeTest {
         vm.createSelectFork(forkUrl);
         adapter = new UniV3SwapRouter02Adapter(UNIV3_SWAP_ROUTER_02);
         executor = new UniswapXDutchV3Executor(
-            UNISWAPX_DUTCH_V3_REACTOR, address(adapter), address(adapter), TREASURY, address(this)
+            UNISWAPX_DUTCH_V3_REACTOR, address(adapter), address(adapter), address(adapter), TREASURY, address(this)
         );
     }
 
@@ -222,6 +225,9 @@ contract ArbitrumForkSmokeTest {
                 tokenOut: USDC,
                 uniPoolFee: fee,
                 encodedPath: "",
+                lfjTokenPath: new address[](0),
+                lfjBinSteps: new uint256[](0),
+                lfjVersions: new uint8[](0),
                 limitSqrtPriceX96: 0,
                 minAmountOut: minOut,
                 targetOutput: 0,

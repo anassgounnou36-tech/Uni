@@ -2,6 +2,12 @@
 pragma solidity ^0.8.24;
 
 interface ISettlementAdapter {
+    struct LfjPath {
+        address[] tokenPath;
+        uint256[] pairBinSteps;
+        uint8[] versions;
+    }
+
     function executeExactInputSingle(
         address tokenIn,
         address tokenOut,
@@ -29,4 +35,18 @@ interface ISettlementAdapter {
     function executeExactOutputPath(bytes calldata path, uint256 targetAmountOut, uint256 maxAmountIn, address recipient)
         external
         returns (uint256 amountInUsed);
+
+    function executeLfjExactInputPath(
+        LfjPath calldata path,
+        uint256 amountIn,
+        uint256 minAmountOut,
+        address recipient
+    ) external returns (uint256 amountOut);
+
+    function executeLfjExactOutputPath(
+        LfjPath calldata path,
+        uint256 targetAmountOut,
+        uint256 maxAmountIn,
+        address recipient
+    ) external returns (uint256 amountInUsed);
 }

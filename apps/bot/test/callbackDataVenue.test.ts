@@ -26,6 +26,9 @@ describe('venue-aware callback data', () => {
       tokenOut: '0x0000000000000000000000000000000000000002',
       uniPoolFee: 3000,
       encodedPath: '0x',
+      lfjTokenPath: [],
+      lfjBinSteps: [],
+      lfjVersions: [],
       limitSqrtPriceX96: 0n,
       minAmountOut: 123n,
       targetOutput: 0n,
@@ -54,6 +57,51 @@ describe('venue-aware callback data', () => {
       tokenOut: '0x0000000000000000000000000000000000000002',
       uniPoolFee: 0,
       encodedPath: '0x',
+      lfjTokenPath: [],
+      lfjBinSteps: [],
+      lfjVersions: [],
+      limitSqrtPriceX96: 0n,
+      minAmountOut: 777n,
+      targetOutput: 0n,
+      maxAmountIn: 0n
+    });
+
+    const lfj = decodeRoutePlanCallbackData(
+      encodeRoutePlanCallbackData({
+        venue: 'LFJ_LB',
+        pathKind: 'DIRECT',
+        hopCount: 1,
+        tokenIn: '0x0000000000000000000000000000000000000001',
+        tokenOut: '0x0000000000000000000000000000000000000002',
+        quoteMetadata: { venue: 'LFJ_LB', observedFee: 42 },
+        lfjPath: {
+          tokenPath: [
+            '0x0000000000000000000000000000000000000001',
+            '0x0000000000000000000000000000000000000002'
+          ],
+          binSteps: [20],
+          versions: [1]
+        },
+        limitSqrtPriceX96: 0n,
+        minAmountOut: 777n
+      })
+    );
+    expect(lfj).toEqual({
+      venue: 'LFJ_LB',
+      executionMode: 'EXACT_INPUT',
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      pathDirection: 'FORWARD',
+      tokenIn: '0x0000000000000000000000000000000000000001',
+      tokenOut: '0x0000000000000000000000000000000000000002',
+      uniPoolFee: 0,
+      encodedPath: '0x',
+      lfjTokenPath: [
+        '0x0000000000000000000000000000000000000001',
+        '0x0000000000000000000000000000000000000002'
+      ],
+      lfjBinSteps: [20],
+      lfjVersions: [1],
       limitSqrtPriceX96: 0n,
       minAmountOut: 777n,
       targetOutput: 0n,
@@ -76,6 +124,9 @@ describe('venue-aware callback data', () => {
               { name: 'tokenOut', type: 'address' },
               { name: 'uniPoolFee', type: 'uint24' },
               { name: 'encodedPath', type: 'bytes' },
+              { name: 'lfjTokenPath', type: 'address[]' },
+              { name: 'lfjBinSteps', type: 'uint256[]' },
+              { name: 'lfjVersions', type: 'uint8[]' },
               { name: 'limitSqrtPriceX96', type: 'uint160' },
               { name: 'minAmountOut', type: 'uint256' },
               { name: 'targetOutput', type: 'uint256' },
@@ -94,6 +145,9 @@ describe('venue-aware callback data', () => {
           tokenOut: '0x0000000000000000000000000000000000000002',
           uniPoolFee: 500,
           encodedPath: '0x',
+          lfjTokenPath: [],
+          lfjBinSteps: [],
+          lfjVersions: [],
           limitSqrtPriceX96: 0n,
           minAmountOut: 1n,
           targetOutput: 1n,
@@ -116,6 +170,11 @@ describe('venue-aware callback data', () => {
         tokenIn: '0x0000000000000000000000000000000000000001',
         tokenOut: '0x0000000000000000000000000000000000000003',
         encodedPath: '0x0000000000000000000000000000000000000001000bb80000000000000000000000000000000000000002000bb80000000000000000000000000000000000000003',
+        lfjPath: {
+          tokenPath: [],
+          binSteps: [],
+          versions: []
+        },
         quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 3000 },
         limitSqrtPriceX96: 0n,
         minAmountOut: 456n
@@ -126,6 +185,30 @@ describe('venue-aware callback data', () => {
     expect(decoded.hopCount).toBe(2);
     expect(decoded.uniPoolFee).toBe(0);
     expect(decoded.encodedPath).not.toBe('0x');
+    expect(decoded.lfjTokenPath).toEqual([]);
+  });
+
+  it('lfj_callback_requires_consistent_structured_path_lengths', () => {
+    expect(() =>
+      encodeRoutePlanCallbackData({
+        venue: 'LFJ_LB',
+        pathKind: 'TWO_HOP',
+        hopCount: 2,
+        tokenIn: '0x0000000000000000000000000000000000000001',
+        tokenOut: '0x0000000000000000000000000000000000000003',
+        quoteMetadata: { venue: 'LFJ_LB', observedFee: 42 },
+        lfjPath: {
+          tokenPath: [
+            '0x0000000000000000000000000000000000000001',
+            '0x0000000000000000000000000000000000000003'
+          ],
+          binSteps: [20],
+          versions: [1]
+        },
+        limitSqrtPriceX96: 0n,
+        minAmountOut: 456n
+      })
+    ).toThrow('LFJ_LB route token path length mismatch');
   });
 
   it('callback_data_round_trips_exact_output_direct_and_two_hop_routes', () => {
@@ -139,6 +222,11 @@ describe('venue-aware callback data', () => {
         tokenIn: '0x0000000000000000000000000000000000000001',
         tokenOut: '0x0000000000000000000000000000000000000002',
         quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 },
+        lfjPath: {
+          tokenPath: [],
+          binSteps: [],
+          versions: []
+        },
         limitSqrtPriceX96: 0n,
         minAmountOut: 900n,
         requiredOutput: 900n,
@@ -162,6 +250,11 @@ describe('venue-aware callback data', () => {
         tokenOut: '0x0000000000000000000000000000000000000003',
         encodedPath: '0x00000000000000000000000000000000000000010001f400000000000000000000000000000000000000020001f40000000000000000000000000000000000000003',
         quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 },
+        lfjPath: {
+          tokenPath: [],
+          binSteps: [],
+          versions: []
+        },
         limitSqrtPriceX96: 0n,
         minAmountOut: 900n,
         requiredOutput: 900n,

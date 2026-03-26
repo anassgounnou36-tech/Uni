@@ -39,6 +39,10 @@ export class RouteEvalReadCache {
   private readonly entries = new Map<string, Promise<CacheValue>>();
   private readonly negativeEntries = new Map<string, Promise<never>>();
 
+  getEntryCount(): number {
+    return this.entries.size;
+  }
+
   getNegativeEntryCount(): number {
     return this.negativeEntries.size;
   }

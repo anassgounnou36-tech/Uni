@@ -15,6 +15,12 @@ export type HedgePathLeg = {
   bridgeToken?: Address;
 };
 
+export type LfjLbPath = {
+  tokenPath: Address[];
+  binSteps: number[];
+  versions: number[];
+};
+
 export type EncodedSwapPath = {
   kind: RoutePathKind;
   venue: HedgeVenue;

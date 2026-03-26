@@ -1,6 +1,7 @@
 import type { RoutePlannerInput } from './univ3/types.js';
 import type { UniV3RoutePlanner } from './univ3/routePlanner.js';
 import type { CamelotAmmv3RoutePlanner } from './camelotV3/routePlanner.js';
+import type { LfjLbRoutePlanner } from './lfjLb/routePlanner.js';
 import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues.js';
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
@@ -38,7 +39,12 @@ function venueTieBreak(a: HedgeVenue, b: HedgeVenue): number {
   if (a === b) {
     return 0;
   }
-  return a === 'UNISWAP_V3' ? -1 : 1;
+  const rank: Record<HedgeVenue, number> = {
+    UNISWAP_V3: 0,
+    CAMELOT_AMMV3: 1,
+    LFJ_LB: 2
+  };
+  return rank[a] - rank[b];
 }
 
 function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
@@ -55,8 +61,11 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
     pathKind: route.pathKind,
     hopCount: route.hopCount,
     bridgeToken: route.bridgeToken,
+    lfjPath: route.lfjPath,
     pathDescriptor:
-      route.pathKind === 'TWO_HOP' && route.bridgeToken
+      route.pathDescriptor
+        ? route.pathDescriptor
+        : route.pathKind === 'TWO_HOP' && route.bridgeToken
         ? `TWO_HOP: ${route.tokenIn} -> ${route.bridgeToken} -> ${route.tokenOut}`
         : `DIRECT: ${route.tokenIn} -> ${route.tokenOut}`,
     eligible: route.quotedAmountOut >= route.minAmountOut && route.netEdgeOut > 0n,
@@ -322,16 +331,21 @@ export class RouteBook {
     private readonly planners: {
       uniswapV3: UniV3RoutePlanner;
       camelotAmmv3?: CamelotAmmv3RoutePlanner;
+      lfjLb?: LfjLbRoutePlanner;
       enableCamelotAmmv3: boolean;
+      enableLfjLb?: boolean;
       maxRevertedProbesPerOrder?: number;
     }
   ) {}
 
   async selectBestRoute(input: RoutePlannerInput): Promise<RouteBookSelection> {
-    const [uniswapResult, camelotResult] = await Promise.all([
+    const [uniswapResult, camelotResult, lfjResult] = await Promise.all([
       this.planners.uniswapV3.planBestRoute(input),
       this.planners.enableCamelotAmmv3 && this.planners.camelotAmmv3
         ? this.planners.camelotAmmv3.planBestRoute(input)
+        : Promise.resolve(undefined),
+      (this.planners.enableLfjLb ?? false) && this.planners.lfjLb
+        ? this.planners.lfjLb.planBestRoute(input)
         : Promise.resolve(undefined)
     ]);
 
@@ -358,16 +372,17 @@ export class RouteBook {
           exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
           pathKind: failureSummary.pathKind,
         hopCount: failureSummary.hopCount,
-        bridgeToken: failureSummary.bridgeToken,
-        pathDescriptor: failureSummary.pathDescriptor,
-        candidateClass: failureSummary.candidateClass,
-        constraintReason: failureSummary.constraintReason,
-        constraintBreakdown: failureSummary.constraintBreakdown,
-        exactOutputViability: failureSummary.exactOutputViability,
-        hedgeGap: failureSummary.hedgeGap,
-        reason: toCandidateFailureReason(failureSummary),
-        details: failureSummary.reason
-      });
+          bridgeToken: failureSummary.bridgeToken,
+          lfjPath: failureSummary.lfjPath,
+          pathDescriptor: failureSummary.pathDescriptor,
+          candidateClass: failureSummary.candidateClass,
+          constraintReason: failureSummary.constraintReason,
+          constraintBreakdown: failureSummary.constraintBreakdown,
+          exactOutputViability: failureSummary.exactOutputViability,
+          hedgeGap: failureSummary.hedgeGap,
+          reason: toCandidateFailureReason(failureSummary),
+          details: failureSummary.reason
+        });
     }
 
     if (camelotResult) {
@@ -391,6 +406,7 @@ export class RouteBook {
           pathKind: failureSummary.pathKind,
           hopCount: failureSummary.hopCount,
           bridgeToken: failureSummary.bridgeToken,
+          lfjPath: failureSummary.lfjPath,
           pathDescriptor: failureSummary.pathDescriptor,
           candidateClass: failureSummary.candidateClass,
           constraintReason: failureSummary.constraintReason,
@@ -425,6 +441,40 @@ export class RouteBook {
         eligible: false,
         reason: 'CAMELOT_DISABLED'
       });
+    }
+
+    if (lfjResult) {
+      if (lfjResult.ok) {
+        const summary = toSummary(lfjResult.route);
+        alternatives.push(summary);
+        venueAttempts.push(lfjResult.summary);
+        if (summary.eligible) {
+          eligible.push(lfjResult.route);
+        }
+      } else {
+        const failureSummary = ensureCandidateClass(lfjResult.failure.summary as RejectedVenueRouteAttemptSummary);
+        venueAttempts.push(failureSummary);
+        alternatives.push({
+          venue: 'LFJ_LB',
+          eligible: false,
+          familyKind: failureSummary.familyKind,
+          probePriority: failureSummary.probePriority,
+          familyKey: failureSummary.familyKey,
+          exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
+          pathKind: failureSummary.pathKind,
+          hopCount: failureSummary.hopCount,
+          bridgeToken: failureSummary.bridgeToken,
+          lfjPath: failureSummary.lfjPath,
+          pathDescriptor: failureSummary.pathDescriptor,
+          candidateClass: failureSummary.candidateClass,
+          constraintReason: failureSummary.constraintReason,
+          constraintBreakdown: failureSummary.constraintBreakdown,
+          exactOutputViability: failureSummary.exactOutputViability,
+          hedgeGap: failureSummary.hedgeGap,
+          reason: toCandidateFailureReason(failureSummary),
+          details: failureSummary.reason
+        });
+      }
     }
 
     if (eligible.length === 0) {

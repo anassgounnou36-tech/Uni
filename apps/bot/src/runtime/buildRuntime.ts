@@ -1,7 +1,16 @@
 import { createPublicClient, createTestClient, createWalletClient, http, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { arbitrum } from 'viem/chains';
-import { CAMELOT_AMMV3_FACTORY, CAMELOT_AMMV3_QUOTER, UNISWAPX_ORDERS_API, UNIV3_FACTORY, UNIV3_QUOTER_V2 } from '../../../../packages/config/src/arbitrum.js';
+import {
+  CAMELOT_AMMV3_FACTORY,
+  CAMELOT_AMMV3_QUOTER,
+  LFJ_LB_FACTORY,
+  LFJ_LB_QUOTER,
+  LFJ_LB_ROUTER,
+  UNISWAPX_ORDERS_API,
+  UNIV3_FACTORY,
+  UNIV3_QUOTER_V2
+} from '../../../../packages/config/src/arbitrum.js';
 import { createPostgresAdapter } from '../db/postgres.js';
 import type { SqlAdapter } from '../db/types.js';
 import { prepareExecution } from '../execution/prepareExecution.js';
@@ -14,6 +23,7 @@ import { PostgresDecisionJournal } from '../journal/postgresDecisionJournal.js';
 import type { DecisionJournal } from '../journal/types.js';
 import { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
 import { CamelotAmmv3RoutePlanner } from '../routing/camelotV3/routePlanner.js';
+import { LfjLbRoutePlanner } from '../routing/lfjLb/routePlanner.js';
 import { RouteBook } from '../routing/routeBook.js';
 import { RouteEvalRpcGate } from '../routing/rpc/rpcGate.js';
 import { InMemoryNonceLedger, NonceManager, PostgresNonceLedger } from '../send/nonceManager.js';
@@ -328,7 +338,55 @@ export async function buildRuntimeFromConfig(
             metrics.incrementCamelotTwoHopSkipped(reason);
           }
         }),
+        lfjLb: new LfjLbRoutePlanner({
+          client: readClient,
+          enabled: config.enableLfjLb,
+          factory: config.lfjLbFactory ?? LFJ_LB_FACTORY,
+          quoter: config.lfjLbQuoter ?? LFJ_LB_QUOTER,
+          router: config.lfjLbRouter ?? LFJ_LB_ROUTER,
+          bridgeTokens: config.bridgeTokens,
+          enableTwoHop: config.enableLfjTwoHop,
+          maxTwoHopFamiliesPerOrder: config.maxLfjTwoHopFamiliesPerOrder,
+          routeEvalChainId: 42161n,
+          routeEvalRpcGate,
+          onRouteEvalCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+              if (pathKind === 'DIRECT') {
+                metrics.incrementRouteEvalDirectNegativeCacheHit(venue, pathKind);
+              }
+            } else {
+              metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalFamilyEvaluated: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyTotal(venue, pathKind);
+          },
+          onRouteEvalFamilyPruned: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyPruned(venue, pathKind);
+          },
+          onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
+            metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+          },
+          onRouteEvalInfraError: (category, venue, pathKind) => {
+            if (category === 'RATE_LIMITED') {
+              metrics.incrementRouteEvalRateLimited(venue, pathKind);
+            } else if (category === 'QUOTE_REVERTED') {
+              metrics.incrementRouteEvalQuoteReverted(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalRpcFailed(venue, pathKind);
+            }
+          }
+        }),
       enableCamelotAmmv3: config.enableCamelotAmmv3,
+      enableLfjLb: config.enableLfjLb,
       maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };

@@ -256,6 +256,7 @@ describe('replay runner', () => {
 
     expect(summary.ordersConsidered).toBeGreaterThan(0);
     expect(summary.chosenVenueCounts.CAMELOT_AMMV3).toBeGreaterThan(0);
+    expect(summary.chosenVenueCounts.LFJ_LB).toBeGreaterThanOrEqual(0);
     expect(summary.camelotStrictImprovementCount).toBeGreaterThan(0);
   });
 

@@ -40,6 +40,7 @@ type CompiledExecutorArtifacts = {
     reactor: `0x${string}`;
     uniswapAdapter: `0x${string}`;
     camelotAdapter: `0x${string}`;
+    lfjAdapter: `0x${string}`;
     treasury: `0x${string}`;
     owner: `0x${string}`;
   }) => Hex;
@@ -172,6 +173,13 @@ const EXECUTOR_WIRING_ABI = [
   {
     type: 'function',
     name: 'CAMELOT_AMMV3_ADAPTER',
+    stateMutability: 'view',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }]
+  },
+  {
+    type: 'function',
+    name: 'LFJ_LB_ADAPTER',
     stateMutability: 'view',
     inputs: [],
     outputs: [{ name: '', type: 'address' }]
@@ -427,7 +435,7 @@ contract MockCamelotAmmv3RouterForExecutorFlow {
       concatHex([uniAdapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockUniRouter])]),
     camelotAdapterCreationCode: (mockCamelotRouter) =>
       concatHex([camelotAdapterBytecode, encodeAbiParameters([{ type: 'address' }], [mockCamelotRouter])]),
-    executorCreationCode: ({ reactor, uniswapAdapter, camelotAdapter, treasury, owner }) =>
+    executorCreationCode: ({ reactor, uniswapAdapter, camelotAdapter, lfjAdapter, treasury, owner }) =>
       concatHex([
         executorBytecode,
         encodeAbiParameters(
@@ -436,9 +444,10 @@ contract MockCamelotAmmv3RouterForExecutorFlow {
             { type: 'address' },
             { type: 'address' },
             { type: 'address' },
+            { type: 'address' },
             { type: 'address' }
           ],
-          [reactor, uniswapAdapter, camelotAdapter, treasury, owner]
+          [reactor, uniswapAdapter, camelotAdapter, lfjAdapter, treasury, owner]
         )
       ]),
     mockReactorCreationCode: mockReactorBytecode,
@@ -514,6 +523,7 @@ async function deployRealExecutorStack(clients: { walletClient: WalletClient; pu
       reactor: mockReactorAddress,
       uniswapAdapter: uniAdapterAddress,
       camelotAdapter: camelotAdapterAddress,
+      lfjAdapter: uniAdapterAddress,
       treasury: TREASURY,
       owner: clients.walletClient.account!.address
     })
@@ -1251,7 +1261,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
 
     expect(selected.ok).toEqual(true);
     if (selected.ok) {
-      expect(['UNISWAP_V3', 'CAMELOT_AMMV3']).toContain(selected.chosenRoute.venue);
+      expect(['UNISWAP_V3', 'CAMELOT_AMMV3', 'LFJ_LB']).toContain(selected.chosenRoute.venue);
     }
   });
 
