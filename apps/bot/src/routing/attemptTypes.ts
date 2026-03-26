@@ -6,6 +6,7 @@ import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 import type { RoutePathKind } from './pathTypes.js';
 import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { Address } from 'viem';
+import type { RouteFamilyKind } from './familyTypes.js';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -29,6 +30,10 @@ export type FeeTierAttemptSummary = {
   hopCount?: 1 | 2;
   bridgeToken?: Address;
   pathDescriptor?: string;
+  familyKind?: RouteFamilyKind;
+  probePriority?: number;
+  familyKey?: string;
+  exactOutputPromotedFromFamily?: boolean;
   poolExists: boolean;
   quoteSucceeded: boolean;
   quotedAmountOut?: bigint;
@@ -53,6 +58,10 @@ export type VenueRouteAttemptSummary = {
   hopCount?: 1 | 2;
   bridgeToken?: Address;
   pathDescriptor?: string;
+  familyKind?: RouteFamilyKind;
+  probePriority?: number;
+  familyKey?: string;
+  exactOutputPromotedFromFamily?: boolean;
   status: RouteAttemptStatus;
   reason: string;
   errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';

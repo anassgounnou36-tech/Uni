@@ -26,11 +26,15 @@ export type CamelotAmmv3QuoterContext = {
   univ3Factory: Address;
   univ3Quoter: Address;
   bridgeTokens?: readonly Address[];
+  maxTwoHopFamiliesPerOrder?: number;
   enableTwoHop?: boolean;
   routeEvalChainId?: bigint;
   routeEvalRpcGate?: RouteEvalRpcGate;
   onRouteEvalCacheAccess?: (hit: boolean, venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalNegativeCacheAccess?: (hit: boolean, venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyEvaluated?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP', familyKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyPruned?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyPromoted?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
   onRouteEvalInfraError?: (
     category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
     venue: 'CAMELOT_AMMV3',

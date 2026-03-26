@@ -289,6 +289,10 @@ export function formatReplayOutput(params: {
       bestRejected as { exactOutputViability?: { status?: ExactOutputViabilityStatus } } | undefined
     )?.exactOutputViability?.status,
     gapClass: (bestRejected as { hedgeGap?: { gapClass?: HedgeGapClass } } | undefined)?.hedgeGap?.gapClass,
+    familyKind: bestRejected?.familyKind,
+    probePriority: bestRejected?.probePriority,
+    familyKey: bestRejected?.familyKey,
+    exactOutputPromotedFromFamily: bestRejected?.exactOutputPromotedFromFamily,
     bestRejectedVenue: bestRejected?.venue,
     bestRejectedPathKind: bestRejected?.pathKind,
     bestRejectedBridgeToken: bestRejected?.bridgeToken,

@@ -160,6 +160,45 @@ describe('CamelotAmmv3RoutePlanner exact-output viability', () => {
     expect(twoHopCalls).toBe(1);
   });
 
+  it('limits camelot two-hop evaluation to top maxTwoHopFamiliesPerOrder families', async () => {
+    const bridges = [
+      '0x000000000000000000000000000000000000000b',
+      '0x000000000000000000000000000000000000000c',
+      '0x000000000000000000000000000000000000000d'
+    ] as const;
+    let twoHopCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') return pool;
+      if (call.functionName === 'quoteExactInputSingle') return [920n, 30] as const;
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 30] as const;
+      if (call.functionName === 'quoteExactInput') {
+        twoHopCalls += 1;
+        return 980n;
+      }
+      if (call.functionName === 'quoteExactOutput') return 970n;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter,
+      bridgeTokens: bridges,
+      enableTwoHop: true
+    });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        ...routeInput().policy,
+        maxTwoHopFamiliesPerOrder: 2
+      }
+    });
+    expect(result.ok).toBe(true);
+    expect(twoHopCalls).toBe(2);
+  });
+
   it('reuses camelot direct leg lookup across exact-input and exact-output path', async () => {
     let poolLookupCalls = 0;
     const client = makeClient((call) => {

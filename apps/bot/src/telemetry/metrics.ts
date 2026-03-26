@@ -122,7 +122,40 @@ export class BotMetrics {
     this.increment('route_eval_negative_cache_miss_total');
     if (venue && pathKind) {
       this.increment(`route_eval_negative_cache_miss_total{venue="${venue}",path_kind="${pathKind}"}`);
+      if (pathKind === 'DIRECT') {
+        this.increment('route_eval_direct_negative_cache_miss_total');
+        this.increment(`route_eval_direct_negative_cache_miss_total{venue="${venue}",path_kind="${pathKind}"}`);
+      }
     }
+  }
+
+  incrementRouteEvalDirectNegativeCacheHit(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_direct_negative_cache_hit_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_direct_negative_cache_hit_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalFamilyTotal(venue: string, pathKind: string): void {
+    if (pathKind === 'DIRECT') {
+      this.increment('route_eval_direct_family_total');
+      this.increment(`route_eval_direct_family_total{venue="${venue}",path_kind="${pathKind}"}`);
+      return;
+    }
+    this.increment('route_eval_two_hop_family_total');
+    this.increment(`route_eval_two_hop_family_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
+  incrementRouteEvalFamilyPruned(venue: string, pathKind: string): void {
+    this.increment('route_eval_family_pruned_total');
+    this.increment(`route_eval_family_pruned_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
+  incrementRouteEvalFamilyPromoted(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_promoted_total');
+    this.increment(
+      `route_eval_family_promoted_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
   }
 
   incrementOrderEvalRevertedProbeBudgetExhausted(): void {
@@ -155,6 +188,10 @@ export class BotMetrics {
         `orders_prepare_failed_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
       );
     }
+  }
+
+  incrementOrdersSupportedToScheduled(): void {
+    this.increment('orders_supported_to_scheduled_total');
   }
 
   observeIngestToSendLatency(ms: number): void {

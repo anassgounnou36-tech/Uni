@@ -26,10 +26,12 @@ import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
 import { deriveRejectedCandidateClass, ensureRejectedCandidateClass } from '../rejectedCandidateTypes.js';
 import type { RoutePathKind } from '../pathTypes.js';
 import type { HedgeExecutionMode } from '../executionModeTypes.js';
+import type { RouteFamily } from '../familyTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
 const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 9_800n;
+const DEFAULT_MAX_TWO_HOP_FAMILIES_PER_ORDER = 2;
 
 function sumRequiredOutput(outputs: ReadonlyArray<{ token: Address; amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
@@ -43,6 +45,7 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
   return {
     feeTiers: policy?.feeTiers ?? DEFAULT_FEE_TIERS,
     bridgeTokens: policy?.bridgeTokens ?? [],
+    maxTwoHopFamiliesPerOrder: policy?.maxTwoHopFamiliesPerOrder ?? DEFAULT_MAX_TWO_HOP_FAMILIES_PER_ORDER,
     slippageBufferBps: policy?.slippageBufferBps ?? 50n,
     effectiveGasPriceWei: policy?.effectiveGasPriceWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
@@ -117,6 +120,7 @@ type Candidate = {
 };
 
 type PathShape = {
+  family: RouteFamily;
   kind: RoutePathKind;
   hopCount: 1 | 2;
   bridgeToken?: Address;
@@ -134,6 +138,30 @@ function buildPathDescriptor(kind: RoutePathKind, tokenIn: Address, tokenOut: Ad
     return `TWO_HOP: ${tokenIn} -> ${bridgeToken} -> ${tokenOut}`;
   }
   return `DIRECT: ${tokenIn} -> ${tokenOut}`;
+}
+
+function compareAttemptsForPriority(a: FeeTierAttemptSummary, b: FeeTierAttemptSummary): number {
+  const aCoverage = a.hedgeGap?.outputCoverageBps ?? 0n;
+  const bCoverage = b.hedgeGap?.outputCoverageBps ?? 0n;
+  if (aCoverage !== bCoverage) {
+    return aCoverage > bCoverage ? -1 : 1;
+  }
+  const aShortfall = a.hedgeGap?.requiredOutputShortfallOut ?? a.constraintBreakdown?.requiredOutputShortfallOut ?? 0n;
+  const bShortfall = b.hedgeGap?.requiredOutputShortfallOut ?? b.constraintBreakdown?.requiredOutputShortfallOut ?? 0n;
+  if (aShortfall !== bShortfall) {
+    return aShortfall < bShortfall ? -1 : 1;
+  }
+  const aEdge = a.netEdgeOut ?? -1n;
+  const bEdge = b.netEdgeOut ?? -1n;
+  if (aEdge !== bEdge) {
+    return aEdge > bEdge ? -1 : 1;
+  }
+  const aQuote = a.quotedAmountOut ?? 0n;
+  const bQuote = b.quotedAmountOut ?? 0n;
+  if (aQuote !== bQuote) {
+    return aQuote > bQuote ? -1 : 1;
+  }
+  return 0;
 }
 
 export class UniV3RoutePlanner {
@@ -190,6 +218,11 @@ export class UniV3RoutePlanner {
 
     const evaluatePathCandidate = async (shape: PathShape): Promise<void> => {
       const pathDescriptor = buildPathDescriptor(shape.kind, tokenIn, tokenOut, shape.bridgeToken);
+      const familyMeta = {
+        familyKind: shape.family.familyKind,
+        probePriority: shape.family.probePriority,
+        familyKey: shape.family.familyKey
+      } as const;
       if (shape.kind === 'DIRECT') {
         let discovery;
         try {
@@ -212,6 +245,7 @@ export class UniV3RoutePlanner {
             pathKind: shape.kind,
             hopCount: shape.hopCount,
             pathDescriptor,
+            ...familyMeta,
             poolExists: false,
             quoteSucceeded: false,
             status:
@@ -235,6 +269,7 @@ export class UniV3RoutePlanner {
             pathKind: shape.kind,
             hopCount: shape.hopCount,
             pathDescriptor,
+            ...familyMeta,
             poolExists: false,
             quoteSucceeded: false,
             status: 'NOT_ROUTEABLE',
@@ -291,6 +326,7 @@ export class UniV3RoutePlanner {
             hopCount: shape.hopCount,
             bridgeToken: bridge,
             pathDescriptor,
+            ...familyMeta,
             poolExists: false,
             quoteSucceeded: false,
             status:
@@ -315,6 +351,7 @@ export class UniV3RoutePlanner {
             hopCount: shape.hopCount,
             bridgeToken: bridge,
             pathDescriptor,
+            ...familyMeta,
             poolExists: false,
             quoteSucceeded: false,
             status: 'NOT_ROUTEABLE',
@@ -369,6 +406,7 @@ export class UniV3RoutePlanner {
           hopCount: shape.hopCount,
           bridgeToken: shape.bridgeToken,
           pathDescriptor,
+          ...familyMeta,
           poolExists: true,
           quoteSucceeded: false,
           status:
@@ -471,6 +509,7 @@ export class UniV3RoutePlanner {
           hopCount: shape.hopCount,
           bridgeToken: shape.bridgeToken,
           pathDescriptor,
+          ...familyMeta,
           poolExists: true,
           quoteSucceeded: true,
           quotedAmountOut,
@@ -537,6 +576,7 @@ export class UniV3RoutePlanner {
         hopCount: shape.hopCount,
         bridgeToken: shape.bridgeToken,
         pathDescriptor,
+        ...familyMeta,
         poolExists: true,
         quoteSucceeded: true,
         quotedAmountOut,
@@ -695,6 +735,8 @@ export class UniV3RoutePlanner {
         hopCount: shape.hopCount,
         bridgeToken: shape.bridgeToken,
         pathDescriptor,
+        ...familyMeta,
+        exactOutputPromotedFromFamily: true,
         poolExists: true,
         quoteSucceeded: true,
         quotedAmountOut: quotedAmountOutExactOutput,
@@ -767,32 +809,82 @@ export class UniV3RoutePlanner {
       });
     };
 
-    for (const feeTier of policy.feeTiers) {
-      await evaluatePathCandidate({ kind: 'DIRECT', hopCount: 1, feeTier });
+    const directFamilies: RouteFamily[] = policy.feeTiers.map((feeTier, index) => ({
+      venue: 'UNISWAP_V3',
+      familyKind: 'DIRECT',
+      tokenIn,
+      tokenOut,
+      feeTier,
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      pathDescriptor: buildPathDescriptor('DIRECT', tokenIn, tokenOut),
+      discovery: 'DIRECT_FEE_TIER',
+      probePriority: index,
+      familyKey: `UNISWAP_V3:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}:${feeTier}`
+    }));
+    for (const family of directFamilies) {
+      await evaluatePathCandidate({
+        family,
+        kind: 'DIRECT',
+        hopCount: 1,
+        feeTier: family.feeTier ?? 0
+      });
+      this.context.onRouteEvalFamilyEvaluated?.('UNISWAP_V3', family.pathKind, family.familyKind);
     }
     const unlockThresholdBps = this.context.twoHopUnlockMinCoverageBps ?? policy.twoHopUnlockMinCoverageBps;
     if (shouldUnlockTwoHop(requiredOutput, attempts, unlockThresholdBps)) {
       const bridgeTokens = input.policy?.bridgeTokens ?? this.context.bridgeTokens ?? [];
-      for (const bridgeToken of bridgeTokens) {
-        if (bridgeToken.toLowerCase() === tokenIn.toLowerCase() || bridgeToken.toLowerCase() === tokenOut.toLowerCase()) {
-          continue;
-        }
-        for (const feeTier of policy.feeTiers) {
-          for (const secondFeeTier of policy.feeTiers) {
-            const encodedPath = encodeUniV3Path([
-              { tokenIn, fee: feeTier, tokenOut: bridgeToken },
-              { tokenIn: bridgeToken, fee: secondFeeTier, tokenOut }
-            ]);
-            await evaluatePathCandidate({
-              kind: 'TWO_HOP',
-              hopCount: 2,
-              bridgeToken,
-              feeTier,
-              secondFeeTier,
-              encodedPath
-            });
-          }
-        }
+      const directAttempts = attempts.filter((attempt) => attempt.pathKind === 'DIRECT').sort(compareAttemptsForPriority);
+      const bestDirect = directAttempts[0];
+      const maxTwoHopFamilies = Math.max(1, input.policy?.maxTwoHopFamiliesPerOrder ?? this.context.maxTwoHopFamiliesPerOrder ?? DEFAULT_MAX_TWO_HOP_FAMILIES_PER_ORDER);
+      const candidatesByBridge = bridgeTokens
+        .filter((bridgeToken) => bridgeToken.toLowerCase() !== tokenIn.toLowerCase() && bridgeToken.toLowerCase() !== tokenOut.toLowerCase())
+        .map((bridgeToken, index) => ({
+          bridgeToken,
+          priority:
+            index * 10_000
+            + (bestDirect?.hedgeGap?.requiredOutputShortfallOut !== undefined ? Number(bestDirect.hedgeGap.requiredOutputShortfallOut) : 0)
+            + (bestDirect?.feeTier ?? 0)
+        }))
+        .sort((a, b) => a.priority - b.priority)
+        .slice(0, maxTwoHopFamilies);
+      const bestDirectFeeTier = (bestDirect?.feeTier ?? policy.feeTiers[0]!) as UniV3FeeTier;
+      for (const [index, bridgeCandidate] of candidatesByBridge.entries()) {
+        const bridgeToken = bridgeCandidate.bridgeToken;
+        const feeTier = bestDirectFeeTier;
+        const secondFeeTier = bestDirectFeeTier;
+        const family: RouteFamily = {
+          venue: 'UNISWAP_V3',
+          familyKind: 'TWO_HOP',
+          tokenIn,
+          tokenOut,
+          bridgeToken,
+          feeTier,
+          secondFeeTier,
+          pathKind: 'TWO_HOP',
+          hopCount: 2,
+          pathDescriptor: buildPathDescriptor('TWO_HOP', tokenIn, tokenOut, bridgeToken),
+          discovery: 'TWO_HOP_BRIDGE_FEE',
+          probePriority: 100 + index,
+          familyKey: `UNISWAP_V3:TWO_HOP:${tokenIn.toLowerCase()}:${bridgeToken.toLowerCase()}:${tokenOut.toLowerCase()}:${feeTier}:${secondFeeTier}`
+        };
+        const encodedPath = encodeUniV3Path([
+          { tokenIn, fee: feeTier, tokenOut: bridgeToken },
+          { tokenIn: bridgeToken, fee: secondFeeTier, tokenOut }
+        ]);
+        await evaluatePathCandidate({
+          family,
+          kind: 'TWO_HOP',
+          hopCount: 2,
+          bridgeToken,
+          feeTier,
+          secondFeeTier,
+          encodedPath
+        });
+        this.context.onRouteEvalFamilyEvaluated?.('UNISWAP_V3', family.pathKind, family.familyKind);
+      }
+      if (bridgeTokens.length > candidatesByBridge.length) {
+        this.context.onRouteEvalFamilyPruned?.('UNISWAP_V3', 'TWO_HOP');
       }
     }
 
@@ -827,6 +919,7 @@ export class UniV3RoutePlanner {
     if (routeableCandidates.length > 0) {
       const sorted = [...routeableCandidates].sort(sortByNetEdge);
       const best = sorted[0]!;
+      this.context.onRouteEvalFamilyPromoted?.('UNISWAP_V3', best.route.pathKind, best.route.executionMode ?? 'EXACT_INPUT');
       const summary: VenueRouteAttemptSummary = {
         venue: 'UNISWAP_V3',
         pathKind: best.route.pathKind,
@@ -834,6 +927,10 @@ export class UniV3RoutePlanner {
         hopCount: best.route.hopCount,
         bridgeToken: best.route.bridgeToken,
         pathDescriptor: best.feeTierAttempt.pathDescriptor,
+        familyKind: best.feeTierAttempt.familyKind,
+        probePriority: best.feeTierAttempt.probePriority,
+        familyKey: best.feeTierAttempt.familyKey,
+        exactOutputPromotedFromFamily: best.feeTierAttempt.exactOutputPromotedFromFamily,
         status: 'ROUTEABLE',
         reason: 'ROUTEABLE',
         quotedAmountOut: best.route.quotedAmountOut,
@@ -931,6 +1028,10 @@ export class UniV3RoutePlanner {
         hopCount: bestRejected.route.hopCount,
         bridgeToken: bestRejected.route.bridgeToken,
         pathDescriptor: bestRejected.feeTierAttempt.pathDescriptor,
+        familyKind: bestRejected.feeTierAttempt.familyKind,
+        probePriority: bestRejected.feeTierAttempt.probePriority,
+        familyKey: bestRejected.feeTierAttempt.familyKey,
+        exactOutputPromotedFromFamily: bestRejected.feeTierAttempt.exactOutputPromotedFromFamily,
         status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
         reason: hasConstraintReject ? (bestRejected.constraintReason ?? 'MIN_AMOUNT_OUT') : 'NET_EDGE_NON_POSITIVE',
         quotedAmountOut: bestRejected.route.quotedAmountOut,

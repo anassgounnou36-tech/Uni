@@ -906,6 +906,7 @@ export class BotRuntime {
       const schedule = scheduleResult.schedule;
 
       await this.deps.store.transition(orderHash, 'SCHEDULED');
+      this.deps.metrics.incrementOrdersSupportedToScheduled();
       this.hotQueue.push({
         orderHash,
         scheduledBlock: schedule.scheduledBlock,

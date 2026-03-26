@@ -238,6 +238,7 @@ export async function buildRuntimeFromConfig(
           quoter: UNIV3_QUOTER_V2,
           bridgeTokens: config.bridgeTokens,
           twoHopUnlockMinCoverageBps: config.twoHopUnlockMinCoverageBps,
+          maxTwoHopFamiliesPerOrder: config.maxTwoHopFamiliesPerOrder,
           routeEvalChainId: 42161n,
           routeEvalRpcGate,
           onRouteEvalCacheAccess: (hit, venue, pathKind) => {
@@ -250,9 +251,21 @@ export async function buildRuntimeFromConfig(
           onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
             if (hit) {
               metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+              if (pathKind === 'DIRECT') {
+                metrics.incrementRouteEvalDirectNegativeCacheHit(venue, pathKind);
+              }
             } else {
               metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
             }
+          },
+          onRouteEvalFamilyEvaluated: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyTotal(venue, pathKind);
+          },
+          onRouteEvalFamilyPruned: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyPruned(venue, pathKind);
+          },
+          onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
+            metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -273,6 +286,7 @@ export async function buildRuntimeFromConfig(
           univ3Quoter: UNIV3_QUOTER_V2,
           bridgeTokens: config.bridgeTokens,
           enableTwoHop: config.enableCamelotTwoHop,
+          maxTwoHopFamiliesPerOrder: config.maxTwoHopFamiliesPerOrder,
           routeEvalChainId: 42161n,
           routeEvalRpcGate,
           onRouteEvalCacheAccess: (hit, venue, pathKind) => {
@@ -285,9 +299,21 @@ export async function buildRuntimeFromConfig(
           onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
             if (hit) {
               metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+              if (pathKind === 'DIRECT') {
+                metrics.incrementRouteEvalDirectNegativeCacheHit(venue, pathKind);
+              }
             } else {
               metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
             }
+          },
+          onRouteEvalFamilyEvaluated: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyTotal(venue, pathKind);
+          },
+          onRouteEvalFamilyPruned: (venue, pathKind) => {
+            metrics.incrementRouteEvalFamilyPruned(venue, pathKind);
+          },
+          onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
+            metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -302,8 +328,8 @@ export async function buildRuntimeFromConfig(
             metrics.incrementCamelotTwoHopSkipped(reason);
           }
         }),
-        enableCamelotAmmv3: config.enableCamelotAmmv3,
-        maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
+      enableCamelotAmmv3: config.enableCamelotAmmv3,
+      maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };
 
