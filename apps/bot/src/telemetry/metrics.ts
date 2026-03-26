@@ -79,6 +79,67 @@ export class BotMetrics {
     this.increment('scheduler_required_output_satisfiable_total');
   }
 
+  incrementOrdersEvaluationBlocked(): void {
+    this.increment('orders_evaluation_blocked_total');
+  }
+
+  incrementRouteEvalRateLimited(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_rate_limited_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_rate_limited_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalRpcFailed(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_rpc_failed_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_rpc_failed_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalQuoteReverted(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_quote_reverted_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_quote_reverted_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalCacheHit(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_cache_hit_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_cache_hit_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalNegativeCacheHit(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_negative_cache_hit_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_negative_cache_hit_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementRouteEvalNegativeCacheMiss(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_negative_cache_miss_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_negative_cache_miss_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
+  incrementOrderEvalRevertedProbeBudgetExhausted(): void {
+    this.increment('order_eval_reverted_probe_budget_exhausted_total');
+  }
+
+  incrementCamelotTwoHopSkipped(reason: 'CONFIG_DISABLED'): void {
+    this.increment(`camelot_two_hop_skipped_total{reason="${reason}"}`);
+  }
+
+  incrementRouteEvalCacheMiss(venue?: string, pathKind?: string): void {
+    this.increment('route_eval_cache_miss_total');
+    if (venue && pathKind) {
+      this.increment(`route_eval_cache_miss_total{venue="${venue}",path_kind="${pathKind}"}`);
+    }
+  }
+
   incrementSchedulerBestRejectedCandidateClass(candidateClass: RejectedCandidateClass): void {
     this.increment(`scheduler_best_rejected_candidate_class_total{candidate_class="${candidateClass}"}`);
   }

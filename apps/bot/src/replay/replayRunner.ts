@@ -1,5 +1,6 @@
 import type { ResolveEnv, V3DutchOrder } from '@uni/protocol';
 import { resolveAt } from '@uni/protocol';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import { findFirstProfitableBlock } from '../scheduler/firstProfitableBlock.js';
 import { runHotLaneStep } from '../scheduler/hotLane.js';
 import type { RouteBook } from '../routing/routeBook.js';
@@ -136,7 +137,14 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       }
       if (probeBlockNumberish !== undefined) {
         const probeResolved = await resolveAt(order, { ...params.resolveEnv, blockNumberish: probeBlockNumberish });
-        const probeRoute = await params.routeBook.selectBestRoute({ resolvedOrder: probeResolved });
+        const probeRoute = await params.routeBook.selectBestRoute({
+          resolvedOrder: probeResolved,
+          routeEval: {
+            chainId: params.resolveEnv.chainId ?? 42161n,
+            blockNumberish: probeBlockNumberish,
+            readCache: new RouteEvalReadCache()
+          }
+        });
         if (!probeRoute.ok && probeRoute.reason === 'GAS_NOT_PRICEABLE') {
           noEdgeReason = 'NOT_PRICEABLE_GAS';
         }
@@ -259,8 +267,22 @@ export async function runReplayRegression(params: {
       break;
     }
     const resolved = await resolveAt(order.decodedOrder.order, { ...params.resolveEnv, blockNumberish: block });
-    const baseline = await params.baselineRouteBook.selectBestRoute({ resolvedOrder: resolved });
-    const candidate = await params.candidateRouteBook.selectBestRoute({ resolvedOrder: resolved });
+    const baseline = await params.baselineRouteBook.selectBestRoute({
+      resolvedOrder: resolved,
+      routeEval: {
+        chainId: params.resolveEnv.chainId ?? 42161n,
+        blockNumberish: block,
+        readCache: new RouteEvalReadCache()
+      }
+    });
+    const candidate = await params.candidateRouteBook.selectBestRoute({
+      resolvedOrder: resolved,
+      routeEval: {
+        chainId: params.resolveEnv.chainId ?? 42161n,
+        blockNumberish: block,
+        readCache: new RouteEvalReadCache()
+      }
+    });
     ordersConsidered += 1;
 
     const baselineHasUni = baseline.alternativeRoutes.some((summary) => summary.venue === 'UNISWAP_V3' && summary.eligible);

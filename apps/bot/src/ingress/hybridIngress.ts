@@ -46,6 +46,10 @@ export class HybridIngressCoordinator {
     return drained;
   }
 
+  requeueForScheduling(orderHash: `0x${string}`): void {
+    this.markPending(orderHash);
+  }
+
   async ingest(envelope: IngressEnvelope<OrdersApiOrderPayload | UniswapWebhookPayload>): Promise<void> {
     const observation: IngressObservation = {
       source: envelope.source,

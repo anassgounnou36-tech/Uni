@@ -32,6 +32,7 @@ import {
   type RejectedCandidateClass
 } from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -50,6 +51,15 @@ export type HotLaneContext = SchedulerContext & {
 };
 
 type ScheduledOrder = HotLaneEntry;
+type BlockedRetryState = {
+  nextEligibleTick: number;
+  reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
+  errorMessage?: string;
+  candidateCount: number;
+  blockedCount: number;
+  revertedProbeCount: number;
+  revertedProbeBudgetExhausted: boolean;
+};
 
 export type BotRuntimeDeps = {
   config: RuntimeConfig;
@@ -73,6 +83,8 @@ export class BotRuntime {
   private hotLaneTimer: NodeJS.Timeout | undefined;
   private readonly hotQueue: ScheduledOrder[] = [];
   private readonly logger: StructuredLogger;
+  private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
+  private schedulerTickCounter = 0;
 
   constructor(private readonly deps: BotRuntimeDeps) {
     this.logger = deps.logger ?? new JsonConsoleLogger();
@@ -313,6 +325,8 @@ export class BotRuntime {
     pathDescriptor?: string;
     status: string;
     reason: string;
+    errorCategory?: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED';
+    errorMessage?: string;
     quotedAmountOut?: string;
     minAmountOut?: string;
     grossEdgeOut?: string;
@@ -429,6 +443,8 @@ export class BotRuntime {
       pathDescriptor: summary.pathDescriptor,
       status: summary.status,
       reason: summary.reason,
+      errorCategory: summary.errorCategory,
+      errorMessage: summary.errorMessage,
       quotedAmountOut: summary.quotedAmountOut?.toString(),
       minAmountOut: summary.minAmountOut?.toString(),
       grossEdgeOut: summary.grossEdgeOut?.toString(),
@@ -667,8 +683,15 @@ export class BotRuntime {
     if (!scheduler) {
       return;
     }
+    this.schedulerTickCounter += 1;
 
     for (const orderHash of this.deps.ingress.dequeueForScheduling()) {
+      const blockedRetry = this.blockedRetryByOrder.get(orderHash);
+      if (blockedRetry && blockedRetry.nextEligibleTick > this.schedulerTickCounter) {
+        this.deps.ingress.requeueForScheduling(orderHash);
+        continue;
+      }
+      this.blockedRetryByOrder.delete(orderHash);
       const record = await this.deps.store.get(orderHash);
       if (!record?.normalizedOrder) {
         continue;
@@ -685,6 +708,76 @@ export class BotRuntime {
         threshold: this.deps.config.thresholdOut,
         competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
+      if (!scheduleResult.ok && scheduleResult.reason === 'INCONCLUSIVE') {
+        const blockedAttempts = scheduleResult.evaluations.flatMap((evaluation) =>
+          evaluation.venueAttempts.filter(
+            (attempt) =>
+              attempt.status === 'RATE_LIMITED'
+              || attempt.status === 'RPC_UNAVAILABLE'
+              || attempt.status === 'RPC_FAILED'
+              || attempt.status === 'QUOTE_REVERTED'
+          )
+        );
+        const blockedCount = blockedAttempts.length;
+        const revertedProbeCount = scheduleResult.evaluations.reduce((sum, evaluation) => sum + (evaluation.revertedProbeCount ?? 0), 0);
+        const revertedProbeBudgetExhausted = scheduleResult.evaluations.some((evaluation) => evaluation.revertedProbeBudgetExhausted === true);
+        let hasRateLimited = false;
+        let hasRpcUnavailable = false;
+        let hasRpcFailed = false;
+        for (const attempt of blockedAttempts) {
+          if (attempt.status === 'RATE_LIMITED') hasRateLimited = true;
+          else if (attempt.status === 'RPC_UNAVAILABLE') hasRpcUnavailable = true;
+          else if (attempt.status === 'RPC_FAILED') hasRpcFailed = true;
+        }
+        const reason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED' =
+          revertedProbeBudgetExhausted
+            ? 'QUOTE_REVERTED'
+            : hasRateLimited
+          ? 'RATE_LIMITED'
+          : hasRpcUnavailable
+            ? 'RPC_UNAVAILABLE'
+            : hasRpcFailed
+              ? 'RPC_FAILED'
+              : 'QUOTE_REVERTED';
+        const errorMessage = blockedAttempts.find((attempt) => attempt.errorMessage)?.errorMessage;
+        this.blockedRetryByOrder.set(orderHash, {
+          nextEligibleTick: this.schedulerTickCounter + this.deps.config.infraBlockedRetryCooldownTicks,
+          reason,
+          errorMessage,
+          candidateCount: scheduleResult.evaluations.length,
+          blockedCount,
+          revertedProbeCount,
+          revertedProbeBudgetExhausted
+        });
+        this.deps.metrics.incrementOrdersEvaluationBlocked();
+        if (reason === 'RATE_LIMITED') {
+          this.deps.metrics.incrementRouteEvalRateLimited();
+        } else if (reason === 'QUOTE_REVERTED') {
+          this.deps.metrics.incrementRouteEvalQuoteReverted();
+        } else {
+          this.deps.metrics.incrementRouteEvalRpcFailed();
+        }
+        if (revertedProbeBudgetExhausted) {
+          this.deps.metrics.incrementOrderEvalRevertedProbeBudgetExhausted();
+        }
+        await this.deps.journal.append({
+          type: 'ORDER_EVALUATION_BLOCKED',
+          atMs: Date.now(),
+          orderHash,
+          payload: {
+            orderHash,
+            reason,
+            candidateCount: scheduleResult.evaluations.length,
+            blockedCount,
+            revertedProbeCount,
+            revertedProbeBudgetExhausted,
+            errorMessage,
+            venueAttempts: blockedAttempts.map((attempt) => this.toJournalVenueAttempt(attempt))
+          }
+        });
+        this.deps.ingress.requeueForScheduling(orderHash);
+        continue;
+      }
       if (!scheduleResult.ok) {
         const bestRejectedSummary = scheduleResult.bestObservedEvaluation?.bestRejectedSummary
           ? this.withDerivedRejectedCandidateClass(scheduleResult.bestObservedEvaluation.bestRejectedSummary)
@@ -907,7 +1000,8 @@ export class BotRuntime {
         sequencerClient: hotLane.sequencerClient,
         nonceManager: hotLane.nonceManager,
         executionPreparer: hotLane.executionPreparer,
-        shadowMode: policy.mode !== 'LIVE'
+        shadowMode: policy.mode !== 'LIVE',
+        routeEvalReadCache: new RouteEvalReadCache()
       });
 
       if (decision.action === 'WAIT') {
@@ -984,7 +1078,9 @@ export class BotRuntime {
             candidateClass: decision.chosenRouteCandidateClass,
             constraintReason: decision.chosenRouteConstraintReason,
             error,
-            message
+            message,
+            errorCategory: error,
+            errorMessage: message
           }
         });
       }
@@ -1102,15 +1198,41 @@ export class BotRuntime {
           await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
         } else if (decision.reason === 'PREPARE_FAILED') {
           await this.deps.store.transition(queued.orderHash, 'PREPARE_FAILED', decision.reason);
+        } else if (decision.reason === 'INFRA_BLOCKED') {
+          await this.deps.store.transition(queued.orderHash, 'SUPPORTED', 'INFRA_BLOCKED');
+          this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.deps.metrics.incrementOrdersEvaluationBlocked();
+          await this.deps.journal.append({
+            type: 'ORDER_EVALUATION_BLOCKED',
+            atMs: Date.now(),
+            orderHash: queued.orderHash,
+            payload: {
+              orderHash: queued.orderHash,
+              reason: 'INFRA_BLOCKED',
+              candidateCount: 1,
+              blockedCount: 1,
+              revertedProbeCount: 0,
+              revertedProbeBudgetExhausted: false
+            }
+          });
         } else {
           await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
         }
-        this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
+        if (decision.reason !== 'INFRA_BLOCKED') {
+          this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
+        }
+        if (decision.reason === 'INFRA_BLOCKED') {
+          this.deps.inflightTracker.markResolved(queued.orderHash);
+          this.hotQueue.splice(index, 1);
+          continue;
+        }
         const droppedErrorContext =
           decision.reason === 'PREPARE_FAILED'
             ? {
                 error: decision.prepareError ?? 'PrepareError',
-                message: decision.prepareMessage ?? 'executionPreparer failed'
+                message: decision.prepareMessage ?? 'executionPreparer failed',
+                errorCategory: decision.prepareError ?? 'PrepareError',
+                errorMessage: decision.prepareMessage ?? 'executionPreparer failed'
               }
             : undefined;
         await this.deps.journal.append({
@@ -1131,7 +1253,9 @@ export class BotRuntime {
             netEdgeOut: queued.predictedEdgeOut.toString(),
             simReason: decision.simResult?.reason,
             error: droppedErrorContext?.error,
-            message: droppedErrorContext?.message
+            message: droppedErrorContext?.message,
+            errorCategory: droppedErrorContext?.errorCategory,
+            errorMessage: droppedErrorContext?.errorMessage
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);

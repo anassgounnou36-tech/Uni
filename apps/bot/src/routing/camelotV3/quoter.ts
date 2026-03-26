@@ -3,6 +3,9 @@ import { concatHex } from 'viem';
 import { CAMELOT_AMMV3_FACTORY_ABI, CAMELOT_AMMV3_QUOTER_ABI } from './abi.js';
 import { convertGasWeiToTokenOut } from '../univ3/gasValue.js';
 import { classifyQuoteFailure } from '../univ3/quoter.js';
+import { normalizeRouteEvalRpcError } from '../rpc/errors.js';
+import type { RouteEvalReadCache } from '../rpc/readCache.js';
+import type { RouteEvalRpcGate } from '../rpc/rpcGate.js';
 import type { RoutePlanningPolicy, UniV3FeeTier } from '../univ3/types.js';
 import type { HedgeRoutePlan } from '../venues.js';
 import type { VenueRouteAttemptSummary } from '../attemptTypes.js';
@@ -23,6 +26,17 @@ export type CamelotAmmv3QuoterContext = {
   univ3Factory: Address;
   univ3Quoter: Address;
   bridgeTokens?: readonly Address[];
+  enableTwoHop?: boolean;
+  routeEvalChainId?: bigint;
+  routeEvalRpcGate?: RouteEvalRpcGate;
+  onRouteEvalCacheAccess?: (hit: boolean, venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalNegativeCacheAccess?: (hit: boolean, venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalInfraError?: (
+    category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
+    venue: 'CAMELOT_AMMV3',
+    pathKind: 'DIRECT' | 'TWO_HOP'
+  ) => void;
+  onTwoHopSkipped?: (reason: 'CONFIG_DISABLED') => void;
 };
 
 export type CamelotAmmv3QuoteResult =
@@ -39,7 +53,16 @@ export type CamelotAmmv3QuoteResult =
     }
   | {
       ok: false;
-      reason: 'NOT_ROUTEABLE' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' | 'CONSTRAINT_REJECTED';
+      reason:
+        | 'NOT_ROUTEABLE'
+        | 'QUOTE_FAILED'
+        | 'NOT_PROFITABLE'
+        | 'GAS_NOT_PRICEABLE'
+      | 'CONSTRAINT_REJECTED'
+      | 'RATE_LIMITED'
+      | 'RPC_UNAVAILABLE'
+      | 'RPC_FAILED'
+      | 'QUOTE_REVERTED';
       details?: string;
       summary: VenueRouteAttemptSummary;
     };
@@ -50,6 +73,13 @@ export type CamelotPathShape = {
   bridgeToken?: Address;
   pathDescriptor: string;
   encodedPath?: `0x${string}`;
+};
+
+type RouteEvalContext = {
+  chainId?: bigint;
+  blockNumberish?: bigint;
+  readCache?: RouteEvalReadCache;
+  pathKind?: 'DIRECT' | 'TWO_HOP';
 };
 
 function encodeCamelotPath(tokens: readonly Address[]): `0x${string}` {
@@ -151,12 +181,59 @@ async function quoteExactOutputPath(
 export class CamelotAmmv3Quoter {
   constructor(private readonly context: CamelotAmmv3QuoterContext) {}
 
+  private async runRouteEvalRpc<T>(task: () => Promise<T>): Promise<T> {
+    if (this.context.routeEvalRpcGate) {
+      return this.context.routeEvalRpcGate.run(task);
+    }
+    return task();
+  }
+
+  private async readWithCache<T>(params: {
+    routeEval?: RouteEvalContext;
+    target: Address;
+    fn: string;
+    args: readonly (string | number | bigint | boolean | null | undefined)[];
+    extraKey?: string;
+    loader: () => Promise<T>;
+    shouldMemoizeNegative?: (error: unknown) => boolean;
+  }): Promise<T> {
+    const run = () => this.runRouteEvalRpc(params.loader);
+    const cache = params.routeEval?.readCache;
+    if (!cache) {
+      return run();
+    }
+    const cached = await cache.getOrSetNegative<T>(
+      {
+        chainId: params.routeEval?.chainId ?? this.context.routeEvalChainId ?? 42161n,
+        blockNumberish: params.routeEval?.blockNumberish ?? 0n,
+        target: params.target,
+        fn: params.fn,
+        args: params.args,
+        extraKey: params.extraKey
+      },
+      run,
+      params.shouldMemoizeNegative ?? (() => false),
+      (hit) => {
+        if (params.routeEval?.pathKind) {
+          this.context.onRouteEvalCacheAccess?.(hit, 'CAMELOT_AMMV3', params.routeEval.pathKind);
+        }
+      },
+      (hit) => {
+        if (params.routeEval?.pathKind) {
+          this.context.onRouteEvalNegativeCacheAccess?.(hit, 'CAMELOT_AMMV3', params.routeEval.pathKind);
+        }
+      }
+    );
+    return cached.value;
+  }
+
   async quoteExactInputSingle(params: {
     tokenIn: Address;
     tokenOut: Address;
     amountIn: bigint;
     outputs: ReadonlyArray<{ token: Address; amount: bigint }>;
     policy?: RoutePlanningPolicy;
+    routeEval?: RouteEvalContext;
   }): Promise<CamelotAmmv3QuoteResult> {
     if (!this.context.enabled) {
       const requiredOutput = sumRequiredOutput(params.outputs);
@@ -179,13 +256,43 @@ export class CamelotAmmv3Quoter {
 
     let discoveredPool: Address;
     try {
-      discoveredPool = await this.context.client.readContract({
-        address: this.context.factory,
-        abi: CAMELOT_AMMV3_FACTORY_ABI,
-        functionName: 'poolByPair',
-        args: [params.tokenIn, params.tokenOut]
+      discoveredPool = await this.readWithCache({
+        routeEval: { ...params.routeEval, pathKind: 'DIRECT' },
+        target: this.context.factory,
+        fn: 'poolByPair',
+        args: [params.tokenIn, params.tokenOut],
+        loader: () =>
+          this.context.client.readContract({
+            address: this.context.factory,
+            abi: CAMELOT_AMMV3_FACTORY_ABI,
+            functionName: 'poolByPair',
+            args: [params.tokenIn, params.tokenOut]
+          })
       });
-    } catch {
+    } catch (error) {
+      const normalized = normalizeRouteEvalRpcError(error);
+      if (
+        normalized.category === 'RATE_LIMITED'
+        || normalized.category === 'RPC_UNAVAILABLE'
+        || normalized.category === 'QUOTE_REVERTED'
+      ) {
+        this.context.onRouteEvalInfraError?.(normalized.category, 'CAMELOT_AMMV3', 'DIRECT');
+        return {
+          ok: false,
+          reason: normalized.category,
+          details: normalized.message,
+          summary: {
+            venue: 'CAMELOT_AMMV3',
+            status: normalized.category,
+            reason: normalized.category,
+            errorCategory: normalized.category,
+            errorMessage: normalized.message.slice(0, 220),
+            candidateClass: 'INFRA_BLOCKED',
+            exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
+          }
+        };
+      }
+      this.context.onRouteEvalInfraError?.('RPC_FAILED', 'CAMELOT_AMMV3', 'DIRECT');
       const requiredOutput = sumRequiredOutput(params.outputs);
       return {
         ok: false,
@@ -225,11 +332,23 @@ export class CamelotAmmv3Quoter {
     let quotedAmountOut: bigint;
     let observedFee: number | undefined;
     try {
-      const quoteResult = await this.context.client.readContract({
-        address: this.context.quoter,
-        abi: CAMELOT_AMMV3_QUOTER_ABI,
-        functionName: 'quoteExactInputSingle',
-        args: [params.tokenIn, params.tokenOut, params.amountIn, 0n]
+      const quoteResult = await this.readWithCache({
+        routeEval: { ...params.routeEval, pathKind: 'DIRECT' },
+        target: this.context.quoter,
+        fn: 'quoteExactInputSingle',
+        args: [params.tokenIn, params.tokenOut, params.amountIn, 0n],
+        loader: () =>
+          this.context.client.readContract({
+            address: this.context.quoter,
+            abi: CAMELOT_AMMV3_QUOTER_ABI,
+            functionName: 'quoteExactInputSingle',
+            args: [params.tokenIn, params.tokenOut, params.amountIn, 0n]
+          }),
+        extraKey: `${params.tokenIn}-${params.tokenOut}`,
+        shouldMemoizeNegative: (error) => {
+          const failure = classifyQuoteFailure(error);
+          return failure === 'QUOTE_REVERTED' || failure === 'REVERTED' || failure === 'INSUFFICIENT_INPUT';
+        }
       });
       if (Array.isArray(quoteResult)) {
         if (typeof quoteResult[0] !== 'bigint') {
@@ -280,6 +399,35 @@ export class CamelotAmmv3Quoter {
         quotedAmountOut = quoteResult;
       }
     } catch (error) {
+      const normalized = normalizeRouteEvalRpcError(error);
+      const failure = classifyQuoteFailure(error);
+      if (failure === 'RATE_LIMITED' || failure === 'RPC_UNAVAILABLE' || normalized.category === 'QUOTE_REVERTED') {
+        const infraReason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'QUOTE_REVERTED'
+          = normalized.category === 'QUOTE_REVERTED'
+            ? 'QUOTE_REVERTED'
+            : normalized.category === 'RATE_LIMITED'
+              ? 'RATE_LIMITED'
+              : 'RPC_UNAVAILABLE';
+        this.context.onRouteEvalInfraError?.(normalized.category, 'CAMELOT_AMMV3', 'DIRECT');
+        return {
+          ok: false,
+          reason: infraReason,
+          details: normalized.message,
+          summary: {
+            venue: 'CAMELOT_AMMV3',
+            pathKind: 'DIRECT',
+            hopCount: 1,
+            pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
+            status: infraReason,
+            reason: infraReason,
+            errorCategory: normalized.category,
+            errorMessage: normalized.message.slice(0, 220),
+            candidateClass: 'INFRA_BLOCKED',
+            exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
+          }
+        };
+      }
+      this.context.onRouteEvalInfraError?.('RPC_FAILED', 'CAMELOT_AMMV3', 'DIRECT');
       return {
         ok: false,
         reason: 'QUOTE_FAILED',
@@ -291,6 +439,8 @@ export class CamelotAmmv3Quoter {
           pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
           status: 'QUOTE_FAILED',
           reason: 'QUOTE_CALL_FAILED',
+          errorCategory: normalized.category,
+          errorMessage: normalized.message.slice(0, 220),
           candidateClass: deriveRejectedCandidateClass({
             venue: 'CAMELOT_AMMV3',
             status: 'QUOTE_FAILED',
@@ -401,15 +551,16 @@ export class CamelotAmmv3Quoter {
             : 'required output unsatisfiable with available input'
       };
     } catch (error) {
+      const exactOutputFailure = classifyQuoteFailure(error);
       exactOutputViability = {
-        status: classifyQuoteFailure(error) === 'POOL_MISSING' ? 'POOL_MISSING' : 'QUOTE_FAILED',
+        status: exactOutputFailure === 'QUOTE_REVERTED' ? 'QUOTE_FAILED' : 'QUOTE_FAILED',
         targetOutput: requiredOutput,
         requiredInputForTargetOutput: params.amountIn,
         availableInput: params.amountIn,
         pathKind: 'DIRECT',
         hopCount: 1,
         pathDescriptor: `DIRECT: ${params.tokenIn} -> ${params.tokenOut}`,
-        reason: `exact-output quote failed: ${classifyQuoteFailure(error)}`
+        reason: `exact-output quote failed: ${exactOutputFailure}`
       };
     }
     const hedgeGap = buildHedgeGapSummary({
@@ -433,11 +584,19 @@ export class CamelotAmmv3Quoter {
       let leftoverInputValueOut = 0n;
       if (leftoverInput > 0n) {
         try {
-          const leftoverQuote = await this.context.client.readContract({
-            address: this.context.quoter,
-            abi: CAMELOT_AMMV3_QUOTER_ABI,
-            functionName: 'quoteExactInputSingle',
-            args: [params.tokenIn, params.tokenOut, leftoverInput, 0n]
+          const leftoverQuote = await this.readWithCache({
+            routeEval: { ...params.routeEval, pathKind: 'DIRECT' },
+            target: this.context.quoter,
+            fn: 'quoteExactInputSingle',
+            args: [params.tokenIn, params.tokenOut, leftoverInput, 0n],
+            loader: () =>
+              this.context.client.readContract({
+                address: this.context.quoter,
+                abi: CAMELOT_AMMV3_QUOTER_ABI,
+                functionName: 'quoteExactInputSingle',
+                args: [params.tokenIn, params.tokenOut, leftoverInput, 0n]
+              }),
+            extraKey: `leftover-${params.tokenIn}-${params.tokenOut}`
           });
           if (typeof leftoverQuote === 'bigint') {
             leftoverInputValueOut = leftoverQuote;
@@ -660,7 +819,27 @@ export class CamelotAmmv3Quoter {
     amountIn: bigint;
     outputs: ReadonlyArray<{ token: Address; amount: bigint }>;
     policy?: RoutePlanningPolicy;
+    routeEval?: RouteEvalContext;
   }): Promise<CamelotAmmv3QuoteResult> {
+    if (this.context.enableTwoHop === false) {
+      this.context.onTwoHopSkipped?.('CONFIG_DISABLED');
+      const requiredOutput = sumRequiredOutput(params.outputs);
+      return {
+        ok: false,
+        reason: 'NOT_ROUTEABLE',
+        summary: {
+          venue: 'CAMELOT_AMMV3',
+          pathKind: 'TWO_HOP',
+          hopCount: 2,
+          bridgeToken: params.bridgeToken,
+          pathDescriptor: `TWO_HOP: ${params.tokenIn} -> ${params.bridgeToken} -> ${params.tokenOut}`,
+          status: 'NOT_ROUTEABLE',
+          reason: 'CAMELOT_TWO_HOP_DISABLED',
+          candidateClass: 'ROUTE_MISSING',
+          exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+        }
+      };
+    }
     const pathDescriptor = `TWO_HOP: ${params.tokenIn} -> ${params.bridgeToken} -> ${params.tokenOut}`;
     if (!this.context.enabled) {
       const requiredOutput = sumRequiredOutput(params.outputs);
@@ -685,20 +864,66 @@ export class CamelotAmmv3Quoter {
       };
     }
 
-    const [firstPool, secondPool] = await Promise.all([
-      this.context.client.readContract({
-        address: this.context.factory,
-        abi: CAMELOT_AMMV3_FACTORY_ABI,
-        functionName: 'poolByPair',
-        args: [params.tokenIn, params.bridgeToken]
-      }),
-      this.context.client.readContract({
-        address: this.context.factory,
-        abi: CAMELOT_AMMV3_FACTORY_ABI,
-        functionName: 'poolByPair',
-        args: [params.bridgeToken, params.tokenOut]
-      })
-    ]);
+    let firstPool: Address;
+    let secondPool: Address;
+    try {
+      [firstPool, secondPool] = await Promise.all([
+        this.readWithCache({
+          routeEval: { ...params.routeEval, pathKind: 'TWO_HOP' },
+          target: this.context.factory,
+          fn: 'poolByPair',
+          args: [params.tokenIn, params.bridgeToken],
+          loader: () =>
+            this.context.client.readContract({
+              address: this.context.factory,
+              abi: CAMELOT_AMMV3_FACTORY_ABI,
+              functionName: 'poolByPair',
+              args: [params.tokenIn, params.bridgeToken]
+            })
+        }),
+        this.readWithCache({
+          routeEval: { ...params.routeEval, pathKind: 'TWO_HOP' },
+          target: this.context.factory,
+          fn: 'poolByPair',
+          args: [params.bridgeToken, params.tokenOut],
+          loader: () =>
+            this.context.client.readContract({
+              address: this.context.factory,
+              abi: CAMELOT_AMMV3_FACTORY_ABI,
+              functionName: 'poolByPair',
+              args: [params.bridgeToken, params.tokenOut]
+            })
+        })
+      ]);
+    } catch (error) {
+      const normalized = normalizeRouteEvalRpcError(error);
+      if (
+        normalized.category === 'RATE_LIMITED'
+        || normalized.category === 'RPC_UNAVAILABLE'
+        || normalized.category === 'QUOTE_REVERTED'
+      ) {
+        this.context.onRouteEvalInfraError?.(normalized.category, 'CAMELOT_AMMV3', 'TWO_HOP');
+        return {
+          ok: false,
+          reason: normalized.category,
+          summary: {
+            venue: 'CAMELOT_AMMV3',
+            pathKind: 'TWO_HOP',
+            hopCount: 2,
+            bridgeToken: params.bridgeToken,
+            pathDescriptor,
+            status: normalized.category,
+            reason: normalized.category,
+            errorCategory: normalized.category,
+            errorMessage: normalized.message.slice(0, 220),
+            candidateClass: 'INFRA_BLOCKED',
+            exactOutputViability: camelotExactOutputNotChecked(sumRequiredOutput(params.outputs), params.amountIn)
+          }
+        };
+      }
+      this.context.onRouteEvalInfraError?.('RPC_FAILED', 'CAMELOT_AMMV3', 'TWO_HOP');
+      throw error;
+    }
     const requiredOutput = sumRequiredOutput(params.outputs);
     if (firstPool.toLowerCase() === ZERO_ADDRESS || secondPool.toLowerCase() === ZERO_ADDRESS) {
       return {
@@ -725,8 +950,48 @@ export class CamelotAmmv3Quoter {
     const encodedPath = encodeCamelotPath([params.tokenIn, params.bridgeToken, params.tokenOut]);
     let quotedAmountOut: bigint;
     try {
-      quotedAmountOut = await quoteExactInputPath(this.context.client, this.context.quoter, encodedPath, params.amountIn);
+      quotedAmountOut = await this.readWithCache({
+        routeEval: { ...params.routeEval, pathKind: 'TWO_HOP' },
+        target: this.context.quoter,
+        fn: 'quoteExactInput',
+        args: [encodedPath, params.amountIn],
+        loader: () => quoteExactInputPath(this.context.client, this.context.quoter, encodedPath, params.amountIn),
+        extraKey: encodedPath,
+        shouldMemoizeNegative: (error) => {
+          const failure = classifyQuoteFailure(error);
+          return failure === 'QUOTE_REVERTED' || failure === 'REVERTED' || failure === 'INSUFFICIENT_INPUT';
+        }
+      });
     } catch (error) {
+      const normalized = normalizeRouteEvalRpcError(error);
+      const failure = classifyQuoteFailure(error);
+      if (failure === 'RATE_LIMITED' || failure === 'RPC_UNAVAILABLE' || normalized.category === 'QUOTE_REVERTED') {
+        const infraReason: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'QUOTE_REVERTED'
+          = normalized.category === 'QUOTE_REVERTED'
+            ? 'QUOTE_REVERTED'
+            : normalized.category === 'RATE_LIMITED'
+              ? 'RATE_LIMITED'
+              : 'RPC_UNAVAILABLE';
+        this.context.onRouteEvalInfraError?.(normalized.category, 'CAMELOT_AMMV3', 'TWO_HOP');
+        return {
+          ok: false,
+          reason: infraReason,
+          summary: {
+            venue: 'CAMELOT_AMMV3',
+            pathKind: 'TWO_HOP',
+            hopCount: 2,
+            bridgeToken: params.bridgeToken,
+            pathDescriptor,
+            status: infraReason,
+            reason: infraReason,
+            errorCategory: normalized.category,
+            errorMessage: normalized.message.slice(0, 220),
+            candidateClass: 'INFRA_BLOCKED',
+            exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
+          }
+        };
+      }
+      this.context.onRouteEvalInfraError?.('RPC_FAILED', 'CAMELOT_AMMV3', 'TWO_HOP');
       return {
         ok: false,
         reason: 'QUOTE_FAILED',
@@ -737,7 +1002,9 @@ export class CamelotAmmv3Quoter {
           bridgeToken: params.bridgeToken,
           pathDescriptor,
           status: 'QUOTE_FAILED',
-          reason: classifyQuoteFailure(error),
+          reason: failure,
+          errorCategory: normalized.category,
+          errorMessage: normalized.message.slice(0, 220),
           candidateClass: 'QUOTE_FAILED',
           exactOutputViability: camelotExactOutputNotChecked(requiredOutput, params.amountIn)
         }

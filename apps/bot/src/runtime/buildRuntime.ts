@@ -15,6 +15,7 @@ import type { DecisionJournal } from '../journal/types.js';
 import { UniV3RoutePlanner } from '../routing/univ3/routePlanner.js';
 import { CamelotAmmv3RoutePlanner } from '../routing/camelotV3/routePlanner.js';
 import { RouteBook } from '../routing/routeBook.js';
+import { RouteEvalRpcGate } from '../routing/rpc/rpcGate.js';
 import { InMemoryNonceLedger, NonceManager, PostgresNonceLedger } from '../send/nonceManager.js';
 import { SequencerClient } from '../send/sequencerClient.js';
 import { ForkSimService } from '../sim/forkSimService.js';
@@ -224,6 +225,8 @@ export async function buildRuntimeFromConfig(
         }
       }));
 
+  const routeEvalRpcGate = new RouteEvalRpcGate(config.routeEvalMaxConcurrency);
+
   const schedulerContext =
     overrides.schedulerContext ??
     {
@@ -233,7 +236,33 @@ export async function buildRuntimeFromConfig(
           client: readClient,
           factory: UNIV3_FACTORY,
           quoter: UNIV3_QUOTER_V2,
-          bridgeTokens: config.bridgeTokens
+          bridgeTokens: config.bridgeTokens,
+          twoHopUnlockMinCoverageBps: config.twoHopUnlockMinCoverageBps,
+          routeEvalChainId: 42161n,
+          routeEvalRpcGate,
+          onRouteEvalCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalInfraError: (category, venue, pathKind) => {
+            if (category === 'RATE_LIMITED') {
+              metrics.incrementRouteEvalRateLimited(venue, pathKind);
+            } else if (category === 'QUOTE_REVERTED') {
+              metrics.incrementRouteEvalQuoteReverted(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalRpcFailed(venue, pathKind);
+            }
+          }
         }),
         camelotAmmv3: new CamelotAmmv3RoutePlanner({
           client: readClient,
@@ -242,9 +271,39 @@ export async function buildRuntimeFromConfig(
           quoter: CAMELOT_AMMV3_QUOTER,
           univ3Factory: UNIV3_FACTORY,
           univ3Quoter: UNIV3_QUOTER_V2,
-          bridgeTokens: config.bridgeTokens
+          bridgeTokens: config.bridgeTokens,
+          enableTwoHop: config.enableCamelotTwoHop,
+          routeEvalChainId: 42161n,
+          routeEvalRpcGate,
+          onRouteEvalCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalNegativeCacheAccess: (hit, venue, pathKind) => {
+            if (hit) {
+              metrics.incrementRouteEvalNegativeCacheHit(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalNegativeCacheMiss(venue, pathKind);
+            }
+          },
+          onRouteEvalInfraError: (category, venue, pathKind) => {
+            if (category === 'RATE_LIMITED') {
+              metrics.incrementRouteEvalRateLimited(venue, pathKind);
+            } else if (category === 'QUOTE_REVERTED') {
+              metrics.incrementRouteEvalQuoteReverted(venue, pathKind);
+            } else {
+              metrics.incrementRouteEvalRpcFailed(venue, pathKind);
+            }
+          },
+          onTwoHopSkipped: (reason) => {
+            metrics.incrementCamelotTwoHopSkipped(reason);
+          }
         }),
-        enableCamelotAmmv3: config.enableCamelotAmmv3
+        enableCamelotAmmv3: config.enableCamelotAmmv3,
+        maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };
 

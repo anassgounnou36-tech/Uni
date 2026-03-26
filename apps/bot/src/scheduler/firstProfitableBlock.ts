@@ -5,6 +5,7 @@ import type { HedgeRoutePlan } from '../routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
 import type { ResolveEnvProvider } from '../runtime/resolveEnvProvider.js';
 import type { HedgeExecutionMode } from '../routing/executionModeTypes.js';
+import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 
 export type BlockEvaluation = {
   block: bigint;
@@ -20,7 +21,19 @@ export type BlockEvaluation = {
   chosenRouteVenue?: HedgeRoutePlan['venue'];
   chosenExecutionMode?: HedgeExecutionMode;
   selectionOk: boolean;
-  selectionReason?: 'NOT_ROUTEABLE' | 'CONSTRAINT_REJECTED' | 'NOT_PROFITABLE' | 'QUOTE_FAILED' | 'GAS_NOT_PRICEABLE';
+  selectionReason?:
+    | 'NOT_ROUTEABLE'
+    | 'CONSTRAINT_REJECTED'
+    | 'NOT_PROFITABLE'
+    | 'QUOTE_FAILED'
+    | 'QUOTE_REVERTED'
+    | 'GAS_NOT_PRICEABLE'
+    | 'RATE_LIMITED'
+    | 'RPC_UNAVAILABLE'
+    | 'RPC_FAILED';
+  infraBlocked?: boolean;
+  revertedProbeCount?: number;
+  revertedProbeBudgetExhausted?: boolean;
   venueAttempts: VenueRouteAttemptSummary[];
   bestRejectedSummary?: VenueRouteAttemptSummary;
 };
@@ -46,7 +59,7 @@ export type FirstProfitableBlockResult =
     }
   | {
       ok: false;
-      reason: 'NO_EDGE';
+      reason: 'NO_EDGE' | 'INCONCLUSIVE';
       evaluations: BlockEvaluation[];
       bestObservedEvaluation?: BlockEvaluation;
     };
@@ -80,13 +93,21 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
     ? (params.candidateBlockOffsets ?? [0n, 1n, 2n]).map((offset) => currentEnv.blockNumberish + offset)
     : (params.candidateBlocks ?? []);
 
+  const readCache = new RouteEvalReadCache();
   for (const block of [...candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const resolved = await resolveAt(params.order, {
       ...baseEnv,
       blockNumberish: block
     });
 
-    const routeResult = await params.routeBook.selectBestRoute({ resolvedOrder: resolved });
+    const routeResult = await params.routeBook.selectBestRoute({
+      resolvedOrder: resolved,
+      routeEval: {
+        chainId: baseEnv.chainId ?? 42161n,
+        blockNumberish: block,
+        readCache
+      }
+    });
     if (!routeResult.ok) {
       const bestRejectedSummary = routeResult.bestRejectedSummary ? { ...routeResult.bestRejectedSummary } : undefined;
       const bestRejectedQuotedAmountOut = bestRejectedSummary?.quotedAmountOut ?? 0n;
@@ -113,6 +134,9 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         netEdgeOut: bestRejectedSummary?.netEdgeOut ?? -1n,
         selectionOk: false,
         selectionReason: routeResult.reason,
+        infraBlocked: routeResult.infraBlocked ?? false,
+        revertedProbeCount: routeResult.revertedProbeCount ?? 0,
+        revertedProbeBudgetExhausted: routeResult.revertedProbeBudgetExhausted ?? false,
         venueAttempts: routeResult.venueAttempts,
         bestRejectedSummary
       });
@@ -157,7 +181,11 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
   }
 
   let bestObservedEvaluation: BlockEvaluation | undefined;
+  let hasInfraBlocked = false;
   for (const evaluation of evaluations) {
+    if (evaluation.infraBlocked === true) {
+      hasInfraBlocked = true;
+    }
     if (!bestObservedEvaluation || evaluation.netEdgeOut > bestObservedEvaluation.netEdgeOut) {
       bestObservedEvaluation = evaluation;
       continue;
@@ -173,7 +201,7 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
 
   return {
     ok: false,
-    reason: 'NO_EDGE',
+    reason: hasInfraBlocked ? 'INCONCLUSIVE' : 'NO_EDGE',
     evaluations,
     bestObservedEvaluation
   };

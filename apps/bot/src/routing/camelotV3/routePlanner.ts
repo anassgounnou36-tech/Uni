@@ -5,12 +5,42 @@ import type { HedgeRoutePlan } from '../venues.js';
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
 
+const DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS = 9_800n;
+
+function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
+  return outputs.reduce((sum, output) => sum + output.amount, 0n);
+}
+
+function shouldUnlockCamelotTwoHop(params: {
+  directQuote: Awaited<ReturnType<CamelotAmmv3Quoter['quoteExactInputSingle']>>;
+  requiredOutput: bigint;
+  thresholdBps: bigint;
+}): boolean {
+  if (!params.directQuote.ok) {
+    return true;
+  }
+  if (params.requiredOutput <= 0n) {
+    return true;
+  }
+  const coverageBps = (params.directQuote.route.quotedAmountOut * 10_000n) / params.requiredOutput;
+  return coverageBps >= params.thresholdBps;
+}
+
 export type CamelotRoutePlanningResult =
   | { ok: true; route: HedgeRoutePlan & { venue: 'CAMELOT_AMMV3' }; summary: VenueRouteAttemptSummary }
   | {
       ok: false;
       failure: {
-        reason: 'NOT_ROUTEABLE' | 'QUOTE_FAILED' | 'NOT_PROFITABLE' | 'GAS_NOT_PRICEABLE' | 'CONSTRAINT_REJECTED';
+        reason:
+          | 'NOT_ROUTEABLE'
+          | 'QUOTE_FAILED'
+          | 'NOT_PROFITABLE'
+          | 'GAS_NOT_PRICEABLE'
+          | 'CONSTRAINT_REJECTED'
+          | 'RATE_LIMITED'
+          | 'RPC_UNAVAILABLE'
+          | 'RPC_FAILED'
+          | 'QUOTE_REVERTED';
         details?: string;
         summary: VenueRouteAttemptSummary;
       };
@@ -19,10 +49,12 @@ export type CamelotRoutePlanningResult =
 export class CamelotAmmv3RoutePlanner {
   private readonly quoter: CamelotAmmv3Quoter;
   private readonly bridgeTokens: readonly Address[];
+  private readonly routeEvalChainId?: bigint;
 
   constructor(context: CamelotAmmv3QuoterContext) {
     this.quoter = new CamelotAmmv3Quoter(context);
     this.bridgeTokens = context.bridgeTokens ?? [];
+    this.routeEvalChainId = context.routeEvalChainId;
   }
 
   async planBestRoute(input: RoutePlannerInput): Promise<CamelotRoutePlanningResult> {
@@ -72,26 +104,42 @@ export class CamelotAmmv3RoutePlanner {
       };
     }
 
+    const routeEval = {
+      chainId: input.routeEval?.chainId ?? this.routeEvalChainId ?? 42161n,
+      blockNumberish: input.routeEval?.blockNumberish ?? 0n,
+      readCache: input.routeEval?.readCache
+    };
+
     const directQuote = await this.quoter.quoteExactInputSingle({
       tokenIn: tokenIn as Address,
       tokenOut: tokenOut as Address,
       amountIn: resolvedOrder.input.amount,
       outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
-      policy: input.policy
+      policy: input.policy,
+      routeEval
     });
+    const requiredOutput = sumRequiredOutput(resolvedOrder.outputs as ReadonlyArray<{ amount: bigint }>);
+    const twoHopUnlockThresholdBps = input.policy?.twoHopUnlockMinCoverageBps ?? DEFAULT_TWO_HOP_UNLOCK_MIN_COVERAGE_BPS;
     const bridgeTokens = input.policy?.bridgeTokens ?? this.bridgeTokens;
-    const bridgeQuotes = await Promise.all(
-      bridgeTokens
-        .filter((bridge) => bridge.toLowerCase() !== tokenIn.toLowerCase() && bridge.toLowerCase() !== tokenOut.toLowerCase())
-        .map((bridgeToken) => this.quoter.quoteExactInputPath({
-          tokenIn: tokenIn as Address,
-          tokenOut: tokenOut as Address,
-          bridgeToken,
-          amountIn: resolvedOrder.input.amount,
-          outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
-          policy: input.policy
-        }))
-    );
+    const bridgeQuotes = shouldUnlockCamelotTwoHop({
+      directQuote,
+      requiredOutput,
+      thresholdBps: twoHopUnlockThresholdBps
+    })
+      ? await Promise.all(
+        bridgeTokens
+          .filter((bridge) => bridge.toLowerCase() !== tokenIn.toLowerCase() && bridge.toLowerCase() !== tokenOut.toLowerCase())
+          .map((bridgeToken) => this.quoter.quoteExactInputPath({
+            tokenIn: tokenIn as Address,
+            tokenOut: tokenOut as Address,
+            bridgeToken,
+            amountIn: resolvedOrder.input.amount,
+            outputs: resolvedOrder.outputs as ReadonlyArray<{ token: Address; amount: bigint }>,
+            policy: input.policy,
+            routeEval
+          }))
+      )
+      : [];
     const routeable = [directQuote, ...bridgeQuotes].filter((quote): quote is Extract<typeof quote, { ok: true }> => quote.ok);
     if (routeable.length > 0) {
       const best = [...routeable].sort((a, b) => {
@@ -146,6 +194,23 @@ export class CamelotAmmv3RoutePlanner {
             status: 'NOT_ROUTEABLE',
             reason: 'POOL_MISSING',
             candidateClass: 'ROUTE_MISSING'
+          }
+        }
+      };
+    }
+    if (
+      rejected.reason === 'RATE_LIMITED'
+      || rejected.reason === 'RPC_UNAVAILABLE'
+      || rejected.reason === 'RPC_FAILED'
+      || rejected.reason === 'QUOTE_REVERTED'
+    ) {
+      return {
+        ok: false,
+        failure: {
+          reason: rejected.reason,
+          details: rejected.details,
+          summary: {
+            ...ensureRejectedCandidateClass(rejected.summary as RejectedVenueRouteAttemptSummary)
           }
         }
       };

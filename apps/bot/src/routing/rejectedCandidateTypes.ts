@@ -3,6 +3,7 @@ import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 
 export type RejectedCandidateClass =
+  | 'INFRA_BLOCKED'
   | 'POLICY_BLOCKED'
   | 'LIQUIDITY_BLOCKED'
   | 'ROUTE_MISSING'
@@ -19,11 +20,22 @@ function isQuoteFailedLike(summary: VenueRouteAttemptSummary): boolean {
     'UNEXPECTED_QUOTE_SCALAR'
   ]);
   return summary.status === 'QUOTE_FAILED'
+    || summary.status === 'QUOTE_REVERTED'
+    || summary.status === 'RATE_LIMITED'
+    || summary.status === 'RPC_UNAVAILABLE'
     || summary.exactOutputViability?.status === 'QUOTE_FAILED'
     || quoteFailureReasons.has(summary.reason);
 }
 
 export function deriveRejectedCandidateClass(summary: VenueRouteAttemptSummary): RejectedCandidateClass {
+  if (
+    summary.status === 'RATE_LIMITED'
+    || summary.status === 'RPC_UNAVAILABLE'
+    || summary.status === 'RPC_FAILED'
+    || summary.status === 'QUOTE_REVERTED'
+  ) {
+    return 'INFRA_BLOCKED';
+  }
   if (summary.status === 'GAS_NOT_PRICEABLE') {
     return 'GAS_NOT_PRICEABLE';
   }
@@ -117,10 +129,11 @@ export function classifyRejectedCandidate(params: {
 }
 
 export function rejectedCandidateClassPriority(candidateClass: RejectedCandidateClass): number {
-  if (candidateClass === 'POLICY_BLOCKED') return 0;
-  if (candidateClass === 'LIQUIDITY_BLOCKED') return 1;
-  if (candidateClass === 'GAS_NOT_PRICEABLE') return 2;
-  if (candidateClass === 'QUOTE_FAILED') return 3;
-  if (candidateClass === 'ROUTE_MISSING') return 4;
-  return 5;
+  if (candidateClass === 'INFRA_BLOCKED') return 0;
+  if (candidateClass === 'POLICY_BLOCKED') return 1;
+  if (candidateClass === 'LIQUIDITY_BLOCKED') return 2;
+  if (candidateClass === 'GAS_NOT_PRICEABLE') return 3;
+  if (candidateClass === 'QUOTE_FAILED') return 4;
+  if (candidateClass === 'ROUTE_MISSING') return 5;
+  return 6;
 }

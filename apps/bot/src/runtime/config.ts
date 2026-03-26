@@ -82,6 +82,10 @@ const baseSchema = z.object({
   CANDIDATE_BLOCK_OFFSETS: z.string().default('0,1,2'),
   COMPETE_WINDOW_BLOCKS: z.string().default('2'),
   THRESHOLD_OUT: z.string().default('1'),
+  ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
+  INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
+  TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(9_800),
+  MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
   CANARY_MODE: z.string().optional(),
@@ -90,8 +94,9 @@ const baseSchema = z.object({
   MAX_LIVE_INFLIGHT: z.coerce.number().int().nonnegative().default(0),
   MIN_LIVE_EDGE_OUT: z.string().default('0'),
   ENABLE_CAMELOT_AMMV3: z.string().optional(),
+  ENABLE_CAMELOT_TWO_HOP: z.string().optional(),
   BRIDGE_TOKENS: z.string().default(
-    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85EBE478A1C0b69FCBB9'
+    '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'
   ),
 
   ENABLE_METRICS_SERVER: z.string().optional(),
@@ -122,6 +127,10 @@ export type RuntimeConfig = {
   candidateBlockOffsets: bigint[];
   competeWindowBlocks: bigint;
   thresholdOut: bigint;
+  routeEvalMaxConcurrency: number;
+  infraBlockedRetryCooldownTicks: number;
+  twoHopUnlockMinCoverageBps: bigint;
+  maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
   canaryMode: boolean;
@@ -130,6 +139,7 @@ export type RuntimeConfig = {
   maxLiveInflight: number;
   minLiveEdgeOut: bigint;
   enableCamelotAmmv3: boolean;
+  enableCamelotTwoHop: boolean;
   bridgeTokens: Array<`0x${string}`>;
 
   enableMetricsServer: boolean;
@@ -165,6 +175,10 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     candidateBlockOffsets: parseBigIntList(parsed.CANDIDATE_BLOCK_OFFSETS),
     competeWindowBlocks: parseBigInt(parsed.COMPETE_WINDOW_BLOCKS, 'COMPETE_WINDOW_BLOCKS'),
     thresholdOut: parseBigInt(parsed.THRESHOLD_OUT, 'THRESHOLD_OUT'),
+    routeEvalMaxConcurrency: parsed.ROUTE_EVAL_MAX_CONCURRENCY,
+    infraBlockedRetryCooldownTicks: parsed.INFRA_BLOCKED_RETRY_COOLDOWN_TICKS,
+    twoHopUnlockMinCoverageBps: BigInt(parsed.TWO_HOP_UNLOCK_MIN_COVERAGE_BPS),
+    maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
     canaryMode: parseBoolean(parsed.CANARY_MODE, false),
@@ -173,6 +187,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxLiveInflight: parsed.MAX_LIVE_INFLIGHT,
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
     enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
+    enableCamelotTwoHop: parseBoolean(parsed.ENABLE_CAMELOT_TWO_HOP, false),
     bridgeTokens: normalizeAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),
