@@ -18,6 +18,8 @@ export type FamilyDominanceReason =
   | 'LOW_COVERAGE'
   | 'SHORTFALL';
 
+const MAX_SHORTFALL_PENALTY = 25;
+
 export type RouteFamily = {
   venue: HedgeVenue;
   familyKind: RouteFamilyKind;
@@ -110,7 +112,7 @@ export function computeDirectFamilyDominance(signals: DirectFamilyDominanceSigna
   }
 
   if (shortfall > 0) {
-    score -= Math.min(25, shortfall);
+    score -= Math.min(MAX_SHORTFALL_PENALTY, shortfall);
   }
 
   if (signals.exactOutputStatus === 'QUOTE_FAILED') {

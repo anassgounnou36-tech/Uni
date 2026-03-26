@@ -94,6 +94,9 @@ type FamilyWinStats = {
   chosen: number;
 };
 
+const MIN_EVALUATIONS_FOR_WIN_RATE_PENALTY = 3;
+const WIN_RATE_PENALTY_SCALE_FACTOR = 100;
+
 function familyStatsKey(summary: Pick<RouteCandidateSummary, 'venue' | 'familyKey' | 'familyKind' | 'pathKind'>): string {
   if (summary.familyKey) {
     return summary.familyKey;
@@ -106,12 +109,12 @@ function winRatePenalty(
   summary: Pick<RouteCandidateSummary, 'venue' | 'familyKey' | 'familyKind' | 'pathKind'>
 ): number {
   const stats = statsMap.get(familyStatsKey(summary));
-  if (!stats || stats.evaluated < 3) {
+  if (!stats || stats.evaluated < MIN_EVALUATIONS_FOR_WIN_RATE_PENALTY) {
     return 0;
   }
   const winRate = stats.chosen / stats.evaluated;
   const bestRejectedRate = stats.bestRejected / stats.evaluated;
-  return Math.max(0, Math.floor((bestRejectedRate - winRate) * 100));
+  return Math.max(0, Math.floor((bestRejectedRate - winRate) * WIN_RATE_PENALTY_SCALE_FACTOR));
 }
 
 function bumpFamilyStats(

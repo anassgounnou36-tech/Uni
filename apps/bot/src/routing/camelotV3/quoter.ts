@@ -627,8 +627,8 @@ export class CamelotAmmv3Quoter {
         nearMissBps: policy.nearMissBps
       });
       const netEdgeOutExactOutput = grossEdgeOutExactOutput - gasCostOut - riskBufferOutExactOutput - profitFloorOut;
-      const directNearMissRequiredOutput = breakdown.nearMiss && quotedAmountOut < breakdown.requiredOutput;
-      if (netEdgeOutExactOutput > 0n && (netEdgeOutExactOutput > netEdgeOut || directNearMissRequiredOutput)) {
+      const shouldPromoteDirectNearMiss = breakdown.nearMiss && quotedAmountOut < breakdown.requiredOutput;
+      if (netEdgeOutExactOutput > 0n && (netEdgeOutExactOutput > netEdgeOut || shouldPromoteDirectNearMiss)) {
         return {
           ok: true,
           route: {
