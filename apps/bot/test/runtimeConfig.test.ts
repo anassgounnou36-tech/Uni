@@ -28,6 +28,7 @@ describe('runtime config', () => {
     }]);
     expect(config.enableCamelotTwoHop).toBe(false);
     expect(config.twoHopUnlockMinCoverageBps).toBe(9_800n);
+    expect(config.maxTwoHopFamiliesPerOrder).toBe(2);
     expect(config.maxRevertedProbesPerOrder).toBe(3);
   });
 

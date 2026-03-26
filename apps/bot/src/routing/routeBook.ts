@@ -45,6 +45,13 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
   return {
     venue: route.venue,
     executionMode: route.executionMode,
+    familyKind: route.pathKind,
+    probePriority: route.pathKind === 'DIRECT' ? 0 : 100,
+    familyKey:
+      route.pathKind === 'DIRECT'
+        ? `${route.venue}:DIRECT:${route.tokenIn.toLowerCase()}:${route.tokenOut.toLowerCase()}`
+        : `${route.venue}:TWO_HOP:${route.tokenIn.toLowerCase()}:${(route.bridgeToken ?? '').toLowerCase()}:${route.tokenOut.toLowerCase()}`,
+    exactOutputPromotedFromFamily: route.executionMode === 'EXACT_OUTPUT',
     pathKind: route.pathKind,
     hopCount: route.hopCount,
     bridgeToken: route.bridgeToken,
@@ -116,6 +123,12 @@ function sortByBestEdge(routes: HedgeRoutePlan[]): HedgeRoutePlan[] {
     }
     return venueTieBreak(a.venue, b.venue);
   });
+}
+
+function routeFamilyKey(route: HedgeRoutePlan): string {
+  return route.pathKind === 'DIRECT'
+    ? `${route.venue}:DIRECT:${route.tokenIn.toLowerCase()}:${route.tokenOut.toLowerCase()}`
+    : `${route.venue}:TWO_HOP:${route.tokenIn.toLowerCase()}:${(route.bridgeToken ?? '').toLowerCase()}:${route.tokenOut.toLowerCase()}`;
 }
 
 function exactOutputStatusRank(status: ExactOutputViabilityStatus | undefined): number {
@@ -336,10 +349,14 @@ export class RouteBook {
     } else {
       const failureSummary = ensureCandidateClass(uniswapResult.failure.summary as RejectedVenueRouteAttemptSummary);
       venueAttempts.push(failureSummary);
-      alternatives.push({
-        venue: 'UNISWAP_V3',
-        eligible: false,
-        pathKind: failureSummary.pathKind,
+        alternatives.push({
+          venue: 'UNISWAP_V3',
+          eligible: false,
+          familyKind: failureSummary.familyKind,
+          probePriority: failureSummary.probePriority,
+          familyKey: failureSummary.familyKey,
+          exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
+          pathKind: failureSummary.pathKind,
         hopCount: failureSummary.hopCount,
         bridgeToken: failureSummary.bridgeToken,
         pathDescriptor: failureSummary.pathDescriptor,
@@ -367,6 +384,10 @@ export class RouteBook {
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
           eligible: false,
+          familyKind: failureSummary.familyKind,
+          probePriority: failureSummary.probePriority,
+          familyKey: failureSummary.familyKey,
+          exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
           pathKind: failureSummary.pathKind,
           hopCount: failureSummary.hopCount,
           bridgeToken: failureSummary.bridgeToken,
@@ -505,7 +526,14 @@ export class RouteBook {
       };
     }
 
-    const [chosenRoute, ...otherRoutes] = sortByBestEdge(eligible);
+    const familyBest = new Map<string, HedgeRoutePlan>();
+    for (const route of sortByBestEdge(eligible)) {
+      const key = routeFamilyKey(route);
+      if (!familyBest.has(key)) {
+        familyBest.set(key, route);
+      }
+    }
+    const [chosenRoute, ...otherRoutes] = sortByBestEdge([...familyBest.values()]);
     const alternativeRoutes = alternatives.map((candidate) => {
       if (candidate.venue === chosenRoute.venue && candidate.eligible) {
         return candidate;

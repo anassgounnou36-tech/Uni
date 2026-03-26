@@ -151,6 +151,49 @@ describe('RouteBook', () => {
     expect(selected.chosenRoute.executionMode).toBe('EXACT_OUTPUT');
   });
 
+  it('routebook_competes_best_family_first_for_same_venue', async () => {
+    const exactInputDirect = makeRoute('UNISWAP_V3', {
+      executionMode: 'EXACT_INPUT',
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      netEdgeOut: 10n
+    });
+    const exactOutputSameFamily = makeRoute('UNISWAP_V3', {
+      executionMode: 'EXACT_OUTPUT',
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      netEdgeOut: 11n
+    });
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: exactOutputSameFamily,
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', {
+            executionMode: 'EXACT_OUTPUT',
+            familyKind: 'DIRECT',
+            familyKey: `UNISWAP_V3:DIRECT:${exactInputDirect.tokenIn.toLowerCase()}:${exactInputDirect.tokenOut.toLowerCase()}`,
+            exactOutputPromotedFromFamily: true
+          })
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('CAMELOT_AMMV3', { netEdgeOut: 9n }),
+          summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 9n })
+        })
+      },
+      enableCamelotAmmv3: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: exactInputDirect.tokenIn, amount: 1_000n }, outputs: [{ token: exactInputDirect.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.executionMode).toBe('EXACT_OUTPUT');
+  });
+
   it('routeBookChoosesHigherNetEdgeVenue', async () => {
     const routeBook = new RouteBook({
       uniswapV3: {

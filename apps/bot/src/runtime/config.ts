@@ -85,6 +85,7 @@ const baseSchema = z.object({
   ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
   INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
   TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(9_800),
+  MAX_TWO_HOP_FAMILIES_PER_ORDER: z.coerce.number().int().positive().default(2),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
@@ -130,6 +131,7 @@ export type RuntimeConfig = {
   routeEvalMaxConcurrency: number;
   infraBlockedRetryCooldownTicks: number;
   twoHopUnlockMinCoverageBps: bigint;
+  maxTwoHopFamiliesPerOrder: number;
   maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
@@ -178,6 +180,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     routeEvalMaxConcurrency: parsed.ROUTE_EVAL_MAX_CONCURRENCY,
     infraBlockedRetryCooldownTicks: parsed.INFRA_BLOCKED_RETRY_COOLDOWN_TICKS,
     twoHopUnlockMinCoverageBps: BigInt(parsed.TWO_HOP_UNLOCK_MIN_COVERAGE_BPS),
+    maxTwoHopFamiliesPerOrder: parsed.MAX_TWO_HOP_FAMILIES_PER_ORDER,
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),

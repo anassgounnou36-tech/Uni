@@ -8,6 +8,7 @@ export type DiscoveredPool = {
   tokenIn: Address;
   tokenOut: Address;
   feeTier: UniV3FeeTier;
+  legKey: string;
   pool: Address;
   liquidity: bigint;
   sqrtPriceX96: bigint;
@@ -20,6 +21,14 @@ export type PoolDiscoveryResult = {
 };
 
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+function buildLegKey(tokenIn: Address, tokenOut: Address, feeTier: UniV3FeeTier): string {
+  const [a, b] =
+    tokenIn.toLowerCase() <= tokenOut.toLowerCase()
+      ? [tokenIn.toLowerCase(), tokenOut.toLowerCase()]
+      : [tokenOut.toLowerCase(), tokenIn.toLowerCase()];
+  return `${a}:${b}:${feeTier}`;
+}
 
 export async function discoverPool(
   client: PublicClient,
@@ -125,6 +134,7 @@ export async function discoverPoolWithStatus(
       tokenIn,
       tokenOut,
       feeTier,
+      legKey: buildLegKey(tokenIn, tokenOut, feeTier),
       pool,
       liquidity,
       sqrtPriceX96

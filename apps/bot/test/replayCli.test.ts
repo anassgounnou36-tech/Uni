@@ -45,9 +45,13 @@ describe('replay cli input resolution', () => {
           {
             venue: 'UNISWAP_V3',
             pathKind: 'TWO_HOP',
-            bridgeToken: '0x000000000000000000000000000000000000000b',
-            eligible: false,
-            reason: 'CONSTRAINT_REJECTED',
+             bridgeToken: '0x000000000000000000000000000000000000000b',
+             familyKind: 'TWO_HOP',
+             probePriority: 101,
+             familyKey: 'UNISWAP_V3:TWO_HOP:in:bridge:out',
+             exactOutputPromotedFromFamily: true,
+             eligible: false,
+             reason: 'CONSTRAINT_REJECTED',
             candidateClass: 'LIQUIDITY_BLOCKED',
             constraintReason: 'REQUIRED_OUTPUT',
             exactOutputViability: { status: 'UNSATISFIABLE' },
@@ -67,6 +71,10 @@ describe('replay cli input resolution', () => {
     expect(output.bestRejectedPathKind).toBe('TWO_HOP');
     expect(output.bestRejectedBridgeToken).toBe('0x000000000000000000000000000000000000000b');
     expect(output.bestRejectedReason).toBe('CONSTRAINT_REJECTED');
+    expect(output.familyKind).toBe('TWO_HOP');
+    expect(output.probePriority).toBe(101);
+    expect(output.familyKey).toBe('UNISWAP_V3:TWO_HOP:in:bridge:out');
+    expect(output.exactOutputPromotedFromFamily).toBe(true);
   });
 
   it('replay_by_journal_id_uses_stored_snapshot_and_does_not_fail_immediately_with_DeadlineReached', async () => {

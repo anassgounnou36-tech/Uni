@@ -92,6 +92,45 @@ describe('UniV3RoutePlanner fee-tier attempts', () => {
     expect(twoHopQuoteCalls).toBe(0);
   });
 
+  it('limits uniswap two-hop evaluation to top maxTwoHopFamiliesPerOrder families', async () => {
+    const bridges = [
+      '0x000000000000000000000000000000000000000b',
+      '0x000000000000000000000000000000000000000c',
+      '0x000000000000000000000000000000000000000d'
+    ] as const;
+    let twoHopQuoteCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'getPool') return pool3000;
+      if (call.functionName === 'liquidity') return 1n;
+      if (call.functionName === 'slot0') return [1n] as const;
+      if (call.functionName === 'quoteExactInputSingle') return [950n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactOutputSingle') return [900n, 0n, 0, 0n] as [bigint, bigint, number, bigint];
+      if (call.functionName === 'quoteExactInput') {
+        twoHopQuoteCalls += 1;
+        return [970n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      }
+      if (call.functionName === 'quoteExactOutput') return [900n, [], [], 0n] as [bigint, bigint[], number[], bigint];
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new UniV3RoutePlanner({
+      client,
+      factory,
+      quoter,
+      bridgeTokens: bridges
+    });
+    const result = await planner.planBestRoute({
+      ...routeInput(),
+      policy: {
+        ...routeInput().policy,
+        feeTiers: [3000] as const,
+        maxTwoHopFamiliesPerOrder: 2
+      }
+    });
+    expect(result.ok).toBe(true);
+    // two selected families, each probed for quote + leftover valuation
+    expect(twoHopQuoteCalls).toBe(4);
+  });
+
   it('reuses direct leg hydration for exact-input and exact-output checks', async () => {
     let getPoolCalls = 0;
     let liquidityCalls = 0;

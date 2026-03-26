@@ -142,6 +142,7 @@ describe('routing rpc infra helpers', () => {
       )
     ).rejects.toThrow('execution reverted');
 
+    expect(cache.getNegativeEntryCount()).toBe(1);
     expect(calls).toBe(1);
   });
 });
