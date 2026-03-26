@@ -31,7 +31,7 @@ export type HotLaneDecision =
       simResult?: ForkSimResult;
       preparedExecution?: PreparedExecution;
       sendResult?: SequencerClientResult;
-      chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
       pathKind?: RoutePathKind;
       hopCount?: 1 | 2;
       bridgeToken?: `0x${string}`;
@@ -49,7 +49,7 @@ export type HotLaneDecision =
       simResult: ForkSimResult;
       preparedExecution: PreparedExecution;
       sendResult?: SequencerClientResult;
-      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
       routeAlternatives: RouteCandidateSummary[];
     }
   | {
@@ -57,7 +57,7 @@ export type HotLaneDecision =
       simResult: ForkSimResult;
       preparedExecution: PreparedExecution;
       sendResult: SequencerClientResult;
-      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+      chosenRouteVenue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
       routeAlternatives: RouteCandidateSummary[];
     };
 
@@ -108,7 +108,7 @@ function toPathDescriptor(pathKind: 'DIRECT' | 'TWO_HOP', tokenIn: string, token
 
 function chooseRouteContextCandidate(
   routeAlternatives: RouteCandidateSummary[] | undefined,
-  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3'
+  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB'
 ): RouteCandidateSummary | undefined {
   if (!routeAlternatives || routeAlternatives.length === 0) {
     return undefined;

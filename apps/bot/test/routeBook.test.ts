@@ -4,7 +4,7 @@ import type { HedgeRoutePlan } from '../src/routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../src/routing/attemptTypes.js';
 import type { ConstraintBreakdown } from '../src/routing/constraintTypes.js';
 
-function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
+function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB', overrides: Partial<HedgeRoutePlan> = {}): HedgeRoutePlan {
   return {
     venue,
     executionMode: 'EXACT_INPUT',
@@ -27,13 +27,15 @@ function makeRoute(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3', overrides: Partial<Hed
     quoteMetadata:
       venue === 'UNISWAP_V3'
         ? { venue: 'UNISWAP_V3', poolFee: 500 }
-        : { venue: 'CAMELOT_AMMV3', observedFee: 30 },
+        : venue === 'CAMELOT_AMMV3'
+          ? { venue: 'CAMELOT_AMMV3', observedFee: 30 }
+          : { venue: 'LFJ_LB', observedFee: 30 },
     ...overrides
   };
 }
 
 function venueSummary(
-  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3',
+  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB',
   status: VenueRouteAttemptSummary['status'],
   overrides: Partial<VenueRouteAttemptSummary> = {}
 ): VenueRouteAttemptSummary {
@@ -42,6 +44,28 @@ function venueSummary(
     status,
     reason: status,
     ...overrides
+  };
+}
+
+function plannerSuccess(route: HedgeRoutePlan, summaryVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB') {
+  return {
+    planBestRoute: async () => ({
+      ok: true as const,
+      route,
+      summary: venueSummary(summaryVenue ?? route.venue, 'ROUTEABLE', { netEdgeOut: route.netEdgeOut, pathKind: route.pathKind, hopCount: route.hopCount })
+    })
+  };
+}
+
+function plannerFailure(venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB', reason = 'POOL_MISSING') {
+  return {
+    planBestRoute: async () => ({
+      ok: false as const,
+      failure: {
+        reason: 'NOT_ROUTEABLE' as const,
+        summary: venueSummary(venue, 'NOT_ROUTEABLE', { reason })
+      }
+    })
   };
 }
 
@@ -90,7 +114,14 @@ describe('RouteBook', () => {
           summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 10n, pathKind: 'DIRECT', hopCount: 1 })
         })
       },
-      enableCamelotAmmv3: true
+      lfjLb: {
+        planBestRoute: async () => ({
+          ok: false as const,
+          failure: { reason: 'NOT_ROUTEABLE' as const, summary: venueSummary('LFJ_LB', 'NOT_ROUTEABLE', { reason: 'POOL_MISSING' }) }
+        })
+      },
+      enableCamelotAmmv3: true,
+      enableLfjLb: true
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: { input: { token: twoHop.tokenIn, amount: 1_000n }, outputs: [{ token: twoHop.tokenOut, amount: 900n }] } as never
@@ -99,6 +130,50 @@ describe('RouteBook', () => {
     if (!selected.ok) return;
     expect(selected.chosenRoute.pathKind).toBe('TWO_HOP');
     expect(selected.chosenRoute.hopCount).toBe(2);
+  });
+
+  it('routebook_can_choose_lfj_over_existing_venues_when_better', async () => {
+    const uniswap = makeRoute('UNISWAP_V3', { netEdgeOut: 10n });
+    const camelot = makeRoute('CAMELOT_AMMV3', { netEdgeOut: 11n });
+    const lfj = makeRoute('LFJ_LB', {
+      netEdgeOut: 20n,
+      lfjPath: {
+        tokenPath: ['0x0000000000000000000000000000000000000001', '0x0000000000000000000000000000000000000002'],
+        binSteps: [20],
+        versions: [1]
+      }
+    });
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: uniswap,
+          summary: venueSummary('UNISWAP_V3', 'ROUTEABLE', { netEdgeOut: 10n })
+        })
+      },
+      camelotAmmv3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: camelot,
+          summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 11n })
+        })
+      },
+      lfjLb: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: lfj,
+          summary: venueSummary('LFJ_LB', 'ROUTEABLE', { netEdgeOut: 20n })
+        })
+      },
+      enableCamelotAmmv3: true,
+      enableLfjLb: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: lfj.tokenIn, amount: 1_000n }, outputs: [{ token: lfj.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.venue).toBe('LFJ_LB');
   });
 
   it('routebook_can_choose_exact_output_candidate_over_rejected_exact_input_near_miss', async () => {
@@ -141,7 +216,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: { input: { token: exactOutputRoute.tokenIn, amount: 1_000n }, outputs: [{ token: exactOutputRoute.tokenOut, amount: 900n }] } as never
@@ -184,7 +260,8 @@ describe('RouteBook', () => {
           summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 9n })
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: { input: { token: exactInputDirect.tokenIn, amount: 1_000n }, outputs: [{ token: exactInputDirect.tokenOut, amount: 900n }] } as never
@@ -210,7 +287,8 @@ describe('RouteBook', () => {
           summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 20n })
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: { input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n }, outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }] } as never
@@ -242,7 +320,8 @@ describe('RouteBook', () => {
             summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE', { netEdgeOut: 10n })
           })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: { input: { token: tieRoute.tokenIn, amount: 1_000n }, outputs: [{ token: tieRoute.tokenOut, amount: 900n }] } as never
@@ -270,7 +349,8 @@ describe('RouteBook', () => {
           summary: venueSummary('CAMELOT_AMMV3', 'ROUTEABLE')
         })
       },
-      enableCamelotAmmv3: false
+      enableCamelotAmmv3: false,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -307,7 +387,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const unprofitableRouteBook = new RouteBook({
@@ -340,7 +421,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const input = {
@@ -411,7 +493,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: {
@@ -455,7 +538,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: {
@@ -551,7 +635,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -617,7 +702,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -683,7 +769,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -746,7 +833,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -788,7 +876,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
     const selected = await routeBook.selectBestRoute({
       resolvedOrder: {
@@ -834,7 +923,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -902,7 +992,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -985,7 +1076,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -1071,7 +1163,8 @@ describe('RouteBook', () => {
           }
         })
       },
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({
@@ -1108,7 +1201,8 @@ describe('RouteBook', () => {
           }
         })
       } as unknown as CamelotAmmv3RoutePlanner,
-      enableCamelotAmmv3: true
+      enableCamelotAmmv3: true,
+      enableLfjLb: false
     });
 
     const selected = await routeBook.selectBestRoute({

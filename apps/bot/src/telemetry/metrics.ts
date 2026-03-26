@@ -38,6 +38,8 @@ export class BotMetrics {
   private readonly gasPerFill: number[] = [];
   private readonly histograms = new Map<string, number[]>();
   private realizedPnl = 0n;
+  private readonly startTimeUnixSeconds = Math.floor(Date.now() / 1000);
+  private readonly startMonotonicMs = performance.now();
 
   increment(name: string, value: number = 1): void {
     this.counters.set(name, (this.counters.get(name) ?? 0) + value);
@@ -227,6 +229,14 @@ export class BotMetrics {
       realizedPnl: this.realizedPnl,
       gasPerLandedFill: makeQuantiles(this.gasPerFill),
       histograms
+    };
+  }
+
+  scrapeGauges(): Record<string, number> {
+    const uptimeSeconds = Math.max(0, Math.floor((performance.now() - this.startMonotonicMs) / 1000));
+    return {
+      bot_start_time_unix_seconds: this.startTimeUnixSeconds,
+      bot_uptime_seconds: uptimeSeconds
     };
   }
 }

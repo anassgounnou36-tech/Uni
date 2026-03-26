@@ -32,6 +32,9 @@ export type ExecutionPlan = {
   selectedExecutionMode: HedgeExecutionMode;
   selectedPathKind: HedgeRoutePlan['pathKind'];
   selectedHopCount: HedgeRoutePlan['hopCount'];
+  selectedBridgeToken?: HedgeRoutePlan['bridgeToken'];
+  selectedPathDescriptor?: string;
+  selectedLfjPath?: HedgeRoutePlan['lfjPath'];
   selectedPathDirection: PathEncodingDirection;
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;

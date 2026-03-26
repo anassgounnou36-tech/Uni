@@ -113,6 +113,14 @@ contract CamelotAmmv3Adapter is ISettlementAdapter {
         );
     }
 
+    function executeLfjExactInputPath(LfjPath calldata, uint256, uint256, address) external pure returns (uint256) {
+        revert ExecutorErrors.BadRoute();
+    }
+
+    function executeLfjExactOutputPath(LfjPath calldata, uint256, uint256, address) external pure returns (uint256) {
+        revert ExecutorErrors.BadRoute();
+    }
+
     function _safeApprove(address token, address spender, uint256 amount) private {
         (bool ok, bytes memory data) = token.call(abi.encodeCall(IERC20Camelot.approve, (spender, amount)));
         if (!ok || (data.length != 0 && !abi.decode(data, (bool)))) {

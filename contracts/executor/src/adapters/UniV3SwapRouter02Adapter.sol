@@ -144,6 +144,14 @@ contract UniV3SwapRouter02Adapter is ISettlementAdapter {
         );
     }
 
+    function executeLfjExactInputPath(LfjPath calldata, uint256, uint256, address) external pure returns (uint256) {
+        revert ExecutorErrors.BadRoute();
+    }
+
+    function executeLfjExactOutputPath(LfjPath calldata, uint256, uint256, address) external pure returns (uint256) {
+        revert ExecutorErrors.BadRoute();
+    }
+
     function _decodeBoundedPath(bytes calldata path) private pure returns (address firstToken, address lastToken, uint256 hops) {
         if (path.length <= 20 || ((path.length - 20) % 23) != 0) revert ExecutorErrors.BadRoute();
         hops = ((path.length - 20) / 23);

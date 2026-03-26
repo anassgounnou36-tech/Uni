@@ -85,7 +85,6 @@ export class BotRuntime {
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
   private schedulerTickCounter = 0;
-
   constructor(private readonly deps: BotRuntimeDeps) {
     this.logger = deps.logger ?? new JsonConsoleLogger();
   }
@@ -619,7 +618,6 @@ export class BotRuntime {
     );
 
     this.logger.log('info', 'runtime_started');
-
     void this.pollTick().catch((error) => {
       this.logger.log('error', 'poll_tick_failed', { error: this.toErrorMessage(error) });
     });
@@ -658,6 +656,7 @@ export class BotRuntime {
   }
 
   private async pollTick(): Promise<void> {
+    this.deps.metrics.increment('bot_runtime_ticks_total');
     this.logger.log('info', 'poll_tick_started');
     try {
       const result = await this.deps.poller.pollOnce();
@@ -679,6 +678,7 @@ export class BotRuntime {
   }
 
   private async schedulerTick(): Promise<void> {
+    this.deps.metrics.increment('bot_runtime_ticks_total');
     const scheduler = this.deps.schedulerContext;
     if (!scheduler) {
       return;
@@ -931,6 +931,7 @@ export class BotRuntime {
   }
 
   private async hotLaneTick(): Promise<void> {
+    this.deps.metrics.increment('bot_runtime_ticks_total');
     const hotLane = this.deps.hotLaneContext;
     if (!hotLane) {
       return;

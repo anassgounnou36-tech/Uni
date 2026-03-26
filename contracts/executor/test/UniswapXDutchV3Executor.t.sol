@@ -226,6 +226,7 @@ contract UniswapXDutchV3ExecutorTest {
     MockERC20 private tokenOut;
     MockSettlementAdapter private uniAdapter;
     MockSettlementAdapter private camelotAdapter;
+    MockSettlementAdapter private lfjAdapter;
     UniswapXDutchV3Executor private executor;
 
     address private constant REACTOR = address(0xB274d5F4b833b61B340b654d600A864fB604a87c);
@@ -236,8 +237,9 @@ contract UniswapXDutchV3ExecutorTest {
         tokenOut = new MockERC20();
         uniAdapter = new MockSettlementAdapter();
         camelotAdapter = new MockSettlementAdapter();
+        lfjAdapter = new MockSettlementAdapter();
         executor = new UniswapXDutchV3Executor(
-            REACTOR, address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+            REACTOR, address(uniAdapter), address(camelotAdapter), address(lfjAdapter), TREASURY, address(this)
         );
     }
 
@@ -250,7 +252,7 @@ contract UniswapXDutchV3ExecutorTest {
         MockReactor reactor = new MockReactor();
         UniswapXDutchV3Executor wrapper =
             new UniswapXDutchV3Executor(
-                address(reactor), address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+                address(reactor), address(uniAdapter), address(camelotAdapter), address(lfjAdapter), TREASURY, address(this)
             );
 
         ReactorStructs.SignedOrder memory order = ReactorStructs.SignedOrder({order: hex"1234", sig: hex"5678"});
@@ -266,7 +268,7 @@ contract UniswapXDutchV3ExecutorTest {
         MockReactor reactor = new MockReactor();
         UniswapXDutchV3Executor wrapper =
             new UniswapXDutchV3Executor(
-                address(reactor), address(uniAdapter), address(camelotAdapter), TREASURY, address(this)
+                address(reactor), address(uniAdapter), address(camelotAdapter), address(lfjAdapter), TREASURY, address(this)
             );
         tokenIn.mint(address(wrapper), 1e18);
         uniAdapter.setAmountOut(12e6);
@@ -286,7 +288,7 @@ contract UniswapXDutchV3ExecutorTest {
         UniV3SwapRouter02Adapter distinctCamelotSlotAdapter = new UniV3SwapRouter02Adapter(address(router));
         UniswapXDutchV3Executor wrapper =
             new UniswapXDutchV3Executor(
-                address(reactor), address(realAdapter), address(distinctCamelotSlotAdapter), TREASURY, address(this)
+                address(reactor), address(realAdapter), address(distinctCamelotSlotAdapter), address(lfjAdapter), TREASURY, address(this)
             );
 
         tokenIn.mint(address(wrapper), 1e18);
@@ -367,6 +369,9 @@ contract UniswapXDutchV3ExecutorTest {
                     uniPoolFee: 500,
                     executionMode: 0,
                     encodedPath: "",
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 1e18,
                     targetOutput: 0,
@@ -416,6 +421,9 @@ contract UniswapXDutchV3ExecutorTest {
                     uniPoolFee: 0,
                     executionMode: 0,
                     encodedPath: abi.encodePacked(address(tokenIn), bytes3(uint24(500)), address(0x1234), bytes3(uint24(3000)), address(tokenOut)),
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 9e6,
                     targetOutput: 0,
@@ -443,6 +451,9 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
                     encodedPath: "",
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 0,
                     targetOutput: 10e6,
@@ -471,6 +482,9 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenOut: address(tokenOut),
                     uniPoolFee: 500,
                     encodedPath: "",
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 0,
                     targetOutput: 10e6,
@@ -506,6 +520,9 @@ contract UniswapXDutchV3ExecutorTest {
                         bytes3(uint24(500)),
                         address(tokenOut)
                     ),
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 9e6,
                     targetOutput: 0,
@@ -535,6 +552,9 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
                     encodedPath: forwardPath,
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 9e6,
                     targetOutput: 0,
@@ -558,6 +578,9 @@ contract UniswapXDutchV3ExecutorTest {
                     tokenOut: address(tokenOut),
                     uniPoolFee: 0,
                     encodedPath: reversePath,
+                    lfjTokenPath: new address[](0),
+                    lfjBinSteps: new uint256[](0),
+                    lfjVersions: new uint8[](0),
                     limitSqrtPriceX96: 0,
                     minAmountOut: 0,
                     targetOutput: 10e6,
@@ -708,6 +731,9 @@ contract UniswapXDutchV3ExecutorTest {
                 executionMode: 0,
                 uniPoolFee: 500,
                 encodedPath: "",
+                lfjTokenPath: new address[](0),
+                lfjBinSteps: new uint256[](0),
+                lfjVersions: new uint8[](0),
                 limitSqrtPriceX96: 0,
                 minAmountOut: minAmountOut,
                 targetOutput: 0,
@@ -728,6 +754,9 @@ contract UniswapXDutchV3ExecutorTest {
                 executionMode: 0,
                 uniPoolFee: 0,
                 encodedPath: "",
+                lfjTokenPath: new address[](0),
+                lfjBinSteps: new uint256[](0),
+                lfjVersions: new uint8[](0),
                 limitSqrtPriceX96: 0,
                 minAmountOut: minAmountOut,
                 targetOutput: 0,

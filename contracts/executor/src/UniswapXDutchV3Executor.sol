@@ -18,6 +18,7 @@ contract UniswapXDutchV3Executor is IReactorCallback {
     address public immutable REACTOR;
     address public immutable UNISWAP_V3_ADAPTER;
     address public immutable CAMELOT_AMMV3_ADAPTER;
+    address public immutable LFJ_LB_ADAPTER;
     address public immutable TREASURY;
 
     address public owner;
@@ -45,10 +46,18 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         _;
     }
 
-    constructor(address reactor_, address uniswapV3Adapter_, address camelotAmmv3Adapter_, address treasury_, address owner_)
-    {
-        if (
+  constructor(
+      address reactor_,
+      address uniswapV3Adapter_,
+      address camelotAmmv3Adapter_,
+      address lfjLbAdapter_,
+      address treasury_,
+      address owner_
+  )
+  {
+      if (
             reactor_ == address(0) || uniswapV3Adapter_ == address(0) || camelotAmmv3Adapter_ == address(0)
+                || lfjLbAdapter_ == address(0)
                 || treasury_ == address(0)
                 || owner_ == address(0)
         ) {
@@ -57,6 +66,7 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         REACTOR = reactor_;
         UNISWAP_V3_ADAPTER = uniswapV3Adapter_;
         CAMELOT_AMMV3_ADAPTER = camelotAmmv3Adapter_;
+        LFJ_LB_ADAPTER = lfjLbAdapter_;
         TREASURY = treasury_;
         owner = owner_;
     }
@@ -104,7 +114,15 @@ contract UniswapXDutchV3Executor is IReactorCallback {
             if (targetOutput == 0 || maxAmountIn == 0 || maxAmountIn > amountIn) revert ExecutorErrors.BadRoute();
             _safeTransfer(route.tokenIn, settlementAdapter, maxAmountIn);
             uint256 usedAmountIn;
-            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
+            if (route.venue == ExecutorTypes.VENUE_LFJ_LB) {
+                ISettlementAdapter.LfjPath memory lfjPath = _toLfjPath(route);
+                usedAmountIn = ISettlementAdapter(settlementAdapter).executeLfjExactOutputPath(
+                    lfjPath,
+                    targetOutput,
+                    maxAmountIn,
+                    address(this)
+                );
+            } else if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
                 usedAmountIn = ISettlementAdapter(settlementAdapter).executeExactOutputSingle(
                     route.tokenIn,
                     route.tokenOut,
@@ -127,7 +145,15 @@ contract UniswapXDutchV3Executor is IReactorCallback {
         } else {
             _safeTransfer(route.tokenIn, settlementAdapter, amountIn);
             uint256 minimumOutput = route.minAmountOut > requiredOutput ? route.minAmountOut : requiredOutput;
-            if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
+            if (route.venue == ExecutorTypes.VENUE_LFJ_LB) {
+                ISettlementAdapter.LfjPath memory lfjPath = _toLfjPath(route);
+                settledOutput = ISettlementAdapter(settlementAdapter).executeLfjExactInputPath(
+                    lfjPath,
+                    amountIn,
+                    minimumOutput,
+                    address(this)
+                );
+            } else if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT) {
                 settledOutput = ISettlementAdapter(settlementAdapter).executeExactInputSingle(
                     route.tokenIn,
                     route.tokenOut,
@@ -198,7 +224,30 @@ contract UniswapXDutchV3Executor is IReactorCallback {
             if (route.pathKind == ExecutorTypes.PATH_KIND_DIRECT && route.uniPoolFee != 0) revert ExecutorErrors.BadRoute();
             return CAMELOT_AMMV3_ADAPTER;
         }
+        if (route.venue == ExecutorTypes.VENUE_LFJ_LB) {
+            _validateLfjPath(route);
+            return LFJ_LB_ADAPTER;
+        }
         revert ExecutorErrors.BadRoute();
+    }
+
+    function _validateLfjPath(ExecutorTypes.RoutePlan memory route) private pure {
+        if (route.hopCount == 0 || route.hopCount > 2) revert ExecutorErrors.BadRoute();
+        if (route.lfjTokenPath.length != route.hopCount + 1) revert ExecutorErrors.BadRoute();
+        if (route.lfjBinSteps.length != route.hopCount) revert ExecutorErrors.BadRoute();
+        if (route.lfjVersions.length != route.hopCount) revert ExecutorErrors.BadRoute();
+        if (route.lfjTokenPath[0] != route.tokenIn || route.lfjTokenPath[route.lfjTokenPath.length - 1] != route.tokenOut) {
+            revert ExecutorErrors.BadRoute();
+        }
+    }
+
+    function _toLfjPath(ExecutorTypes.RoutePlan memory route) private pure returns (ISettlementAdapter.LfjPath memory path) {
+        _validateLfjPath(route);
+        path = ISettlementAdapter.LfjPath({
+            tokenPath: route.lfjTokenPath,
+            pairBinSteps: route.lfjBinSteps,
+            versions: route.lfjVersions
+        });
     }
 
     function _validateBoundedPath(ExecutorTypes.RoutePlan memory route) private pure {

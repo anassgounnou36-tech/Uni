@@ -15,7 +15,7 @@ export type RouteFamily = {
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
   pathDescriptor: string;
-  discovery: 'DIRECT_FEE_TIER' | 'DIRECT_PAIR' | 'TWO_HOP_BRIDGE_FEE';
+  discovery: 'DIRECT_FEE_TIER' | 'DIRECT_PAIR' | 'TWO_HOP_BRIDGE_FEE' | 'LFJ_DIRECT_BIN_STEP_VERSION' | 'LFJ_TWO_HOP_BRIDGE_BIN_STEP_VERSION';
   probePriority: number;
   familyKey: string;
 };

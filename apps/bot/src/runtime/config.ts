@@ -96,6 +96,12 @@ const baseSchema = z.object({
   MIN_LIVE_EDGE_OUT: z.string().default('0'),
   ENABLE_CAMELOT_AMMV3: z.string().optional(),
   ENABLE_CAMELOT_TWO_HOP: z.string().optional(),
+  ENABLE_LFJ_LB: z.string().optional(),
+  LFJ_LB_ROUTER: z.string().default('0xb4315e873dbcf96ffd0acd8ea43f689d8c20fb30'),
+  LFJ_LB_QUOTER: z.string().default('0x64b57f4249aa99a812212cee7daefedc40b203cd'),
+  LFJ_LB_FACTORY: z.string().default('0x8e42f2f4101563bf679975178e880fd87d3efd4e'),
+  ENABLE_LFJ_TWO_HOP: z.string().optional(),
+  MAX_LFJ_TWO_HOP_FAMILIES_PER_ORDER: z.coerce.number().int().positive().default(2),
   BRIDGE_TOKENS: z.string().default(
     '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1,0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8,0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9'
   ),
@@ -142,6 +148,12 @@ export type RuntimeConfig = {
   minLiveEdgeOut: bigint;
   enableCamelotAmmv3: boolean;
   enableCamelotTwoHop: boolean;
+  enableLfjLb: boolean;
+  lfjLbRouter: `0x${string}`;
+  lfjLbQuoter: `0x${string}`;
+  lfjLbFactory: `0x${string}`;
+  enableLfjTwoHop: boolean;
+  maxLfjTwoHopFamiliesPerOrder: number;
   bridgeTokens: Array<`0x${string}`>;
 
   enableMetricsServer: boolean;
@@ -191,6 +203,12 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     minLiveEdgeOut: parseBigInt(parsed.MIN_LIVE_EDGE_OUT, 'MIN_LIVE_EDGE_OUT'),
     enableCamelotAmmv3: parseBoolean(parsed.ENABLE_CAMELOT_AMMV3, false),
     enableCamelotTwoHop: parseBoolean(parsed.ENABLE_CAMELOT_TWO_HOP, false),
+    enableLfjLb: parseBoolean(parsed.ENABLE_LFJ_LB, true),
+    lfjLbRouter: normalizeAddress(parsed.LFJ_LB_ROUTER, 'LFJ_LB_ROUTER'),
+    lfjLbQuoter: normalizeAddress(parsed.LFJ_LB_QUOTER, 'LFJ_LB_QUOTER'),
+    lfjLbFactory: normalizeAddress(parsed.LFJ_LB_FACTORY, 'LFJ_LB_FACTORY'),
+    enableLfjTwoHop: parseBoolean(parsed.ENABLE_LFJ_TWO_HOP, false),
+    maxLfjTwoHopFamiliesPerOrder: parsed.MAX_LFJ_TWO_HOP_FAMILIES_PER_ORDER,
     bridgeTokens: normalizeAddressList(parsed.BRIDGE_TOKENS, 'BRIDGE_TOKENS'),
 
     enableMetricsServer: parseBoolean(parsed.ENABLE_METRICS_SERVER, false),

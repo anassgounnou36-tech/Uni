@@ -1,5 +1,5 @@
 import type { Address } from 'viem';
-import type { PathEncodingDirection, RoutePathKind } from './pathTypes.js';
+import type { LfjLbPath, PathEncodingDirection, RoutePathKind } from './pathTypes.js';
 import type { RejectedCandidateClass } from './rejectedCandidateTypes.js';
 import type { ConstraintBreakdown, ConstraintRejectReason } from './constraintTypes.js';
 import type { ExactOutputViability } from './exactOutputTypes.js';
@@ -7,7 +7,7 @@ import type { HedgeGapSummary } from './hedgeGapTypes.js';
 import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { RouteFamilyKind } from './familyTypes.js';
 
-export const HEDGE_VENUES = ['UNISWAP_V3', 'CAMELOT_AMMV3'] as const;
+export const HEDGE_VENUES = ['UNISWAP_V3', 'CAMELOT_AMMV3', 'LFJ_LB'] as const;
 export type HedgeVenue = (typeof HEDGE_VENUES)[number];
 
 export type RouteQuoteMetadata =
@@ -19,6 +19,10 @@ export type RouteQuoteMetadata =
       venue: 'CAMELOT_AMMV3';
       observedFee?: number;
       sqrtPriceAfterX96?: bigint;
+    }
+  | {
+      venue: 'LFJ_LB';
+      observedFee?: number;
     };
 
 export type HedgeRoutePlan = {
@@ -27,10 +31,12 @@ export type HedgeRoutePlan = {
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
   pathDirection?: PathEncodingDirection;
+  pathDescriptor?: string;
   tokenIn: Address;
   tokenOut: Address;
   bridgeToken?: Address;
   encodedPath?: `0x${string}`;
+  lfjPath?: LfjLbPath;
   amountIn: bigint;
   requiredOutput: bigint;
   targetOutput?: bigint;
@@ -75,6 +81,7 @@ export type RouteCandidateSummary = {
   hopCount?: 1 | 2;
   bridgeToken?: Address;
   pathDescriptor?: string;
+  lfjPath?: LfjLbPath;
   eligible: boolean;
   reason?: RouteCandidateFailureReason | 'BEAT_BY_HIGHER_NET_EDGE' | 'BEAT_BY_TIE_BREAK';
   details?: string;

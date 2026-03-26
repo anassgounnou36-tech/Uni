@@ -7,6 +7,7 @@ import type { RoutePathKind } from './pathTypes.js';
 import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { Address } from 'viem';
 import type { RouteFamilyKind } from './familyTypes.js';
+import type { LfjLbPath } from './pathTypes.js';
 
 export type RouteAttemptStatus =
   | 'ROUTEABLE'
@@ -30,6 +31,7 @@ export type FeeTierAttemptSummary = {
   hopCount?: 1 | 2;
   bridgeToken?: Address;
   pathDescriptor?: string;
+  lfjPath?: LfjLbPath;
   familyKind?: RouteFamilyKind;
   probePriority?: number;
   familyKey?: string;
@@ -58,6 +60,7 @@ export type VenueRouteAttemptSummary = {
   hopCount?: 1 | 2;
   bridgeToken?: Address;
   pathDescriptor?: string;
+  lfjPath?: LfjLbPath;
   familyKind?: RouteFamilyKind;
   probePriority?: number;
   familyKey?: string;

@@ -17,6 +17,9 @@ const ROUTE_PLAN_TUPLE = [
       { name: 'tokenOut', type: 'address' },
       { name: 'uniPoolFee', type: 'uint24' },
       { name: 'encodedPath', type: 'bytes' },
+      { name: 'lfjTokenPath', type: 'address[]' },
+      { name: 'lfjBinSteps', type: 'uint256[]' },
+      { name: 'lfjVersions', type: 'uint8[]' },
       { name: 'limitSqrtPriceX96', type: 'uint160' },
       { name: 'minAmountOut', type: 'uint256' },
       { name: 'targetOutput', type: 'uint256' },
@@ -57,7 +60,7 @@ function fromPathDirectionCode(code: number): PathEncodingDirection {
 }
 
 export type ExecutorRoutePlan = {
-  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+  venue: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
   executionMode: HedgeExecutionMode;
   pathKind: RoutePathKind;
   hopCount: 1 | 2;
@@ -66,6 +69,9 @@ export type ExecutorRoutePlan = {
   tokenOut: `0x${string}`;
   uniPoolFee: number;
   encodedPath: `0x${string}`;
+  lfjTokenPath: `0x${string}`[];
+  lfjBinSteps: number[];
+  lfjVersions: number[];
   limitSqrtPriceX96: bigint;
   minAmountOut: bigint;
   targetOutput: bigint;
@@ -82,6 +88,7 @@ export type RoutePlanCallbackInput = Pick<
   | 'tokenIn'
   | 'tokenOut'
   | 'encodedPath'
+  | 'lfjPath'
   | 'quoteMetadata'
   | 'limitSqrtPriceX96'
   | 'minAmountOut'
@@ -107,8 +114,22 @@ export function assertValidExecutorRoutePlan(route: ExecutorRoutePlan): void {
   if (route.venue === 'CAMELOT_AMMV3' && route.pathKind === 'DIRECT' && route.uniPoolFee !== 0) {
     throw new Error('CAMELOT_AMMV3 route requires uniPoolFee=0');
   }
-  if (route.pathKind === 'TWO_HOP' && route.encodedPath === '0x') {
+  if (route.venue === 'LFJ_LB') {
+    if (route.lfjTokenPath.length !== route.hopCount + 1) {
+      throw new Error('LFJ_LB route token path length mismatch');
+    }
+    if (route.lfjBinSteps.length !== route.hopCount) {
+      throw new Error('LFJ_LB route binSteps length mismatch');
+    }
+    if (route.lfjVersions.length !== route.hopCount) {
+      throw new Error('LFJ_LB route versions length mismatch');
+    }
+  }
+  if (route.pathKind === 'TWO_HOP' && route.encodedPath === '0x' && route.venue !== 'LFJ_LB') {
     throw new Error('TWO_HOP route requires encodedPath');
+  }
+  if (route.pathKind === 'DIRECT' && route.venue === 'LFJ_LB' && route.lfjTokenPath.length === 0) {
+    throw new Error('LFJ_LB route requires lfjTokenPath');
   }
   if (route.executionMode === 'EXACT_OUTPUT') {
     if (route.targetOutput <= 0n) {
@@ -136,6 +157,9 @@ export function encodeRoutePlanCallbackData(route: RoutePlanCallbackInput): `0x$
     tokenOut: route.tokenOut,
     uniPoolFee: route.pathKind === 'DIRECT' && route.quoteMetadata.venue === 'UNISWAP_V3' ? route.quoteMetadata.poolFee : 0,
     encodedPath: route.encodedPath ?? '0x',
+    lfjTokenPath: route.lfjPath?.tokenPath ?? [],
+    lfjBinSteps: route.lfjPath?.binSteps ?? [],
+    lfjVersions: route.lfjPath?.versions ?? [],
     limitSqrtPriceX96: route.limitSqrtPriceX96,
     minAmountOut: route.minAmountOut,
     targetOutput: route.targetOutput ?? route.requiredOutput ?? 0n,
@@ -153,6 +177,9 @@ export function encodeRoutePlanCallbackData(route: RoutePlanCallbackInput): `0x$
       tokenOut: routePlan.tokenOut,
       uniPoolFee: routePlan.uniPoolFee,
       encodedPath: routePlan.encodedPath,
+      lfjTokenPath: routePlan.lfjTokenPath,
+      lfjBinSteps: routePlan.lfjBinSteps.map((step) => BigInt(step)),
+      lfjVersions: routePlan.lfjVersions,
       limitSqrtPriceX96: routePlan.limitSqrtPriceX96,
       minAmountOut: routePlan.minAmountOut,
       targetOutput: routePlan.targetOutput,
@@ -173,6 +200,9 @@ export function decodeRoutePlanCallbackData(callbackData: `0x${string}`): Execut
     tokenOut: decoded.tokenOut,
     uniPoolFee: Number(decoded.uniPoolFee),
     encodedPath: decoded.encodedPath,
+    lfjTokenPath: [...decoded.lfjTokenPath],
+    lfjBinSteps: decoded.lfjBinSteps.map((step) => Number(step)),
+    lfjVersions: decoded.lfjVersions.map((version) => Number(version)),
     limitSqrtPriceX96: decoded.limitSqrtPriceX96,
     minAmountOut: decoded.minAmountOut,
     targetOutput: decoded.targetOutput,

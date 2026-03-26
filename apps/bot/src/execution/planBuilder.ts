@@ -106,6 +106,9 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     selectedExecutionMode: routeDecision.chosenRoute.executionMode ?? 'EXACT_INPUT',
     selectedPathKind: routeDecision.chosenRoute.pathKind,
     selectedHopCount: routeDecision.chosenRoute.hopCount,
+    selectedBridgeToken: routeDecision.chosenRoute.bridgeToken,
+    selectedPathDescriptor: routeDecision.chosenRoute.pathDescriptor,
+    selectedLfjPath: routeDecision.chosenRoute.lfjPath,
     selectedPathDirection: routeDecision.chosenRoute.pathDirection ?? 'FORWARD',
     selectedBlock: params.blockNumberish,
     resolveEnv: params.resolveEnv

@@ -29,7 +29,7 @@ export type ReplayRecord = {
   predictedEdgeOut: bigint;
   simResult: 'SIM_OK' | 'SIM_FAIL' | 'NOT_RUN';
   preparedExecution?: PreparedExecution;
-  chosenVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3';
+  chosenVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
   rejectedVenueSummaries?: RouteCandidateSummary[];
 };
 
@@ -54,7 +54,7 @@ export type ReplayRegressionSummary = {
   routeableUniOnly: number;
   routeableCamelotOnly: number;
   routeableBoth: number;
-  chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3', number>;
+  chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB', number>;
   averageBestRouteNetEdgeOut: bigint;
   camelotStrictImprovementCount: number;
 };
@@ -250,9 +250,10 @@ export async function runReplayRegression(params: {
   let routeableUniOnly = 0;
   let routeableCamelotOnly = 0;
   let routeableBoth = 0;
-  const chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3', number> = {
+  const chosenVenueCounts: Record<'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB', number> = {
     UNISWAP_V3: 0,
-    CAMELOT_AMMV3: 0
+    CAMELOT_AMMV3: 0,
+    LFJ_LB: 0
   };
   let aggregateBestRouteNetEdgeOut = 0n;
   let aggregateBestRouteCount = 0n;
@@ -286,14 +287,14 @@ export async function runReplayRegression(params: {
     ordersConsidered += 1;
 
     const baselineHasUni = baseline.alternativeRoutes.some((summary) => summary.venue === 'UNISWAP_V3' && summary.eligible);
-    const candidateHasCamelot = candidate.alternativeRoutes.some(
-      (summary) => summary.venue === 'CAMELOT_AMMV3' && summary.eligible
+    const candidateHasLfj = candidate.alternativeRoutes.some(
+      (summary) => summary.venue === 'LFJ_LB' && summary.eligible
     );
-    if (baselineHasUni && !candidateHasCamelot) {
+    if (baselineHasUni && !candidateHasLfj) {
       routeableUniOnly += 1;
-    } else if (!baselineHasUni && candidateHasCamelot) {
+    } else if (!baselineHasUni && candidateHasLfj) {
       routeableCamelotOnly += 1;
-    } else if (baselineHasUni && candidateHasCamelot) {
+    } else if (baselineHasUni && candidateHasLfj) {
       routeableBoth += 1;
     }
 

@@ -16,6 +16,7 @@ function parseCounterKey(key: string): { name: string; labels: string } {
 
 export function renderPrometheusMetrics(metrics: BotMetrics): string {
   const snapshot = metrics.snapshot();
+  const gauges = metrics.scrapeGauges();
   const lines: string[] = [];
 
   for (const [key, value] of Object.entries(snapshot.counters)) {
@@ -27,6 +28,10 @@ export function renderPrometheusMetrics(metrics: BotMetrics): string {
     const metricName = sanitizeMetricName(name);
     lines.push(`${metricName}{quantile="0.5"} ${quantiles.p50}`);
     lines.push(`${metricName}{quantile="0.95"} ${quantiles.p95}`);
+  }
+
+  for (const [name, value] of Object.entries(gauges)) {
+    lines.push(`${sanitizeMetricName(name)} ${value}`);
   }
 
   return `${lines.join('\n')}\n`;
