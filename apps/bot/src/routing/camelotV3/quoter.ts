@@ -35,6 +35,10 @@ export type CamelotAmmv3QuoterContext = {
   onRouteEvalFamilyEvaluated?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP', familyKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPruned?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPromoted?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
+  onRouteEvalFamilyDominant?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyDemoted?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyBestRejected?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyChosen?: (venue: 'CAMELOT_AMMV3', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
   onRouteEvalInfraError?: (
     category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
     venue: 'CAMELOT_AMMV3',
@@ -623,7 +627,8 @@ export class CamelotAmmv3Quoter {
         nearMissBps: policy.nearMissBps
       });
       const netEdgeOutExactOutput = grossEdgeOutExactOutput - gasCostOut - riskBufferOutExactOutput - profitFloorOut;
-      if (netEdgeOutExactOutput > netEdgeOut && netEdgeOutExactOutput > 0n) {
+      const directNearMissRequiredOutput = breakdown.nearMiss && quotedAmountOut < breakdown.requiredOutput;
+      if (netEdgeOutExactOutput > 0n && (netEdgeOutExactOutput > netEdgeOut || directNearMissRequiredOutput)) {
         return {
           ok: true,
           route: {

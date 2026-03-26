@@ -11,6 +11,7 @@ export type RoutePlanningPolicy = {
   feeTiers?: readonly UniV3FeeTier[];
   bridgeTokens?: readonly Address[];
   maxTwoHopFamiliesPerOrder?: number;
+  maxExtraFamiliesAfterDominantDirect?: number;
   slippageBufferBps?: bigint;
   effectiveGasPriceWei?: bigint;
   riskBufferBps?: bigint;
@@ -68,6 +69,10 @@ export type UniV3RoutingContext = {
   onRouteEvalFamilyEvaluated?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP', familyKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPruned?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPromoted?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
+  onRouteEvalFamilyDominant?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyDemoted?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyBestRejected?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyChosen?: (venue: 'UNISWAP_V3', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
   onRouteEvalInfraError?: (
     category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
     venue: 'UNISWAP_V3',

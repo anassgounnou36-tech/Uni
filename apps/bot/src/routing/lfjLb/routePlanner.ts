@@ -1,7 +1,7 @@
 import type { Address } from 'viem';
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from '../attemptTypes.js';
 import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from '../rejectedCandidateTypes.js';
-import type { RouteFamily } from '../familyTypes.js';
+import { computeDirectFamilyDominance, type RouteFamily } from '../familyTypes.js';
 import { LfjLbQuoter } from './quoter.js';
 import type { LfjLbPathShape, LfjLbRoutePlanningResult, LfjLbRoutingContext } from './types.js';
 import type { RouteEvalReadCache } from '../rpc/readCache.js';
@@ -198,7 +198,27 @@ export class LfjLbRoutePlanner {
       this.onRouteEvalFamilyPruned?.('LFJ_LB', 'TWO_HOP');
     }
 
-    const routeable = [directQuote, ...twoHopQuotes].filter((quote): quote is Extract<typeof quote, { ok: true }> => quote.ok);
+    type PlannerQuote = typeof directQuote | (typeof twoHopQuotes)[number];
+    const decorateDominance = (quote: PlannerQuote): PlannerQuote => {
+      const dominance = computeDirectFamilyDominance({
+        pathKind: quote.summary.pathKind,
+        status: quote.summary.status,
+        outputCoverageBps: quote.summary.hedgeGap?.outputCoverageBps,
+        exactOutputStatus: quote.summary.exactOutputViability?.status,
+        candidateClass: quote.summary.candidateClass,
+        nearMiss: quote.summary.constraintBreakdown?.nearMiss ?? quote.summary.hedgeGap?.nearMiss,
+        requiredShortfallOut:
+          quote.summary.hedgeGap?.requiredOutputShortfallOut ?? quote.summary.constraintBreakdown?.requiredOutputShortfallOut
+      });
+      quote.summary.dominanceScore = dominance.dominanceScore;
+      quote.summary.dominanceReason = dominance.dominanceReason;
+      return quote;
+    };
+    const decoratedDirectQuote = decorateDominance(directQuote);
+    const decoratedTwoHopQuotes = twoHopQuotes.map((quote) => decorateDominance(quote));
+    const routeable = [decoratedDirectQuote, ...decoratedTwoHopQuotes].filter(
+      (quote): quote is Extract<typeof quote, { ok: true }> => quote.ok
+    );
     if (routeable.length > 0) {
       const best = [...routeable].sort((a, b) => {
         if (a.route.netEdgeOut !== b.route.netEdgeOut) return a.route.netEdgeOut > b.route.netEdgeOut ? -1 : 1;
@@ -218,12 +238,14 @@ export class LfjLbRoutePlanner {
             best.route.pathKind === 'DIRECT'
               ? `LFJ_LB:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
               : `LFJ_LB:TWO_HOP:${tokenIn.toLowerCase()}:${(best.route.bridgeToken ?? '').toLowerCase()}:${tokenOut.toLowerCase()}`,
+          dominanceScore: best.summary.dominanceScore,
+          dominanceReason: best.summary.dominanceReason,
           exactOutputPromotedFromFamily: best.route.executionMode === 'EXACT_OUTPUT'
         }
       };
     }
 
-    const rejected = [directQuote, ...twoHopQuotes]
+    const rejected = [decoratedDirectQuote, ...decoratedTwoHopQuotes]
       .filter((quote): quote is Extract<typeof quote, { ok: false }> => !quote.ok)
       .map((quote) => ({ ...quote, summary: ensureRejectedCandidateClass(quote.summary as RejectedVenueRouteAttemptSummary) }))
       .sort((a, b) => {
@@ -266,6 +288,8 @@ export class LfjLbRoutePlanner {
             rejected.summary.pathKind === 'DIRECT'
               ? `LFJ_LB:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
               : `LFJ_LB:TWO_HOP:${tokenIn.toLowerCase()}:${(rejected.summary.bridgeToken ?? '').toLowerCase()}:${tokenOut.toLowerCase()}`,
+          dominanceScore: rejected.summary.dominanceScore,
+          dominanceReason: rejected.summary.dominanceReason,
           exactOutputPromotedFromFamily: rejected.summary.executionMode === 'EXACT_OUTPUT'
         }
       }

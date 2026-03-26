@@ -86,6 +86,7 @@ const baseSchema = z.object({
   INFRA_BLOCKED_RETRY_COOLDOWN_TICKS: z.coerce.number().int().positive().default(2),
   TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(9_800),
   MAX_TWO_HOP_FAMILIES_PER_ORDER: z.coerce.number().int().positive().default(2),
+  MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT: z.coerce.number().int().nonnegative().default(1),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
@@ -138,6 +139,7 @@ export type RuntimeConfig = {
   infraBlockedRetryCooldownTicks: number;
   twoHopUnlockMinCoverageBps: bigint;
   maxTwoHopFamiliesPerOrder: number;
+  maxExtraFamiliesAfterDominantDirect: number;
   maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
@@ -193,6 +195,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     infraBlockedRetryCooldownTicks: parsed.INFRA_BLOCKED_RETRY_COOLDOWN_TICKS,
     twoHopUnlockMinCoverageBps: BigInt(parsed.TWO_HOP_UNLOCK_MIN_COVERAGE_BPS),
     maxTwoHopFamiliesPerOrder: parsed.MAX_TWO_HOP_FAMILIES_PER_ORDER,
+    maxExtraFamiliesAfterDominantDirect: parsed.MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT,
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),

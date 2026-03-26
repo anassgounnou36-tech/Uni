@@ -316,4 +316,29 @@ describe('CamelotAmmv3RoutePlanner exact-output viability', () => {
     expect(result.failure.summary.constraintReason).toBe('PROFITABILITY_FLOOR');
     expect(result.failure.summary.exactOutputViability?.status).toBe('SATISFIABLE');
   });
+
+  it('promotes exact-output for direct near-miss when satisfiable', async () => {
+    const client = makeClient((call) => {
+      if (call.functionName === 'poolByPair') return pool;
+      if (call.functionName === 'quoteExactInputSingle') {
+        const amountIn = call.args?.[2];
+        if (amountIn === 1_000n) return [899n, 30] as const;
+        if (amountIn === 110n) return [115n, 30] as const;
+      }
+      if (call.functionName === 'quoteExactOutputSingle') return [890n, 30] as const;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new CamelotAmmv3RoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      univ3Factory,
+      univ3Quoter
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.route.executionMode).toBe('EXACT_OUTPUT');
+  });
 });

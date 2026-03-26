@@ -1217,4 +1217,46 @@ describe('RouteBook', () => {
     expect(selected.reason).toBe('RPC_FAILED');
     expect(selected.infraBlocked).toBe(true);
   });
+
+  it('limits extra family exploration after dominant direct family', async () => {
+    const dominant = makeRoute('UNISWAP_V3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 30n, quotedAmountOut: 1_020n });
+    const challenger = makeRoute('CAMELOT_AMMV3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 20n, quotedAmountOut: 1_010n });
+    const weak = makeRoute('LFJ_LB', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 10n, quotedAmountOut: 980n });
+    const routeBook = new RouteBook({
+      uniswapV3: plannerSuccess(dominant, 'UNISWAP_V3'),
+      camelotAmmv3: plannerSuccess(challenger, 'CAMELOT_AMMV3'),
+      lfjLb: plannerSuccess(weak, 'LFJ_LB'),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true,
+      maxExtraFamiliesAfterDominantDirect: 1
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: dominant.tokenIn, amount: 1_000n }, outputs: [{ token: dominant.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.venue).toBe('UNISWAP_V3');
+    const beaten = selected.alternativeRoutes.filter((candidate) => candidate.reason === 'BEAT_BY_HIGHER_NET_EDGE');
+    expect(beaten.some((candidate) => candidate.venue === 'CAMELOT_AMMV3')).toBe(true);
+    expect(beaten.some((candidate) => candidate.venue === 'LFJ_LB')).toBe(true);
+  });
+
+  it('tracks dominance fields for rejected summaries', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: plannerFailure('UNISWAP_V3', 'POOL_MISSING'),
+      camelotAmmv3: plannerFailure('CAMELOT_AMMV3', 'POOL_MISSING'),
+      lfjLb: plannerFailure('LFJ_LB', 'POOL_MISSING'),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.alternativeRoutes.every((candidate) => candidate.dominanceScore !== undefined)).toBe(true);
+  });
 });

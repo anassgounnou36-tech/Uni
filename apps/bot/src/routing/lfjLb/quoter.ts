@@ -378,7 +378,8 @@ export class LfjLbQuoter {
       const grossEdgeOutExactOutput = leftoverInput;
       const riskBufferOutExactOutput = policy.riskBufferOut + (grossEdgeOutExactOutput * policy.riskBufferBps) / 10_000n;
       const netEdgeOutExactOutput = grossEdgeOutExactOutput - gasCostOut - riskBufferOutExactOutput - profitFloorOut;
-      if (netEdgeOutExactOutput > netEdgeOut && netEdgeOutExactOutput > 0n) {
+      const directNearMissRequiredOutput = breakdown.nearMiss && quotedAmountOut < breakdown.requiredOutput;
+      if (netEdgeOutExactOutput > 0n && (netEdgeOutExactOutput > netEdgeOut || directNearMissRequiredOutput)) {
         const route: LfjLbRoutePlan = {
           venue: 'LFJ_LB',
           executionMode: 'EXACT_OUTPUT',

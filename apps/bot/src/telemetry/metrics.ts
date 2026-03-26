@@ -160,6 +160,35 @@ export class BotMetrics {
     );
   }
 
+  incrementRouteEvalFamilyDominant(venue: string, pathKind: string): void {
+    this.increment('route_eval_family_dominant_total');
+    this.increment(`route_eval_family_dominant_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
+  incrementRouteEvalFamilyPromotedEarly(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_promoted_early_total');
+    this.increment(
+      `route_eval_family_promoted_early_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
+  }
+
+  incrementRouteEvalFamilyDemoted(venue: string, pathKind: string): void {
+    this.increment('route_eval_family_demoted_total');
+    this.increment(`route_eval_family_demoted_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
+  incrementRouteEvalFamilyChosen(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_chosen_total');
+    this.increment(
+      `route_eval_family_chosen_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
+  }
+
+  incrementRouteEvalFamilyBestRejected(venue: string, pathKind: string): void {
+    this.increment('route_eval_family_best_rejected_total');
+    this.increment(`route_eval_family_best_rejected_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
   incrementOrderEvalRevertedProbeBudgetExhausted(): void {
     this.increment('order_eval_reverted_probe_budget_exhausted_total');
   }

@@ -146,4 +146,29 @@ describe('LfjLbRoutePlanner', () => {
     await planner.planBestRoute(input);
     expect(revertedCalls).toBe(1);
   });
+
+  it('lfj_two_hop_stays_disabled_by_default', async () => {
+    let twoHopQuoteCalls = 0;
+    const client = makeClient((call) => {
+      if (call.functionName === 'getLBPairInformation') return [pool, 20n, 0, false] as const;
+      if (call.functionName === 'findBestPathFromAmountIn') {
+        const route = call.args?.[0] as { tokenPath?: string[] } | undefined;
+        if (route?.tokenPath?.length === 3) twoHopQuoteCalls += 1;
+        return [920n, [], [], [20n], [1n]] as const;
+      }
+      if (call.functionName === 'findBestPathFromAmountOut') return [890n, [], [], [20n], [1n]] as const;
+      throw new Error(`unexpected call ${call.functionName}`);
+    });
+    const planner = new LfjLbRoutePlanner({
+      client,
+      enabled: true,
+      factory,
+      quoter,
+      router,
+      bridgeTokens: [bridge]
+    });
+    const result = await planner.planBestRoute(routeInput());
+    expect(result.ok).toBe(true);
+    expect(twoHopQuoteCalls).toBe(0);
+  });
 });

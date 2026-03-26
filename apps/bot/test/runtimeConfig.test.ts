@@ -32,6 +32,7 @@ describe('runtime config', () => {
     expect(config.maxLfjTwoHopFamiliesPerOrder).toBe(2);
     expect(config.twoHopUnlockMinCoverageBps).toBe(9_800n);
     expect(config.maxTwoHopFamiliesPerOrder).toBe(2);
+    expect(config.maxExtraFamiliesAfterDominantDirect).toBe(1);
     expect(config.maxRevertedProbesPerOrder).toBe(3);
   });
 

@@ -276,6 +276,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -324,6 +325,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -374,6 +376,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -387,6 +390,19 @@ export async function buildRuntimeFromConfig(
         }),
       enableCamelotAmmv3: config.enableCamelotAmmv3,
       enableLfjLb: config.enableLfjLb,
+      maxExtraFamiliesAfterDominantDirect: config.maxExtraFamiliesAfterDominantDirect,
+      onRouteEvalFamilyDominant: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyDominant(venue, pathKind);
+      },
+      onRouteEvalFamilyDemoted: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyDemoted(venue, pathKind);
+      },
+      onRouteEvalFamilyBestRejected: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyBestRejected(venue, pathKind);
+      },
+      onRouteEvalFamilyChosen: (venue, pathKind, executionMode) => {
+        metrics.incrementRouteEvalFamilyChosen(venue, pathKind, executionMode);
+      },
       maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };

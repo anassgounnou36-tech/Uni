@@ -279,6 +279,9 @@ export function formatReplayOutput(params: {
   replayRecord: Awaited<ReturnType<typeof runReplay>>[number] | undefined;
 }) {
   const bestRejected = params.replayRecord?.rejectedVenueSummaries?.find((summary) => !summary.eligible);
+  const chosenCandidate = params.replayRecord?.rejectedVenueSummaries?.find(
+    (summary) => summary.eligible && summary.venue === params.replayRecord?.chosenVenue
+  );
   return {
     source: params.source,
     orderHash: params.orderHash,
@@ -289,10 +292,12 @@ export function formatReplayOutput(params: {
       bestRejected as { exactOutputViability?: { status?: ExactOutputViabilityStatus } } | undefined
     )?.exactOutputViability?.status,
     gapClass: (bestRejected as { hedgeGap?: { gapClass?: HedgeGapClass } } | undefined)?.hedgeGap?.gapClass,
-    familyKind: bestRejected?.familyKind,
-    probePriority: bestRejected?.probePriority,
-    familyKey: bestRejected?.familyKey,
-    exactOutputPromotedFromFamily: bestRejected?.exactOutputPromotedFromFamily,
+    familyKind: chosenCandidate?.familyKind ?? bestRejected?.familyKind,
+    probePriority: chosenCandidate?.probePriority ?? bestRejected?.probePriority,
+    familyKey: chosenCandidate?.familyKey ?? bestRejected?.familyKey,
+    dominanceScore: chosenCandidate?.dominanceScore ?? bestRejected?.dominanceScore,
+    dominanceReason: chosenCandidate?.dominanceReason ?? bestRejected?.dominanceReason,
+    exactOutputPromotedFromFamily: chosenCandidate?.exactOutputPromotedFromFamily ?? bestRejected?.exactOutputPromotedFromFamily,
     bestRejectedVenue: bestRejected?.venue,
     bestRejectedPathKind: bestRejected?.pathKind,
     bestRejectedBridgeToken: bestRejected?.bridgeToken,
