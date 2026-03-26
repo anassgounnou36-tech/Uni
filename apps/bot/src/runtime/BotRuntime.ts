@@ -33,6 +33,7 @@ import {
 } from '../routing/rejectedCandidateTypes.js';
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
+import type { OrderState } from '../domain/orderState.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -85,6 +86,17 @@ export class BotRuntime {
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
   private schedulerTickCounter = 0;
+  private static readonly TERMINAL_ORDER_STATES = new Set<OrderState>([
+    'PREPARE_FAILED',
+    'DROPPED',
+    'UNSUPPORTED',
+    'LANDED',
+    'LOST',
+    'EXPIRED',
+    'CANCELED',
+    'REVERTED'
+  ]);
+
   constructor(private readonly deps: BotRuntimeDeps) {
     this.logger = deps.logger ?? new JsonConsoleLogger();
   }
@@ -115,6 +127,26 @@ export class BotRuntime {
 
   private getPolicyInflightCount(): number {
     return this.deps.inflightTracker.getInflightCount();
+  }
+
+  private isTerminalOrderState(state: OrderState): boolean {
+    return BotRuntime.TERMINAL_ORDER_STATES.has(state);
+  }
+
+  private removeQueuedEntries(orderHash: `0x${string}`): void {
+    for (let i = this.hotQueue.length - 1; i >= 0; i -= 1) {
+      if (this.hotQueue[i]?.orderHash === orderHash) {
+        this.hotQueue.splice(i, 1);
+      }
+    }
+  }
+
+  private logTerminalOrderSkipped(orderHash: `0x${string}`, state: OrderState, attemptedAction: string): void {
+    this.logger.log('warn', 'terminal_order_skipped', {
+      orderHash,
+      state,
+      attemptedAction
+    });
   }
 
   private toJournalFeeTierAttempt(summary: FeeTierAttemptSummary): {
@@ -696,6 +728,13 @@ export class BotRuntime {
       if (!record?.normalizedOrder) {
         continue;
       }
+      if (this.isTerminalOrderState(record.state)) {
+        this.logTerminalOrderSkipped(orderHash, record.state, 'scheduler_processing');
+        continue;
+      }
+      if (record.state !== 'SUPPORTED') {
+        continue;
+      }
       const resolveSnapshot = scheduler.resolveEnvProvider
         ? await scheduler.resolveEnvProvider.getCurrent().catch(() => undefined)
         : undefined;
@@ -945,6 +984,11 @@ export class BotRuntime {
         this.hotQueue.splice(index, 1);
         continue;
       }
+      if (this.isTerminalOrderState(record.state)) {
+        this.logTerminalOrderSkipped(queued.orderHash, record.state, 'hot_lane_queue_processing');
+        this.removeQueuedEntries(queued.orderHash);
+        continue;
+      }
       if (record.state !== 'SCHEDULED' && record.state !== 'PLAN_BUILT') {
         this.hotQueue.splice(index, 1);
         continue;
@@ -1011,6 +1055,21 @@ export class BotRuntime {
           this.deps.inflightTracker.markResolved(queued.orderHash);
         }
         index += 1;
+        continue;
+      }
+
+      const latestRecordBeforePlanBuild = await this.deps.store.get(queued.orderHash);
+      if (!latestRecordBeforePlanBuild?.normalizedOrder) {
+        this.removeQueuedEntries(queued.orderHash);
+        continue;
+      }
+      if (this.isTerminalOrderState(latestRecordBeforePlanBuild.state)) {
+        this.logTerminalOrderSkipped(queued.orderHash, latestRecordBeforePlanBuild.state, 'plan_build_transition');
+        this.removeQueuedEntries(queued.orderHash);
+        continue;
+      }
+      if (latestRecordBeforePlanBuild.state !== 'SCHEDULED' && latestRecordBeforePlanBuild.state !== 'PLAN_BUILT') {
+        this.removeQueuedEntries(queued.orderHash);
         continue;
       }
 
@@ -1185,6 +1244,7 @@ export class BotRuntime {
       }
 
       if (decision.action === 'DROP') {
+        let removedQueuedEntries = false;
         const hotResolveEnv = this.deps.hotLaneContext?.resolveEnv;
         const hotResolveSnapshot = hotResolveEnv
           ? {
@@ -1200,6 +1260,8 @@ export class BotRuntime {
           await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
         } else if (decision.reason === 'PREPARE_FAILED') {
           await this.deps.store.transition(queued.orderHash, 'PREPARE_FAILED', decision.reason);
+          this.removeQueuedEntries(queued.orderHash);
+          removedQueuedEntries = true;
         } else if (decision.reason === 'INFRA_BLOCKED') {
           await this.deps.store.transition(queued.orderHash, 'SUPPORTED', 'INFRA_BLOCKED');
           this.deps.ingress.requeueForScheduling(queued.orderHash);
@@ -1261,6 +1323,9 @@ export class BotRuntime {
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);
+        if (removedQueuedEntries) {
+          continue;
+        }
       }
 
       this.hotQueue.splice(index, 1);

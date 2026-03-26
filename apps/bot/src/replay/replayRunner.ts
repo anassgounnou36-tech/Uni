@@ -287,14 +287,14 @@ export async function runReplayRegression(params: {
     ordersConsidered += 1;
 
     const baselineHasUni = baseline.alternativeRoutes.some((summary) => summary.venue === 'UNISWAP_V3' && summary.eligible);
-    const candidateHasLfj = candidate.alternativeRoutes.some(
-      (summary) => summary.venue === 'LFJ_LB' && summary.eligible
+    const candidateHasSecondaryRouteableVenue = candidate.alternativeRoutes.some(
+      (summary) => summary.venue !== 'UNISWAP_V3' && summary.eligible
     );
-    if (baselineHasUni && !candidateHasLfj) {
+    if (baselineHasUni && !candidateHasSecondaryRouteableVenue) {
       routeableUniOnly += 1;
-    } else if (!baselineHasUni && candidateHasLfj) {
+    } else if (!baselineHasUni && candidateHasSecondaryRouteableVenue) {
       routeableCamelotOnly += 1;
-    } else if (baselineHasUni && candidateHasLfj) {
+    } else if (baselineHasUni && candidateHasSecondaryRouteableVenue) {
       routeableBoth += 1;
     }
 
