@@ -37,6 +37,7 @@ describe('runtime config', () => {
     expect(config.maxExtraSameVenueChallengersAfterOtherVenuesMissing).toBe(2);
     expect(config.routeEvalCacheMaxEntries).toBe(4096);
     expect(config.routeEvalNegativeCacheMaxEntries).toBe(2048);
+    expect(config.maxCandidateBlocksPerOrder).toBe(7);
     expect(config.maxRevertedProbesPerOrder).toBe(3);
   });
 

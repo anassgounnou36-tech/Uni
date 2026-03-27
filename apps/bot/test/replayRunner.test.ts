@@ -111,6 +111,7 @@ describe('replay runner', () => {
         ],
         thresholdOut: 1n,
         candidateBlockOffsets: [0n, 1n, 2n],
+        maxCandidateBlocksPerOrder: 7,
         competeWindowBlocks: 2n
       },
       routeBook,

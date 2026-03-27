@@ -10,6 +10,7 @@ import { decodeSignedOrder } from './decode.js';
 import { DeadlineReachedError, InvalidCosignerInputError, InvalidCosignerOutputError, NoExclusiveOverrideError } from './errors.js';
 import { computeCosignerDigest, computeOrderHash } from './hash.js';
 import { applyGasAdjustment } from './gasAdjustment.js';
+import { getOrderDecayEndBlock } from './decay.js';
 import { resolveAt, resolveSignedOrder, validateOrder } from './resolve.js';
 import { classifySupport } from './supportPolicy.js';
 import type { SignedV3DutchOrder, SupportPolicyV1, V3DutchOrder } from './types.js';
@@ -335,6 +336,42 @@ describe('v3dutch parity mirror', () => {
     expect(atDecayStart.input.amount).toEqual(1_000_000n);
     expect(afterDecay.input.amount).toBeLessThan(atDecayStart.input.amount);
     expect(afterDecay.outputs[0]?.amount).toBeLessThanOrEqual(atDecayStart.outputs[0]?.amount ?? 0n);
+  });
+
+  it('computes order decay end block from curve points across input and outputs', async () => {
+    const order = await makeTestOrder({
+      cosignerData: {
+        decayStartBlock: 1234n,
+        exclusiveFiller: ZERO_ADDRESS,
+        exclusivityOverrideBps: 0n,
+        inputAmount: 0n,
+        outputAmounts: [0n]
+      },
+      baseInput: {
+        token: '0x82af49447d8a07e3bd95bd0d56f35241523fbab1',
+        startAmount: 1_000_000n,
+        curve: {
+          relativeBlocks: (10n << 0n) | (25n << 16n),
+          relativeAmounts: [100_000n, 300_000n]
+        },
+        maxAmount: 1_300_000n,
+        adjustmentPerGweiBaseFee: 1_000n
+      },
+      baseOutputs: [
+        {
+          token: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+          startAmount: 1_800_000n,
+          curve: {
+            relativeBlocks: (7n << 0n) | (40n << 16n),
+            relativeAmounts: [200_000n, 500_000n]
+          },
+          recipient: '0x1111111111111111111111111111111111111111',
+          minAmount: 1_500_000n,
+          adjustmentPerGweiBaseFee: 2_000n
+        }
+      ]
+    });
+    expect(getOrderDecayEndBlock(order)).toBe(1274n);
   });
 
   it('classifies support policy and unsupported exotic shape explicitly', async () => {

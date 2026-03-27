@@ -1,6 +1,13 @@
 import { InvalidDecayCurveError } from './errors.js';
 import { bound, boundedSub, mulDivDown, mulDivUp } from './gasAdjustment.js';
-import type { NonlinearDutchDecay, ResolvedInput, ResolvedOutput, V3DutchInput, V3DutchOutput } from './types.js';
+import type {
+  NonlinearDutchDecay,
+  ResolvedInput,
+  ResolvedOutput,
+  V3DutchInput,
+  V3DutchOrder,
+  V3DutchOutput
+} from './types.js';
 
 function min(a: bigint, b: bigint): bigint {
   return a < b ? a : b;
@@ -8,6 +15,28 @@ function min(a: bigint, b: bigint): bigint {
 
 function getPackedUint16(value: bigint, index: number): bigint {
   return (value >> BigInt(index * 16)) & 0xffffn;
+}
+
+export function getCurvePoints(curve: NonlinearDutchDecay): bigint[] {
+  return curve.relativeAmounts.map((_, index) => getPackedUint16(curve.relativeBlocks, index));
+}
+
+export function getCurveEndRelativeBlock(curve: NonlinearDutchDecay): bigint {
+  const points = getCurvePoints(curve);
+  if (points.length === 0) {
+    return 0n;
+  }
+  return points.reduce((max, point) => (point > max ? point : max), 0n);
+}
+
+export function getOrderDecayEndBlock(order: V3DutchOrder): bigint {
+  const inputEnd = getCurveEndRelativeBlock(order.baseInput.curve);
+  const outputEnd = order.baseOutputs.reduce((max, output) => {
+    const end = getCurveEndRelativeBlock(output.curve);
+    return end > max ? end : max;
+  }, 0n);
+  const maxRelative = inputEnd > outputEnd ? inputEnd : outputEnd;
+  return order.cosignerData.decayStartBlock + maxRelative;
 }
 
 export function locateCurvePosition(

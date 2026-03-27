@@ -43,6 +43,7 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     hotLaneCadenceMs: 100,
     candidateBlocks: [1000n, 1001n],
     candidateBlockOffsets: [0n, 1n],
+    maxCandidateBlocksPerOrder: 7,
     competeWindowBlocks: 2n,
     thresholdOut: 1n,
 

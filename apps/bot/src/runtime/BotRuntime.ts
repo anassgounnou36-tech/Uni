@@ -785,6 +785,7 @@ export class BotRuntime {
         baseEnv: scheduler.resolveEnv,
         routeBook: scheduler.routeBook,
         candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
+        maxCandidateBlocksPerOrder: this.deps.config.maxCandidateBlocksPerOrder,
         routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
         routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
         onRouteEvalCacheStats: (stats) => {

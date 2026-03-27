@@ -80,6 +80,7 @@ const baseSchema = z.object({
   HOT_LANE_CADENCE_MS: z.coerce.number().int().positive().default(200),
   CANDIDATE_BLOCKS: z.string().optional(),
   CANDIDATE_BLOCK_OFFSETS: z.string().default('0,1,2'),
+  MAX_CANDIDATE_BLOCKS_PER_ORDER: z.coerce.number().int().positive().default(7),
   COMPETE_WINDOW_BLOCKS: z.string().default('2'),
   THRESHOLD_OUT: z.string().default('1'),
   ROUTE_EVAL_MAX_CONCURRENCY: z.coerce.number().int().positive().default(4),
@@ -137,6 +138,7 @@ export type RuntimeConfig = {
   schedulerCadenceMs: number;
   hotLaneCadenceMs: number;
   candidateBlockOffsets: bigint[];
+  maxCandidateBlocksPerOrder?: number;
   competeWindowBlocks: bigint;
   thresholdOut: bigint;
   routeEvalMaxConcurrency: number;
@@ -197,6 +199,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     schedulerCadenceMs: parsed.SCHEDULER_CADENCE_MS,
     hotLaneCadenceMs: parsed.HOT_LANE_CADENCE_MS,
     candidateBlockOffsets: parseBigIntList(parsed.CANDIDATE_BLOCK_OFFSETS),
+    maxCandidateBlocksPerOrder: parsed.MAX_CANDIDATE_BLOCKS_PER_ORDER,
     competeWindowBlocks: parseBigInt(parsed.COMPETE_WINDOW_BLOCKS, 'COMPETE_WINDOW_BLOCKS'),
     thresholdOut: parseBigInt(parsed.THRESHOLD_OUT, 'THRESHOLD_OUT'),
     routeEvalMaxConcurrency: parsed.ROUTE_EVAL_MAX_CONCURRENCY,
