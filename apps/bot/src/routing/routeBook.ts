@@ -459,6 +459,7 @@ export class RouteBook {
         pathKind: 'DIRECT' | 'TWO_HOP',
         margin: number
       ) => void;
+      onRouteEvalFamilyRegistrySize?: (size: number) => void;
     }
   ) {}
 
@@ -762,6 +763,7 @@ export class RouteBook {
         familyBest.set(key, route);
       }
     }
+    this.planners.onRouteEvalFamilyRegistrySize?.(familyBest.size);
     const candidates = [...familyBest.values()];
     for (const route of candidates) {
       bumpFamilyStats(
@@ -865,10 +867,11 @@ export class RouteBook {
         .filter((entry) => !filtered.includes(entry))
         .forEach((entry) => this.planners.onRouteEvalFamilyDemoted?.(entry.route.venue, entry.route.pathKind));
     }
+    const provisional = filtered[0]?.route ?? dominantDirect?.route ?? withDominance[0]!.route;
     this.planners.onRouteEvalFamilyProvisionalWinner?.(
-      (filtered[0]?.route ?? dominantDirect?.route ?? withDominance[0]!.route).venue,
-      (filtered[0]?.route ?? dominantDirect?.route ?? withDominance[0]!.route).pathKind,
-      ((filtered[0]?.route ?? dominantDirect?.route ?? withDominance[0]!.route).executionMode ?? 'EXACT_INPUT') as
+      provisional.venue,
+      provisional.pathKind,
+      (provisional.executionMode ?? 'EXACT_INPUT') as
         | 'EXACT_INPUT'
         | 'EXACT_OUTPUT'
     );

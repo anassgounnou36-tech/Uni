@@ -415,6 +415,9 @@ export async function buildRuntimeFromConfig(
       onRouteEvalFamilyDominanceMargin: (venue, pathKind, margin) => {
         metrics.observeRouteEvalFamilyDominanceMargin(venue, pathKind, margin);
       },
+      onRouteEvalFamilyRegistrySize: (size) => {
+        metrics.setGauge('route_eval_family_registry_entries', size);
+      },
       maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };

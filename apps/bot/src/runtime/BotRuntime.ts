@@ -85,7 +85,10 @@ export class BotRuntime {
   private readonly hotQueue: ScheduledOrder[] = [];
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
+  private maintenanceTickCounter = 0;
   private schedulerTickCounter = 0;
+  private static readonly HOT_QUEUE_MAX_ENTRIES = 10_000;
+  private static readonly MAINTENANCE_SWEEP_EVERY_TICKS = 20;
   private static readonly TERMINAL_ORDER_STATES = new Set<OrderState>([
     'PREPARE_FAILED',
     'DROPPED',
@@ -139,6 +142,38 @@ export class BotRuntime {
         this.hotQueue.splice(i, 1);
       }
     }
+  }
+
+  private removeOrderTracking(orderHash: `0x${string}`): void {
+    this.removeQueuedEntries(orderHash);
+    this.blockedRetryByOrder.delete(orderHash);
+    this.deps.inflightTracker.markResolved(orderHash);
+  }
+
+  private observeRuntimeGaugeSnapshot(): void {
+    this.deps.metrics.setGauge('hot_queue_size', this.hotQueue.length);
+    this.deps.metrics.setGauge('tracked_orders_size', this.blockedRetryByOrder.size);
+    const mem = process.memoryUsage();
+    this.deps.metrics.setGauge('process_resident_memory_bytes', mem.rss);
+    this.deps.metrics.setGauge('process_heap_used_bytes', mem.heapUsed);
+  }
+
+  private async runMaintenanceSweep(): Promise<void> {
+    for (const [orderHash] of this.blockedRetryByOrder) {
+      const record = await this.deps.store.get(orderHash).catch(() => undefined);
+      if (!record || this.isTerminalOrderState(record.state)) {
+        this.blockedRetryByOrder.delete(orderHash);
+      }
+    }
+    for (let i = this.hotQueue.length - 1; i >= 0; i -= 1) {
+      const orderHash = this.hotQueue[i]?.orderHash;
+      if (!orderHash) continue;
+      const record = await this.deps.store.get(orderHash).catch(() => undefined);
+      if (!record || this.isTerminalOrderState(record.state)) {
+        this.hotQueue.splice(i, 1);
+      }
+    }
+    this.observeRuntimeGaugeSnapshot();
   }
 
   private logTerminalOrderSkipped(orderHash: `0x${string}`, state: OrderState, attemptedAction: string): void {
@@ -711,11 +746,16 @@ export class BotRuntime {
 
   private async schedulerTick(): Promise<void> {
     this.deps.metrics.increment('bot_runtime_ticks_total');
+    this.observeRuntimeGaugeSnapshot();
     const scheduler = this.deps.schedulerContext;
     if (!scheduler) {
       return;
     }
     this.schedulerTickCounter += 1;
+    this.maintenanceTickCounter += 1;
+    if (this.maintenanceTickCounter % BotRuntime.MAINTENANCE_SWEEP_EVERY_TICKS === 0) {
+      await this.runMaintenanceSweep();
+    }
 
     for (const orderHash of this.deps.ingress.dequeueForScheduling()) {
       const blockedRetry = this.blockedRetryByOrder.get(orderHash);
@@ -730,6 +770,7 @@ export class BotRuntime {
       }
       if (this.isTerminalOrderState(record.state)) {
         this.logTerminalOrderSkipped(orderHash, record.state, 'scheduler_processing');
+        this.removeOrderTracking(orderHash);
         continue;
       }
       if (record.state !== 'SUPPORTED') {
@@ -744,6 +785,13 @@ export class BotRuntime {
         baseEnv: scheduler.resolveEnv,
         routeBook: scheduler.routeBook,
         candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
+        routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
+        routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
+        onRouteEvalCacheStats: (stats) => {
+          this.deps.metrics.setGauge('route_eval_cache_entries', stats.entries);
+          this.deps.metrics.setGauge('route_eval_negative_cache_entries', stats.negativeEntries);
+          this.deps.metrics.setGauge('route_eval_cache_snapshots', stats.snapshots);
+        },
         threshold: this.deps.config.thresholdOut,
         competeWindowBlocks: this.deps.config.competeWindowBlocks
       });
@@ -976,6 +1024,10 @@ export class BotRuntime {
         competeWindowEnd: schedule.competeWindowEnd,
         predictedEdgeOut: schedule.chosenRoute.netEdgeOut
       });
+      while (this.hotQueue.length > BotRuntime.HOT_QUEUE_MAX_ENTRIES) {
+        this.hotQueue.shift();
+      }
+      this.observeRuntimeGaugeSnapshot();
       this.deps.metrics.increment('orders_scheduled_total');
       this.deps.metrics.increment(`route_chosen_total{venue="${schedule.chosenRoute.venue}"}`);
       this.deps.metrics.observeHistogram('first_seen_to_scheduled_ms', Math.max(0, Date.now() - record.firstSeenAtMs));
@@ -1055,6 +1107,10 @@ export class BotRuntime {
       if (liveAttemptTracking) {
         this.deps.inflightTracker.markAttempted(queued.orderHash);
       }
+      const routeEvalReadCache = new RouteEvalReadCache({
+        maxEntries: this.deps.config.routeEvalCacheMaxEntries,
+        maxNegativeEntries: this.deps.config.routeEvalNegativeCacheMaxEntries
+      });
 
       const decision = await runHotLaneStep({
         entry: queued,
@@ -1071,8 +1127,11 @@ export class BotRuntime {
         nonceManager: hotLane.nonceManager,
         executionPreparer: hotLane.executionPreparer,
         shadowMode: policy.mode !== 'LIVE',
-        routeEvalReadCache: new RouteEvalReadCache()
+        routeEvalReadCache
       });
+      this.deps.metrics.setGauge('route_eval_cache_entries', routeEvalReadCache.getEntryCount());
+      this.deps.metrics.setGauge('route_eval_negative_cache_entries', routeEvalReadCache.getNegativeEntryCount());
+      this.deps.metrics.setGauge('route_eval_cache_snapshots', routeEvalReadCache.getSnapshotCount());
 
       if (decision.action === 'WAIT') {
         if (liveAttemptTracking) {
@@ -1138,8 +1197,8 @@ export class BotRuntime {
         });
       }
       if (decision.action === 'DROP' && decision.reason === 'PREPARE_FAILED') {
-        const error = decision.prepareError ?? 'PrepareError';
-        const message = decision.prepareMessage ?? 'executionPreparer failed';
+        const error = (decision.prepareError ?? 'PrepareError').trim() || 'PrepareError';
+        const message = (decision.prepareMessage ?? 'executionPreparer failed').trim() || 'executionPreparer failed';
         this.deps.metrics.incrementOrdersPrepareFailed(decision.chosenRouteVenue, decision.pathKind, decision.executionMode);
         this.deps.metrics.increment(`prepare_failure_reason_total{reason="${error}"}`);
         await this.deps.journal.append({
@@ -1282,8 +1341,10 @@ export class BotRuntime {
           : undefined;
         if (decision.simResult && !decision.simResult.ok) {
           await this.deps.store.transition(queued.orderHash, 'SIM_FAIL', decision.simResult.reason);
+          this.blockedRetryByOrder.delete(queued.orderHash);
         } else if (decision.reason === 'PREPARE_FAILED') {
           await this.deps.store.transition(queued.orderHash, 'PREPARE_FAILED', decision.reason);
+          this.blockedRetryByOrder.delete(queued.orderHash);
           this.removeQueuedEntries(queued.orderHash);
           removedQueuedEntries = true;
         } else if (decision.reason === 'INFRA_BLOCKED') {
@@ -1305,13 +1366,15 @@ export class BotRuntime {
           });
         } else {
           await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
+          this.blockedRetryByOrder.delete(queued.orderHash);
         }
         if (decision.reason !== 'INFRA_BLOCKED') {
           this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
         }
-        if (decision.reason === 'INFRA_BLOCKED') {
+      if (decision.reason === 'INFRA_BLOCKED') {
           this.deps.inflightTracker.markResolved(queued.orderHash);
           this.hotQueue.splice(index, 1);
+          this.observeRuntimeGaugeSnapshot();
           continue;
         }
         const droppedErrorContext =
@@ -1348,11 +1411,13 @@ export class BotRuntime {
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);
         if (removedQueuedEntries) {
+          this.observeRuntimeGaugeSnapshot();
           continue;
         }
       }
 
       this.hotQueue.splice(index, 1);
+      this.observeRuntimeGaugeSnapshot();
     }
   }
 }

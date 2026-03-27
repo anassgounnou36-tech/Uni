@@ -73,6 +73,9 @@ export type FirstProfitableBlockParams = {
   candidateBlocks?: readonly bigint[];
   threshold: bigint;
   competeWindowBlocks: bigint;
+  routeEvalCacheMaxEntries?: number;
+  routeEvalNegativeCacheMaxEntries?: number;
+  onRouteEvalCacheStats?: (stats: { entries: number; negativeEntries: number; snapshots: number }) => void;
 };
 
 function totalOutputAmount(resolved: ResolvedV3DutchOrder): bigint {
@@ -93,7 +96,10 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
     ? (params.candidateBlockOffsets ?? [0n, 1n, 2n]).map((offset) => currentEnv.blockNumberish + offset)
     : (params.candidateBlocks ?? []);
 
-  const readCache = new RouteEvalReadCache();
+  const readCache = new RouteEvalReadCache({
+    maxEntries: params.routeEvalCacheMaxEntries,
+    maxNegativeEntries: params.routeEvalNegativeCacheMaxEntries
+  });
   for (const block of [...candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
     const resolved = await resolveAt(params.order, {
       ...baseEnv,
@@ -107,6 +113,11 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         blockNumberish: block,
         readCache
       }
+    });
+    params.onRouteEvalCacheStats?.({
+      entries: readCache.getEntryCount(),
+      negativeEntries: readCache.getNegativeEntryCount(),
+      snapshots: readCache.getSnapshotCount()
     });
     if (!routeResult.ok) {
       const bestRejectedSummary = routeResult.bestRejectedSummary ? { ...routeResult.bestRejectedSummary } : undefined;

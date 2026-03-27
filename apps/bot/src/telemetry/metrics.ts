@@ -13,6 +13,7 @@ export type MetricsSnapshot = {
   realizedPnl: bigint;
   gasPerLandedFill: Quantiles;
   histograms: Record<string, Quantiles>;
+  gauges: Record<string, number>;
 };
 
 function quantile(values: readonly number[], q: number): number {
@@ -32,17 +33,23 @@ function makeQuantiles(values: readonly number[]): Quantiles {
 }
 
 export class BotMetrics {
+  private static readonly MAX_HISTOGRAM_SAMPLES = 5_000;
   private readonly counters = new Map<string, number>();
   private readonly ingestToSendLatencies: number[] = [];
   private readonly simLatencies: number[] = [];
   private readonly gasPerFill: number[] = [];
   private readonly histograms = new Map<string, number[]>();
+  private readonly gauges = new Map<string, number>();
   private realizedPnl = 0n;
   private readonly startTimeUnixSeconds = Math.floor(Date.now() / 1000);
   private readonly startMonotonicMs = performance.now();
 
   increment(name: string, value: number = 1): void {
     this.counters.set(name, (this.counters.get(name) ?? 0) + value);
+  }
+
+  setGauge(name: string, value: number): void {
+    this.gauges.set(name, value);
   }
 
   incrementRouteCandidate(venue: string, result: string): void {
@@ -270,6 +277,9 @@ export class BotMetrics {
   observeHistogram(name: string, value: number): void {
     const values = this.histograms.get(name) ?? [];
     values.push(value);
+    if (values.length > BotMetrics.MAX_HISTOGRAM_SAMPLES) {
+      values.splice(0, values.length - BotMetrics.MAX_HISTOGRAM_SAMPLES);
+    }
     this.histograms.set(name, values);
   }
 
@@ -283,7 +293,8 @@ export class BotMetrics {
       simLatencyMs: makeQuantiles(this.simLatencies),
       realizedPnl: this.realizedPnl,
       gasPerLandedFill: makeQuantiles(this.gasPerFill),
-      histograms
+      histograms,
+      gauges: Object.fromEntries(this.gauges.entries())
     };
   }
 
@@ -291,7 +302,8 @@ export class BotMetrics {
     const uptimeSeconds = Math.max(0, Math.floor((performance.now() - this.startMonotonicMs) / 1000));
     return {
       bot_start_time_unix_seconds: this.startTimeUnixSeconds,
-      bot_uptime_seconds: uptimeSeconds
+      bot_uptime_seconds: uptimeSeconds,
+      ...Object.fromEntries(this.gauges.entries())
     };
   }
 }

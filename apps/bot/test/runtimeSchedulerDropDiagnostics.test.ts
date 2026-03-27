@@ -1310,4 +1310,63 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       attemptedAction: 'plan_build_transition'
     });
   });
+
+  it('scheduler terminal orders are removed from blocked retry tracking during maintenance sweep', async () => {
+    const payload = makePayload();
+    const { runtime, store, ingress } = makeRuntime({
+      config: runtimeConfig({ thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeRouteBook()
+    });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    await store.transition(payload.orderHash, 'DROPPED', 'SCHEDULER_NO_EDGE');
+    const blockedRetryMap = (runtime as unknown as { blockedRetryByOrder: Map<`0x${string}`, unknown> }).blockedRetryByOrder;
+    blockedRetryMap.set(payload.orderHash, { nextEligibleTick: 999, reason: 'RPC_FAILED' });
+    await (runtime as unknown as { runMaintenanceSweep: () => Promise<void> }).runMaintenanceSweep();
+    expect(blockedRetryMap.has(payload.orderHash)).toBe(false);
+  });
+
+  it('hot queue is bounded and stale terminal entries are swept', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n)
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    await store.transition(payload.orderHash, 'PREPARE_FAILED', 'PREPARE_FAILED');
+    const hotQueueRef = runtime as unknown as { hotQueue: Array<{ orderHash: `0x${string}`; scheduledBlock: bigint; competeWindowEnd: bigint; predictedEdgeOut: bigint }> };
+    for (let i = 0; i < 10_050; i += 1) {
+      hotQueueRef.hotQueue.push({
+        orderHash: payload.orderHash,
+        scheduledBlock: 1000n,
+        competeWindowEnd: 1002n,
+        predictedEdgeOut: 1n
+      });
+    }
+    await (runtime as unknown as { runMaintenanceSweep: () => Promise<void> }).runMaintenanceSweep();
+    expect(hotQueueRef.hotQueue.length).toBeLessThanOrEqual(10_000);
+    expect(hotQueueRef.hotQueue.length).toBe(0);
+  });
+
+  it('runtime gauges expose queue/tracked/caches sizes', async () => {
+    const payload = makePayload();
+    const { runtime, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeRouteBook()
+    });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload, orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    const gauges = metrics.scrapeGauges();
+    expect(typeof gauges.hot_queue_size).toBe('number');
+    expect(typeof gauges.tracked_orders_size).toBe('number');
+    expect(typeof gauges.process_resident_memory_bytes).toBe('number');
+    expect(typeof gauges.process_heap_used_bytes).toBe('number');
+    expect(gauges.route_eval_cache_entries).toBeDefined();
+    expect(gauges.route_eval_negative_cache_entries).toBeDefined();
+    expect(gauges.route_eval_cache_snapshots).toBeDefined();
+  });
 });

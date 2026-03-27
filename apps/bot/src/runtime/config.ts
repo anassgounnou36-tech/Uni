@@ -89,6 +89,8 @@ const baseSchema = z.object({
   MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT: z.coerce.number().int().nonnegative().default(1),
   DOMINANCE_MIN_SCORE_MARGIN: z.coerce.number().int().nonnegative().default(10),
   MAX_EXTRA_SAME_VENUE_CHALLENGERS_AFTER_OTHER_VENUES_MISSING: z.coerce.number().int().nonnegative().default(2),
+  ROUTE_EVAL_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(4096),
+  ROUTE_EVAL_NEGATIVE_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(2048),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
@@ -144,6 +146,8 @@ export type RuntimeConfig = {
   maxExtraFamiliesAfterDominantDirect: number;
   dominanceMinScoreMargin: number;
   maxExtraSameVenueChallengersAfterOtherVenuesMissing: number;
+  routeEvalCacheMaxEntries: number;
+  routeEvalNegativeCacheMaxEntries: number;
   maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
@@ -202,6 +206,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxExtraFamiliesAfterDominantDirect: parsed.MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT,
     dominanceMinScoreMargin: parsed.DOMINANCE_MIN_SCORE_MARGIN,
     maxExtraSameVenueChallengersAfterOtherVenuesMissing: parsed.MAX_EXTRA_SAME_VENUE_CHALLENGERS_AFTER_OTHER_VENUES_MISSING,
+    routeEvalCacheMaxEntries: parsed.ROUTE_EVAL_CACHE_MAX_ENTRIES,
+    routeEvalNegativeCacheMaxEntries: parsed.ROUTE_EVAL_NEGATIVE_CACHE_MAX_ENTRIES,
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
