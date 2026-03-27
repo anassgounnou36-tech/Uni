@@ -50,6 +50,8 @@ describe('replay cli input resolution', () => {
              probePriority: 101,
              familyKey: 'UNISWAP_V3:TWO_HOP:in:bridge:out',
              dominanceScore: 55,
+             dominanceMargin: 7,
+             dominanceConfidence: 'MEDIUM',
              dominanceReason: 'NEAR_MISS',
              exactOutputPromotedFromFamily: true,
              eligible: false,
@@ -77,6 +79,8 @@ describe('replay cli input resolution', () => {
     expect(output.probePriority).toBe(101);
     expect(output.familyKey).toBe('UNISWAP_V3:TWO_HOP:in:bridge:out');
     expect(output.dominanceScore).toBe(55);
+    expect(output.dominanceMargin).toBe(7);
+    expect(output.dominanceConfidence).toBe('MEDIUM');
     expect(output.dominanceReason).toBe('NEAR_MISS');
     expect(output.exactOutputPromotedFromFamily).toBe(true);
   });

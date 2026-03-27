@@ -209,6 +209,8 @@ export class CamelotAmmv3RoutePlanner {
           quote.summary.hedgeGap?.requiredOutputShortfallOut ?? quote.summary.constraintBreakdown?.requiredOutputShortfallOut
       });
       quote.summary.dominanceScore = dominance.dominanceScore;
+      quote.summary.dominanceMargin = dominance.dominanceMargin;
+      quote.summary.dominanceConfidence = dominance.dominanceConfidence;
       quote.summary.dominanceReason = dominance.dominanceReason;
       return quote;
     };
@@ -247,6 +249,8 @@ export class CamelotAmmv3RoutePlanner {
               ? `CAMELOT_AMMV3:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
               : `CAMELOT_AMMV3:TWO_HOP:${tokenIn.toLowerCase()}:${(best.route.bridgeToken ?? '').toLowerCase()}:${tokenOut.toLowerCase()}`,
           dominanceScore: best.summary.dominanceScore,
+          dominanceMargin: best.summary.dominanceMargin,
+          dominanceConfidence: best.summary.dominanceConfidence,
           dominanceReason: best.summary.dominanceReason,
           exactOutputPromotedFromFamily: best.route.executionMode === 'EXACT_OUTPUT'
         }
@@ -314,6 +318,8 @@ export class CamelotAmmv3RoutePlanner {
                 ? `CAMELOT_AMMV3:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
                 : `CAMELOT_AMMV3:TWO_HOP:${tokenIn.toLowerCase()}:${(rejected.summary.bridgeToken ?? '').toLowerCase()}:${tokenOut.toLowerCase()}`,
             dominanceScore: rejected.summary.dominanceScore,
+            dominanceMargin: rejected.summary.dominanceMargin,
+            dominanceConfidence: rejected.summary.dominanceConfidence,
             dominanceReason: rejected.summary.dominanceReason,
             exactOutputPromotedFromFamily: rejected.summary.executionMode === 'EXACT_OUTPUT'
           }
@@ -334,6 +340,8 @@ export class CamelotAmmv3RoutePlanner {
               ? `CAMELOT_AMMV3:DIRECT:${tokenIn.toLowerCase()}:${tokenOut.toLowerCase()}`
               : `CAMELOT_AMMV3:TWO_HOP:${tokenIn.toLowerCase()}:${(rejected.summary.bridgeToken ?? '').toLowerCase()}:${tokenOut.toLowerCase()}`,
           dominanceScore: rejected.summary.dominanceScore,
+          dominanceMargin: rejected.summary.dominanceMargin,
+          dominanceConfidence: rejected.summary.dominanceConfidence,
           dominanceReason: rejected.summary.dominanceReason,
           exactOutputPromotedFromFamily: rejected.summary.executionMode === 'EXACT_OUTPUT'
         }

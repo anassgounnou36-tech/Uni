@@ -87,6 +87,8 @@ const baseSchema = z.object({
   TWO_HOP_UNLOCK_MIN_COVERAGE_BPS: z.coerce.number().int().nonnegative().max(10_000).default(9_800),
   MAX_TWO_HOP_FAMILIES_PER_ORDER: z.coerce.number().int().positive().default(2),
   MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT: z.coerce.number().int().nonnegative().default(1),
+  DOMINANCE_MIN_SCORE_MARGIN: z.coerce.number().int().nonnegative().default(10),
+  MAX_EXTRA_SAME_VENUE_CHALLENGERS_AFTER_OTHER_VENUES_MISSING: z.coerce.number().int().nonnegative().default(2),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
 
   SHADOW_MODE: z.string().optional(),
@@ -140,6 +142,8 @@ export type RuntimeConfig = {
   twoHopUnlockMinCoverageBps: bigint;
   maxTwoHopFamiliesPerOrder: number;
   maxExtraFamiliesAfterDominantDirect: number;
+  dominanceMinScoreMargin: number;
+  maxExtraSameVenueChallengersAfterOtherVenuesMissing: number;
   maxRevertedProbesPerOrder: number;
 
   shadowMode: boolean;
@@ -196,6 +200,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     twoHopUnlockMinCoverageBps: BigInt(parsed.TWO_HOP_UNLOCK_MIN_COVERAGE_BPS),
     maxTwoHopFamiliesPerOrder: parsed.MAX_TWO_HOP_FAMILIES_PER_ORDER,
     maxExtraFamiliesAfterDominantDirect: parsed.MAX_EXTRA_FAMILIES_AFTER_DOMINANT_DIRECT,
+    dominanceMinScoreMargin: parsed.DOMINANCE_MIN_SCORE_MARGIN,
+    maxExtraSameVenueChallengersAfterOtherVenuesMissing: parsed.MAX_EXTRA_SAME_VENUE_CHALLENGERS_AFTER_OTHER_VENUES_MISSING,
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),

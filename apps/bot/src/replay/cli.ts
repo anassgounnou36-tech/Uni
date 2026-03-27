@@ -296,6 +296,8 @@ export function formatReplayOutput(params: {
     probePriority: chosenCandidate?.probePriority ?? bestRejected?.probePriority,
     familyKey: chosenCandidate?.familyKey ?? bestRejected?.familyKey,
     dominanceScore: chosenCandidate?.dominanceScore ?? bestRejected?.dominanceScore,
+    dominanceMargin: chosenCandidate?.dominanceMargin ?? bestRejected?.dominanceMargin,
+    dominanceConfidence: chosenCandidate?.dominanceConfidence ?? bestRejected?.dominanceConfidence,
     dominanceReason: chosenCandidate?.dominanceReason ?? bestRejected?.dominanceReason,
     exactOutputPromotedFromFamily: chosenCandidate?.exactOutputPromotedFromFamily ?? bestRejected?.exactOutputPromotedFromFamily,
     bestRejectedVenue: bestRejected?.venue,

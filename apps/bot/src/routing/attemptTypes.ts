@@ -8,6 +8,7 @@ import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { Address } from 'viem';
 import type { RouteFamilyKind } from './familyTypes.js';
 import type { FamilyDominanceReason } from './familyTypes.js';
+import type { FamilyDominanceConfidence } from './familyTypes.js';
 import type { LfjLbPath } from './pathTypes.js';
 
 export type RouteAttemptStatus =
@@ -37,6 +38,8 @@ export type FeeTierAttemptSummary = {
   probePriority?: number;
   familyKey?: string;
   dominanceScore?: number;
+  dominanceMargin?: number;
+  dominanceConfidence?: FamilyDominanceConfidence;
   dominanceReason?: FamilyDominanceReason;
   exactOutputPromotedFromFamily?: boolean;
   poolExists: boolean;
@@ -68,6 +71,8 @@ export type VenueRouteAttemptSummary = {
   probePriority?: number;
   familyKey?: string;
   dominanceScore?: number;
+  dominanceMargin?: number;
+  dominanceConfidence?: FamilyDominanceConfidence;
   dominanceReason?: FamilyDominanceReason;
   exactOutputPromotedFromFamily?: boolean;
   status: RouteAttemptStatus;

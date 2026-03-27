@@ -836,6 +836,20 @@ export class BotRuntime {
         if (bestRejectedSummary?.constraintBreakdown?.nearMiss) {
           this.deps.metrics.incrementSchedulerNearMiss();
         }
+        if (bestRejectedSummary) {
+          this.deps.metrics.incrementRouteEvalFamilyFalseDominant(
+            bestRejectedSummary.venue,
+            bestRejectedSummary.pathKind ?? 'DIRECT',
+            bestRejectedSummary.executionMode ?? 'EXACT_INPUT'
+          );
+        }
+        if (bestRejectedSummary?.dominanceMargin !== undefined) {
+          this.deps.metrics.observeRouteEvalFamilyDominanceMargin(
+            bestRejectedSummary.venue,
+            bestRejectedSummary.pathKind ?? 'DIRECT',
+            bestRejectedSummary.dominanceMargin
+          );
+        }
         if (bestRejectedSummary?.candidateClass) {
           this.deps.metrics.incrementSchedulerBestRejectedCandidateClass(
             bestRejectedSummary.candidateClass
@@ -946,6 +960,16 @@ export class BotRuntime {
 
       await this.deps.store.transition(orderHash, 'SCHEDULED');
       this.deps.metrics.incrementOrdersSupportedToScheduled();
+      this.deps.metrics.incrementRouteEvalFamilyChosen(
+        schedule.chosenRoute.venue,
+        schedule.chosenRoute.pathKind,
+        schedule.chosenRoute.executionMode ?? 'EXACT_INPUT'
+      );
+      this.deps.metrics.incrementRouteEvalFamilyActionableWinner(
+        schedule.chosenRoute.venue,
+        schedule.chosenRoute.pathKind,
+        schedule.chosenRoute.executionMode ?? 'EXACT_INPUT'
+      );
       this.hotQueue.push({
         orderHash,
         scheduledBlock: schedule.scheduledBlock,

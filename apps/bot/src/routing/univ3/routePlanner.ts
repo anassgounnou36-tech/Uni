@@ -911,6 +911,8 @@ export class UniV3RoutePlanner {
         requiredShortfallOut: attempt.hedgeGap?.requiredOutputShortfallOut ?? attempt.constraintBreakdown?.requiredOutputShortfallOut
       });
       attempt.dominanceScore = dominance.dominanceScore;
+      attempt.dominanceMargin = dominance.dominanceMargin;
+      attempt.dominanceConfidence = dominance.dominanceConfidence;
       attempt.dominanceReason = dominance.dominanceReason;
     }
     const sortByNetEdge = (a: Candidate, b: Candidate): number => {
@@ -943,6 +945,8 @@ export class UniV3RoutePlanner {
         probePriority: best.feeTierAttempt.probePriority,
         familyKey: best.feeTierAttempt.familyKey,
         dominanceScore: best.feeTierAttempt.dominanceScore,
+        dominanceMargin: best.feeTierAttempt.dominanceMargin,
+        dominanceConfidence: best.feeTierAttempt.dominanceConfidence,
         dominanceReason: best.feeTierAttempt.dominanceReason,
         exactOutputPromotedFromFamily: best.feeTierAttempt.exactOutputPromotedFromFamily,
         status: 'ROUTEABLE',
@@ -1046,6 +1050,8 @@ export class UniV3RoutePlanner {
         probePriority: bestRejected.feeTierAttempt.probePriority,
         familyKey: bestRejected.feeTierAttempt.familyKey,
         dominanceScore: bestRejected.feeTierAttempt.dominanceScore,
+        dominanceMargin: bestRejected.feeTierAttempt.dominanceMargin,
+        dominanceConfidence: bestRejected.feeTierAttempt.dominanceConfidence,
         dominanceReason: bestRejected.feeTierAttempt.dominanceReason,
         exactOutputPromotedFromFamily: bestRejected.feeTierAttempt.exactOutputPromotedFromFamily,
         status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',

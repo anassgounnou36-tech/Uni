@@ -11,12 +11,15 @@ export type FamilyDominanceReason =
   | 'ROUTEABLE'
   | 'EXACT_OUTPUT_SATISFIABLE'
   | 'NEAR_MISS'
+  | 'NEAR_MISS_UNSATISFIABLE'
   | 'POLICY_BLOCKED'
   | 'LIQUIDITY_BLOCKED'
   | 'QUOTE_FAILED'
   | 'INFRA_BLOCKED'
   | 'LOW_COVERAGE'
   | 'SHORTFALL';
+
+export type FamilyDominanceConfidence = 'LOW' | 'MEDIUM' | 'HIGH';
 
 const MAX_SHORTFALL_PENALTY = 25;
 
@@ -60,11 +63,13 @@ export type DirectFamilyDominanceSignals = {
 export type DirectFamilyDominance = {
   dominanceScore: number;
   dominanceReason: FamilyDominanceReason;
+  dominanceMargin: number;
+  dominanceConfidence: FamilyDominanceConfidence;
 };
 
 export function computeDirectFamilyDominance(signals: DirectFamilyDominanceSignals): DirectFamilyDominance {
   if (signals.pathKind !== 'DIRECT') {
-    return { dominanceScore: 0, dominanceReason: 'NON_DIRECT' };
+    return { dominanceScore: 0, dominanceReason: 'NON_DIRECT', dominanceMargin: 0, dominanceConfidence: 'LOW' };
   }
 
   const coverage = Number(signals.outputCoverageBps ?? 0n);
@@ -81,6 +86,9 @@ export function computeDirectFamilyDominance(signals: DirectFamilyDominanceSigna
   } else if (signals.exactOutputStatus === 'SATISFIABLE') {
     score += 95;
     reason = 'EXACT_OUTPUT_SATISFIABLE';
+  } else if (signals.nearMiss && signals.exactOutputStatus === 'UNSATISFIABLE') {
+    score += 60;
+    reason = 'NEAR_MISS_UNSATISFIABLE';
   } else if (signals.nearMiss) {
     score += 75;
     reason = 'NEAR_MISS';
@@ -121,6 +129,8 @@ export function computeDirectFamilyDominance(signals: DirectFamilyDominanceSigna
 
   return {
     dominanceScore: Math.max(0, score),
-    dominanceReason: reason
+    dominanceReason: reason,
+    dominanceMargin: 0,
+    dominanceConfidence: reason === 'ROUTEABLE' || reason === 'EXACT_OUTPUT_SATISFIABLE' ? 'HIGH' : 'LOW'
   };
 }

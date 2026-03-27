@@ -160,6 +160,13 @@ export class BotMetrics {
     );
   }
 
+  incrementRouteEvalFamilyProvisionalWinner(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_provisional_winner_total');
+    this.increment(
+      `route_eval_family_provisional_winner_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
+  }
+
   incrementRouteEvalFamilyDominant(venue: string, pathKind: string): void {
     this.increment('route_eval_family_dominant_total');
     this.increment(`route_eval_family_dominant_total{venue="${venue}",path_kind="${pathKind}"}`);
@@ -184,9 +191,28 @@ export class BotMetrics {
     );
   }
 
+  incrementRouteEvalFamilyActionableWinner(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_actionable_winner_total');
+    this.increment(
+      `route_eval_family_actionable_winner_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
+  }
+
   incrementRouteEvalFamilyBestRejected(venue: string, pathKind: string): void {
     this.increment('route_eval_family_best_rejected_total');
     this.increment(`route_eval_family_best_rejected_total{venue="${venue}",path_kind="${pathKind}"}`);
+  }
+
+  incrementRouteEvalFamilyFalseDominant(venue: string, pathKind: string, executionMode: string): void {
+    this.increment('route_eval_family_false_dominant_total');
+    this.increment(
+      `route_eval_family_false_dominant_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
+    );
+  }
+
+  observeRouteEvalFamilyDominanceMargin(venue: string, pathKind: string, margin: number): void {
+    this.observeHistogram('route_eval_family_dominance_margin', margin);
+    this.observeHistogram(`route_eval_family_dominance_margin{venue="${venue}",path_kind="${pathKind}"}`, margin);
   }
 
   incrementOrderEvalRevertedProbeBudgetExhausted(): void {

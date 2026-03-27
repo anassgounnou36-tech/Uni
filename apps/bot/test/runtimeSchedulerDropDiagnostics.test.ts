@@ -364,7 +364,10 @@ function noEdgeNearMissRouteBook(): RouteBook {
           gapClass: 'SMALL',
           nearMiss: true,
           nearMissBps: 25n
-        }
+        },
+        dominanceScore: 62,
+        dominanceMargin: 8,
+        dominanceConfidence: 'MEDIUM'
       },
       alternativeRoutes: [
         {
@@ -1147,6 +1150,49 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(counters.orders_prepare_failed_total).toBe(1);
     expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
     expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
+  });
+
+  it('increments false dominant metric when no-edge follows dominant-looking best rejected', async () => {
+    const payload = makePayload();
+    const noEdgeWithDominant = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'CONSTRAINT_REJECTED' as const,
+        venueAttempts: [
+          {
+            venue: 'UNISWAP_V3',
+            status: 'CONSTRAINT_REJECTED',
+            reason: 'REQUIRED_OUTPUT',
+            pathKind: 'DIRECT' as const,
+            executionMode: 'EXACT_OUTPUT' as const
+          }
+        ],
+        bestRejectedSummary: {
+          venue: 'UNISWAP_V3',
+          status: 'CONSTRAINT_REJECTED',
+          reason: 'REQUIRED_OUTPUT',
+          constraintReason: 'REQUIRED_OUTPUT',
+          candidateClass: 'LIQUIDITY_BLOCKED',
+          pathKind: 'DIRECT' as const,
+          executionMode: 'EXACT_OUTPUT' as const,
+          dominanceConfidence: 'MEDIUM' as const
+        },
+        alternativeRoutes: []
+      })
+    } as unknown as RouteBook;
+    const { runtime, store, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlockOffsets: [0n], thresholdOut: 10n }),
+      schedulerRouteBook: noEdgeWithDominant
+    });
+    await ingress.ingest({ source: 'POLL', payload, receivedAtMs: Date.now(), orderHashHint: payload.orderHash });
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    const counters = metrics.snapshot().counters;
+    expect(counters.route_eval_family_false_dominant_total).toBe(1);
+    const labeledKey = Object.keys(counters).find((key) =>
+      key.startsWith('route_eval_family_false_dominant_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="')
+    );
+    expect(labeledKey).toBeDefined();
+    expect(counters[labeledKey!]).toBe(1);
   });
 
   it('terminal PREPARE_FAILED order in hot queue is skipped, removed, and not rebuilt', async () => {

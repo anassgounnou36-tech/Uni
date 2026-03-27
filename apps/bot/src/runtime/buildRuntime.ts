@@ -391,6 +391,9 @@ export async function buildRuntimeFromConfig(
       enableCamelotAmmv3: config.enableCamelotAmmv3,
       enableLfjLb: config.enableLfjLb,
       maxExtraFamiliesAfterDominantDirect: config.maxExtraFamiliesAfterDominantDirect,
+      dominanceMinScoreMargin: config.dominanceMinScoreMargin,
+      maxExtraSameVenueChallengersAfterOtherVenuesMissing:
+        config.maxExtraSameVenueChallengersAfterOtherVenuesMissing,
       onRouteEvalFamilyDominant: (venue, pathKind) => {
         metrics.incrementRouteEvalFamilyDominant(venue, pathKind);
       },
@@ -400,8 +403,17 @@ export async function buildRuntimeFromConfig(
       onRouteEvalFamilyBestRejected: (venue, pathKind) => {
         metrics.incrementRouteEvalFamilyBestRejected(venue, pathKind);
       },
-      onRouteEvalFamilyChosen: (venue, pathKind, executionMode) => {
-        metrics.incrementRouteEvalFamilyChosen(venue, pathKind, executionMode);
+      onRouteEvalFamilyProvisionalWinner: (venue, pathKind, executionMode) => {
+        metrics.incrementRouteEvalFamilyProvisionalWinner(venue, pathKind, executionMode);
+      },
+      onRouteEvalFamilyChosen: () => {
+        // Chosen/actionable family metrics are counted at schedule time in BotRuntime.
+      },
+      onRouteEvalFamilyFalseDominant: (venue, pathKind, executionMode) => {
+        metrics.incrementRouteEvalFamilyFalseDominant(venue, pathKind, executionMode);
+      },
+      onRouteEvalFamilyDominanceMargin: (venue, pathKind, margin) => {
+        metrics.observeRouteEvalFamilyDominanceMargin(venue, pathKind, margin);
       },
       maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
