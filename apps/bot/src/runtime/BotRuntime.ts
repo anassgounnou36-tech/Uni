@@ -61,6 +61,11 @@ type BlockedRetryState = {
   revertedProbeCount: number;
   revertedProbeBudgetExhausted: boolean;
 };
+type StalePlanRetryState = {
+  attempts: number;
+  nextEligibleTick: number;
+};
+const STALE_PLAN_MAX_RETRIES = 2;
 
 export type BotRuntimeDeps = {
   config: RuntimeConfig;
@@ -85,6 +90,7 @@ export class BotRuntime {
   private readonly hotQueue: ScheduledOrder[] = [];
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
+  private readonly stalePlanRetryByOrder = new Map<`0x${string}`, StalePlanRetryState>();
   private maintenanceTickCounter = 0;
   private schedulerTickCounter = 0;
   private static readonly HOT_QUEUE_MAX_ENTRIES = 10_000;
@@ -147,6 +153,7 @@ export class BotRuntime {
   private removeOrderTracking(orderHash: `0x${string}`): void {
     this.removeQueuedEntries(orderHash);
     this.blockedRetryByOrder.delete(orderHash);
+    this.stalePlanRetryByOrder.delete(orderHash);
     this.deps.inflightTracker.markResolved(orderHash);
   }
 
@@ -763,6 +770,11 @@ export class BotRuntime {
         this.deps.ingress.requeueForScheduling(orderHash);
         continue;
       }
+      const staleRetry = this.stalePlanRetryByOrder.get(orderHash);
+      if (staleRetry && staleRetry.nextEligibleTick > this.schedulerTickCounter) {
+        this.deps.ingress.requeueForScheduling(orderHash);
+        continue;
+      }
       this.blockedRetryByOrder.delete(orderHash);
       const record = await this.deps.store.get(orderHash);
       if (!record?.normalizedOrder) {
@@ -1141,6 +1153,73 @@ export class BotRuntime {
         index += 1;
         continue;
       }
+      if (decision.action === 'REQUEUE' && decision.reason === 'PREPARE_STALE_PLAN') {
+        const retry = this.stalePlanRetryByOrder.get(queued.orderHash) ?? { attempts: 0, nextEligibleTick: this.schedulerTickCounter };
+        const nextAttempts = retry.attempts + 1;
+        this.deps.metrics.increment('prepare_stale_plan_total');
+        this.deps.metrics.increment('prepare_preflight_failed_total');
+        this.deps.metrics.increment('prepare_preflight_failed_total{reason="PREPARE_STALE_PLAN"}');
+        this.deps.metrics.increment('prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}');
+        if (nextAttempts <= STALE_PLAN_MAX_RETRIES) {
+          this.stalePlanRetryByOrder.set(queued.orderHash, {
+            attempts: nextAttempts,
+            nextEligibleTick: this.schedulerTickCounter + this.deps.config.infraBlockedRetryCooldownTicks
+          });
+          this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.removeQueuedEntries(queued.orderHash);
+          this.deps.inflightTracker.markResolved(queued.orderHash);
+          await this.deps.journal.append({
+            type: 'ORDER_PREPARE_FAILED',
+            atMs: Date.now(),
+            orderHash: queued.orderHash,
+            payload: {
+              orderHash: queued.orderHash,
+              venue: decision.chosenRouteVenue,
+              pathKind: decision.pathKind,
+              hopCount: decision.hopCount,
+              bridgeToken: decision.bridgeToken,
+              executionMode: decision.executionMode,
+              pathDescriptor: decision.pathDescriptor,
+              error: decision.prepareError ?? 'STALE_PLAN',
+              message: decision.prepareMessage ?? 'execution plan is stale',
+              errorCategory: 'PREPARE_STALE_PLAN',
+              errorMessage: decision.prepareMessage ?? 'execution plan is stale'
+            }
+          });
+          await this.deps.journal.append({
+            type: 'PREPARED',
+            atMs: Date.now(),
+            orderHash: queued.orderHash,
+            payload: { ok: false, reason: 'PREPARE_STALE_PLAN' }
+          });
+          continue;
+        }
+        this.stalePlanRetryByOrder.delete(queued.orderHash);
+        await this.deps.store.transition(queued.orderHash, 'DROPPED', 'PREPARE_STALE_PLAN');
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: Date.now(),
+          orderHash: queued.orderHash,
+          payload: {
+            reason: 'PREPARE_STALE_PLAN',
+            chosenRouteVenue: decision.chosenRouteVenue,
+            chosenRoutePathKind: decision.pathKind,
+            chosenRouteHopCount: decision.hopCount,
+            chosenRouteBridgeToken: decision.bridgeToken,
+            chosenRouteExecutionMode: decision.executionMode,
+            chosenRoutePathDescriptor: decision.pathDescriptor,
+            error: decision.prepareError ?? 'STALE_PLAN_RETRY_EXHAUSTED',
+            message: decision.prepareMessage ?? 'stale plan retry exhausted',
+            errorCategory: 'PREPARE_STALE_PLAN',
+            errorMessage: decision.prepareMessage ?? 'stale plan retry exhausted'
+          }
+        });
+        this.deps.metrics.increment('orders_dropped_total{reason="PREPARE_STALE_PLAN"}');
+        this.deps.inflightTracker.markResolved(queued.orderHash);
+        this.hotQueue.splice(index, 1);
+        this.observeRuntimeGaugeSnapshot();
+        continue;
+      }
 
       const latestRecordBeforePlanBuild = await this.deps.store.get(queued.orderHash);
       if (!latestRecordBeforePlanBuild?.normalizedOrder) {
@@ -1185,6 +1264,7 @@ export class BotRuntime {
             : undefined
         }
       });
+      this.deps.metrics.incrementPreparePreflight();
 
       let preparedAtMs: number | undefined;
       if ('preparedExecution' in decision && decision.preparedExecution) {
@@ -1200,7 +1280,17 @@ export class BotRuntime {
       if (decision.action === 'DROP' && decision.reason === 'PREPARE_FAILED') {
         const error = (decision.prepareError ?? 'PrepareError').trim() || 'PrepareError';
         const message = (decision.prepareMessage ?? 'executionPreparer failed').trim() || 'executionPreparer failed';
+        const prepareFailureReason = decision.prepareFailureReason ?? 'PREPARE_TX_BUILD_FAILED';
         this.deps.metrics.incrementOrdersPrepareFailed(decision.chosenRouteVenue, decision.pathKind, decision.executionMode);
+        this.deps.metrics.increment('prepare_preflight_failed_total');
+        this.deps.metrics.increment(`prepare_preflight_failed_total{reason="${prepareFailureReason}"}`);
+        this.deps.metrics.increment('prepare_preflight_failed_total{reason="PREPARE_FAILED"}');
+        if (prepareFailureReason === 'PREPARE_CALL_REVERTED') {
+          this.deps.metrics.increment('prepare_call_reverted_total');
+        }
+        if (prepareFailureReason === 'PREPARE_ESTIMATE_GAS_FAILED') {
+          this.deps.metrics.increment('prepare_estimate_gas_failed_total');
+        }
         this.deps.metrics.increment(`prepare_failure_reason_total{reason="${error}"}`);
         await this.deps.journal.append({
           type: 'PREPARED',
@@ -1224,12 +1314,13 @@ export class BotRuntime {
             constraintReason: decision.chosenRouteConstraintReason,
             error,
             message,
-            errorCategory: error,
-            errorMessage: message
+            errorCategory: prepareFailureReason,
+            errorMessage: message,
+            errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
+            decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined
           }
         });
       }
-
       if ('simResult' in decision && decision.simResult) {
         const simOk = decision.simResult.ok;
         this.deps.metrics.increment(
@@ -1383,8 +1474,10 @@ export class BotRuntime {
             ? {
                 error: decision.prepareError ?? 'PrepareError',
                 message: decision.prepareMessage ?? 'executionPreparer failed',
-                errorCategory: decision.prepareError ?? 'PrepareError',
-                errorMessage: decision.prepareMessage ?? 'executionPreparer failed'
+                errorCategory: decision.prepareFailureReason ?? decision.prepareError ?? 'PrepareError',
+                errorMessage: decision.prepareMessage ?? 'executionPreparer failed',
+                errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
+                decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined
               }
             : undefined;
         await this.deps.journal.append({

@@ -1,5 +1,5 @@
 import type { ResolveEnv } from '@uni/protocol';
-import { encodeFunctionData, type Address } from 'viem';
+import { encodeFunctionData, keccak256, stringToHex, type Address } from 'viem';
 import { resolveAt } from '@uni/protocol';
 import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import { EXECUTOR_ABI } from './abi.js';
@@ -111,7 +111,22 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     selectedLfjPath: routeDecision.chosenRoute.lfjPath,
     selectedPathDirection: routeDecision.chosenRoute.pathDirection ?? 'FORWARD',
     selectedBlock: params.blockNumberish,
-    resolveEnv: params.resolveEnv
+    resolveEnv: params.resolveEnv,
+    resolvedAtBlockNumber: params.blockNumberish,
+    resolvedAtTimestampSec: params.resolveEnv.timestamp,
+    scheduledAtMs: Number(params.resolveEnv.timestamp * 1_000n),
+    candidateBlockNumberish: params.blockNumberish,
+    planFingerprint: keccak256(
+      stringToHex(
+        [
+          params.normalizedOrder.orderHash,
+          params.blockNumberish.toString(),
+          routeDecision.chosenRoute.venue,
+          routeDecision.chosenRoute.pathKind,
+          routeDecision.chosenRoute.executionMode ?? 'EXACT_INPUT'
+        ].join('|')
+      )
+    )
   };
 
   return { ok: true, plan };

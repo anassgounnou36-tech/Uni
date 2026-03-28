@@ -254,6 +254,13 @@ export class BotMetrics {
     }
   }
 
+  incrementPreparePreflight(venue?: string, pathKind?: string, executionMode?: string): void {
+    this.increment('prepare_preflight_total');
+    if (venue && pathKind && executionMode) {
+      this.increment(`prepare_preflight_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`);
+    }
+  }
+
   incrementOrdersSupportedToScheduled(): void {
     this.increment('orders_supported_to_scheduled_total');
   }

@@ -216,8 +216,9 @@ export async function buildRuntimeFromConfig(
 
   const executionPreparer =
     overrides.executionPreparer ??
-    (async ({ executionPlan }) =>
-      prepareExecution({
+    (async ({ executionPlan }) => {
+      const currentBlockNumber = await forkPublicClient.getBlockNumber();
+      return prepareExecution({
         executionPlan,
         account: account.address,
         nonceManager,
@@ -232,8 +233,15 @@ export async function buildRuntimeFromConfig(
           scheduledWindowBlocks: config.competeWindowBlocks,
           avgBlockTimeSec: 1n,
           maxStalenessSec: 10n
+        },
+        stalePolicy: {
+          maxPrepareStalenessBlocks: config.maxPrepareStalenessBlocks,
+          maxPrepareStalenessMs: config.maxPrepareStalenessMs,
+          currentBlockNumber,
+          nowMs: nowMs()
         }
-      }));
+      });
+    });
 
   const routeEvalRpcGate = new RouteEvalRpcGate(config.routeEvalMaxConcurrency);
 

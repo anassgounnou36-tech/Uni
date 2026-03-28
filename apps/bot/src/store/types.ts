@@ -24,6 +24,7 @@ export type OrderReasonCode =
   | 'WINDOW_EXPIRED'
   | 'PLAN_BUILD_FAILED'
   | 'PREPARE_FAILED'
+  | 'PREPARE_STALE_PLAN'
   | 'SEND_REJECTED'
   | 'SIM_INVALID_ORDER'
   | 'SIM_FAIL'

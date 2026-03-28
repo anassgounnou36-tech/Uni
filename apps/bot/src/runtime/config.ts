@@ -93,6 +93,8 @@ const baseSchema = z.object({
   ROUTE_EVAL_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(4096),
   ROUTE_EVAL_NEGATIVE_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(2048),
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
+  MAX_PREPARE_STALENESS_BLOCKS: z.string().default('2'),
+  MAX_PREPARE_STALENESS_MS: z.coerce.number().int().positive().default(4_000),
 
   SHADOW_MODE: z.string().optional(),
   CANARY_MODE: z.string().optional(),
@@ -151,6 +153,8 @@ export type RuntimeConfig = {
   routeEvalCacheMaxEntries: number;
   routeEvalNegativeCacheMaxEntries: number;
   maxRevertedProbesPerOrder: number;
+  maxPrepareStalenessBlocks: bigint;
+  maxPrepareStalenessMs: number;
 
   shadowMode: boolean;
   canaryMode: boolean;
@@ -212,6 +216,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     routeEvalCacheMaxEntries: parsed.ROUTE_EVAL_CACHE_MAX_ENTRIES,
     routeEvalNegativeCacheMaxEntries: parsed.ROUTE_EVAL_NEGATIVE_CACHE_MAX_ENTRIES,
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
+    maxPrepareStalenessBlocks: parseBigInt(parsed.MAX_PREPARE_STALENESS_BLOCKS, 'MAX_PREPARE_STALENESS_BLOCKS'),
+    maxPrepareStalenessMs: parsed.MAX_PREPARE_STALENESS_MS,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
     canaryMode: parseBoolean(parsed.CANARY_MODE, false),

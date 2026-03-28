@@ -9,6 +9,7 @@ export type BuildTxParams = {
   sender: Address;
   leasedNonce: bigint;
   simulationGasUsed?: bigint;
+  estimatedGas?: bigint;
   policy: TxBuildPolicy;
 };
 
@@ -51,7 +52,9 @@ export function validateSerializedTransactionShape(
 }
 
 export async function buildTransaction(params: BuildTxParams): Promise<BuiltTransaction> {
-  const baseGas = params.simulationGasUsed ??
+  const baseGas = params.simulationGasUsed
+    ?? params.estimatedGas
+    ??
     (await params.publicClient.estimateGas({
       account: params.sender,
       to: params.plan.executor,
@@ -73,31 +76,45 @@ export async function buildTransaction(params: BuildTxParams): Promise<BuiltTran
     throw new Error('maxPriorityFeePerGas cannot exceed maxFeePerGas');
   }
 
-  const prepared = await params.walletClient.prepareTransactionRequest({
-    account: params.walletClient.account!,
-    chain: params.walletClient.chain,
-    to: params.plan.executor,
-    data: params.plan.executeCalldata,
-    value: 0n,
-    nonce: nonceToNumber(params.leasedNonce),
-    gas,
-    maxFeePerGas,
-    maxPriorityFeePerGas,
-    type: 'eip1559'
-  });
+  let prepared;
+  try {
+    prepared = await params.walletClient.prepareTransactionRequest({
+      account: params.walletClient.account!,
+      chain: params.walletClient.chain,
+      to: params.plan.executor,
+      data: params.plan.executeCalldata,
+      value: 0n,
+      nonce: nonceToNumber(params.leasedNonce),
+      gas,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      type: 'eip1559'
+    });
+  } catch (error) {
+    const wrapped = new Error(error instanceof Error ? error.message : String(error));
+    wrapped.name = 'PrepareTransactionRequestError';
+    throw wrapped;
+  }
 
-  const serializedTransaction = await params.walletClient.signTransaction({
-    account: params.walletClient.account!,
-    chain: params.walletClient.chain,
-    nonce: prepared.nonce!,
-    to: prepared.to!,
-    data: prepared.data!,
-    value: prepared.value ?? 0n,
-    gas: prepared.gas!,
-    maxFeePerGas: prepared.maxFeePerGas!,
-    maxPriorityFeePerGas: prepared.maxPriorityFeePerGas!,
-    type: 'eip1559'
-  });
+  let serializedTransaction: Hex;
+  try {
+    serializedTransaction = await params.walletClient.signTransaction({
+      account: params.walletClient.account!,
+      chain: params.walletClient.chain,
+      nonce: prepared.nonce!,
+      to: prepared.to!,
+      data: prepared.data!,
+      value: prepared.value ?? 0n,
+      gas: prepared.gas!,
+      maxFeePerGas: prepared.maxFeePerGas!,
+      maxPriorityFeePerGas: prepared.maxPriorityFeePerGas!,
+      type: 'eip1559'
+    });
+  } catch (error) {
+    const wrapped = new Error(error instanceof Error ? error.message : String(error));
+    wrapped.name = 'SignTransactionError';
+    throw wrapped;
+  }
 
   validateSerializedTransactionShape(serializedTransaction, {
     executor: params.plan.executor,

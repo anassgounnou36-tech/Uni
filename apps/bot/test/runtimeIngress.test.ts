@@ -104,6 +104,8 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     infraBlockedRetryCooldownTicks: 2,
     twoHopUnlockMinCoverageBps: 9_800n,
     maxRevertedProbesPerOrder: 3,
+    maxPrepareStalenessBlocks: 2n,
+    maxPrepareStalenessMs: 4_000,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],

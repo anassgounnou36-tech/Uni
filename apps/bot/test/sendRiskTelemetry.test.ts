@@ -41,7 +41,12 @@ const SAMPLE_PLAN: ExecutionPlan = {
   selectedHopCount: 1,
   selectedPathDirection: 'FORWARD',
   selectedBlock: 1n,
-  resolveEnv: { timestamp: 1n, basefee: 1n, chainId: 42161n }
+  resolveEnv: { timestamp: 1n, basefee: 1n, chainId: 42161n },
+  resolvedAtBlockNumber: 1n,
+  resolvedAtTimestampSec: 1n,
+  scheduledAtMs: 1_000,
+  candidateBlockNumberish: 1n,
+  planFingerprint: '0xdeadbeef'
 };
 
 describe('send path primitives', () => {

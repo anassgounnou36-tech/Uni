@@ -38,6 +38,11 @@ export type ExecutionPlan = {
   selectedPathDirection: PathEncodingDirection;
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  resolvedAtBlockNumber: bigint;
+  resolvedAtTimestampSec: bigint;
+  scheduledAtMs: number;
+  candidateBlockNumberish?: bigint;
+  planFingerprint: string;
 };
 
 export type BuildExecutionPlanResult =

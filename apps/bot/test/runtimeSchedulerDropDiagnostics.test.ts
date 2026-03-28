@@ -19,6 +19,7 @@ import { JsonConsoleLogger } from '../src/telemetry/logging.js';
 import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { ExecutionPlan } from '../src/execution/types.js';
+import { PrepareFailureError } from '../src/execution/prepareFailureTypes.js';
 import type { NormalizedOrder } from '../src/store/types.js';
 import type { ResolveEnvProvider } from '../src/runtime/resolveEnvProvider.js';
 
@@ -76,6 +77,8 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     infraBlockedRetryCooldownTicks: 2,
     twoHopUnlockMinCoverageBps: 9_800n,
     maxRevertedProbesPerOrder: 3,
+    maxPrepareStalenessBlocks: 2n,
+    maxPrepareStalenessMs: 4_000,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],
@@ -1151,6 +1154,67 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(counters.orders_prepare_failed_total).toBe(1);
     expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
     expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
+    expect(counters['prepare_preflight_failed_total{reason="PREPARE_TX_BUILD_FAILED"}']).toBe(1);
+  });
+
+  it('stale plan prepare is requeued (non-terminal) and eventually dropped only after bounded retries', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new PrepareFailureError({
+          reason: 'PREPARE_STALE_PLAN',
+          errorCategory: 'STALE_PLAN',
+          errorMessage: 'plan stale'
+        });
+      }
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const afterFirst = await store.get(payload.orderHash);
+    expect(afterFirst?.state).toEqual('SCHEDULED');
+
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const afterSecond = await store.get(payload.orderHash);
+    expect(afterSecond?.state).toEqual('SCHEDULED');
+
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const afterThird = await store.get(payload.orderHash);
+    expect(afterThird?.state).toEqual('DROPPED');
+    expect(prepareCalls).toBe(3);
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailedEvents = events.filter((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect(prepareFailedEvents.length).toBeGreaterThanOrEqual(2);
+    const counters = metrics.snapshot().counters;
+    expect(counters.prepare_stale_plan_total).toBe(3);
   });
 
   it('increments false dominant metric when no-edge follows dominant-looking best rejected', async () => {

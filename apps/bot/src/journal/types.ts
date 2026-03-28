@@ -216,6 +216,8 @@ export type DecisionJournalEvent =
         message?: string;
         errorCategory?: string;
         errorMessage?: string;
+        errorSelector?: string;
+        decodedErrorName?: string;
         netEdgeOut?: string;
         simReason?: string;
       }
@@ -249,6 +251,8 @@ export type DecisionJournalEvent =
         message: string;
         errorCategory?: string;
         errorMessage?: string;
+        errorSelector?: string;
+        decodedErrorName?: string;
       }
     >
   | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>

@@ -15,6 +15,8 @@ import type { SequencerClient, SequencerClientResult } from '../send/sequencerCl
 import { NonceManager } from '../send/nonceManager.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 import type { NormalizedOrder } from '../store/types.js';
+import { PrepareFailureError, type PrepareFailureReason } from '../execution/prepareFailureTypes.js';
+import { decodeExecutionError } from '../execution/errorDecode.js';
 
 export type HotLaneEntry = {
   orderHash: `0x${string}`;
@@ -41,6 +43,24 @@ export type HotLaneDecision =
       chosenRouteConstraintReason?: ConstraintRejectReason;
       prepareError?: string;
       prepareMessage?: string;
+      prepareFailureReason?: PrepareFailureReason;
+      prepareErrorSelector?: `0x${string}`;
+      decodedErrorName?: string;
+      routeAlternatives?: RouteCandidateSummary[];
+    }
+  | {
+      action: 'REQUEUE';
+      reason: 'PREPARE_STALE_PLAN';
+      retryReason: 'PREPARE_STALE_PLAN';
+      chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: `0x${string}`;
+      executionMode?: HedgeExecutionMode;
+      pathDescriptor?: string;
+      prepareError?: string;
+      prepareMessage?: string;
+      prepareFailureReason: 'PREPARE_STALE_PLAN';
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -84,18 +104,39 @@ export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint
   return currentBlock >= scheduledBlock - leadBlocks;
 }
 
-function toPrepareErrorContext(error: unknown): { prepareError: string; prepareMessage: string } {
-  if (error instanceof Error) {
-    const cause = error.cause === undefined ? undefined : String(error.cause);
+function toPrepareErrorContext(error: unknown): {
+  prepareError: string;
+  prepareMessage: string;
+  prepareFailureReason: PrepareFailureReason;
+  prepareErrorSelector?: `0x${string}`;
+  decodedErrorName?: string;
+} {
+  if (error instanceof PrepareFailureError) {
     return {
-      prepareError: cause ? `${error.name} (cause=${cause})` : error.name,
-      prepareMessage: error.message
+      prepareError: error.errorCategory,
+      prepareMessage: error.errorMessage,
+      prepareFailureReason: error.reason,
+      prepareErrorSelector: error.errorSelector,
+      decodedErrorName: error.decodedErrorName
     };
   }
-  const normalized = String(error);
+  if (error instanceof Error) {
+    const decoded = decodeExecutionError(error);
+    return {
+      prepareError: decoded.errorCategory,
+      prepareMessage: decoded.errorMessage,
+      prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
+      prepareErrorSelector: decoded.errorSelector,
+      decodedErrorName: decoded.decodedErrorName
+    };
+  }
+  const decoded = decodeExecutionError(error);
   return {
-    prepareError: 'UnknownError',
-    prepareMessage: normalized
+    prepareError: decoded.errorCategory,
+    prepareMessage: decoded.errorMessage,
+    prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
+    prepareErrorSelector: decoded.errorSelector,
+    decodedErrorName: decoded.decodedErrorName
   };
 }
 
@@ -175,11 +216,31 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     const prepareErrorContext = toPrepareErrorContext(error);
     const route = result.plan.route;
     const routeContextCandidate = chooseRouteContextCandidate(result.plan.routeAlternatives, route.venue);
+    if (prepareErrorContext.prepareFailureReason === 'PREPARE_STALE_PLAN') {
+      return {
+        action: 'REQUEUE',
+        reason: 'PREPARE_STALE_PLAN',
+        retryReason: 'PREPARE_STALE_PLAN',
+        prepareError: prepareErrorContext.prepareError,
+        prepareMessage: prepareErrorContext.prepareMessage,
+        prepareFailureReason: 'PREPARE_STALE_PLAN',
+        chosenRouteVenue: route.venue,
+        pathKind: route.pathKind,
+        hopCount: route.hopCount,
+        bridgeToken: route.bridgeToken,
+        executionMode: route.executionMode ?? result.plan.selectedExecutionMode,
+        pathDescriptor: toPathDescriptor(route.pathKind, route.tokenIn, route.tokenOut, route.bridgeToken),
+        routeAlternatives: result.plan.routeAlternatives
+      };
+    }
     return {
       action: 'DROP',
       reason: 'PREPARE_FAILED',
       prepareError: prepareErrorContext.prepareError,
       prepareMessage: prepareErrorContext.prepareMessage,
+      prepareFailureReason: prepareErrorContext.prepareFailureReason,
+      prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
+      decodedErrorName: prepareErrorContext.decodedErrorName,
       chosenRouteVenue: route.venue,
       pathKind: route.pathKind,
       hopCount: route.hopCount,
