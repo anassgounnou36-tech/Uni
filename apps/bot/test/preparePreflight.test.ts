@@ -67,6 +67,9 @@ function makePlan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
     selectedPathDirection: 'FORWARD',
     selectedBlock: 100n,
     resolveEnv: { timestamp: 99n, basefee: 1n, chainId: 42161n },
+    runtimeSessionId: 'runtime-test',
+    plannedAtBlockNumber: 100n,
+    plannedAtTimestampMs: 1_000,
     resolvedAtBlockNumber: 100n,
     resolvedAtTimestampSec: 99n,
     scheduledAtMs: 1_000,
@@ -74,6 +77,19 @@ function makePlan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
     planFingerprint: '0xdeadbeef'
   };
   return { ...base, ...overrides };
+}
+
+function preflightArgs(executionPlan: ExecutionPlan, publicClient: PublicClient) {
+  return {
+    executionPlan,
+    account: '0x9999999999999999999999999999999999999999' as const,
+    publicClient,
+    runtimeSessionId: 'runtime-test',
+    currentBlockNumber: 100n,
+    nowMs: 1_000,
+    maxPrepareStalenessBlocks: 2n,
+    maxPrepareStalenessMs: 4_000
+  };
 }
 
 describe('prepare preflight pipeline', () => {
@@ -116,9 +132,7 @@ describe('prepare preflight pipeline', () => {
       }
     } as unknown as PublicClient;
     const result = await runPreparePreflight({
-      executionPlan: makePlan(),
-      account: '0x9999999999999999999999999999999999999999',
-      publicClient: client
+      ...preflightArgs(makePlan(), client)
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -136,9 +150,7 @@ describe('prepare preflight pipeline', () => {
       }
     } as unknown as PublicClient;
     const result = await runPreparePreflight({
-      executionPlan: makePlan(),
-      account: '0x9999999999999999999999999999999999999999',
-      publicClient: client
+      ...preflightArgs(makePlan(), client)
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
@@ -184,12 +196,73 @@ describe('prepare preflight pipeline', () => {
       }
     } as unknown as PublicClient;
     const result = await runPreparePreflight({
-      executionPlan: makePlan(),
-      account: '0x9999999999999999999999999999999999999999',
-      publicClient: client
+      ...preflightArgs(makePlan(), client)
     });
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure.reason).toBe('PREPARE_ESTIMATE_GAS_FAILED');
+  });
+
+  it('scheduled plan with mismatched session id becomes PREPARE_INVALID_PLAN_ANCHOR', async () => {
+    const client = {
+      getChainId: async () => 42161,
+      call: async () => ({ data: '0x' }),
+      estimateGas: async () => 21_000n
+    } as unknown as PublicClient;
+    const result = await runPreparePreflight({
+      ...preflightArgs(makePlan({ runtimeSessionId: 'runtime-other' }), client)
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+  });
+
+  it('negative block delta becomes PREPARE_INVALID_PLAN_ANCHOR (not stale)', async () => {
+    const client = {
+      getChainId: async () => 42161,
+      call: async () => ({ data: '0x' }),
+      estimateGas: async () => 21_000n
+    } as unknown as PublicClient;
+    const result = await runPreparePreflight({
+      ...preflightArgs(makePlan({ plannedAtBlockNumber: 200n }), client)
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+  });
+
+  it('old scheduled plan with matching session id becomes PREPARE_STALE_PLAN', async () => {
+    const client = {
+      getChainId: async () => 42161,
+      call: async () => ({ data: '0x' }),
+      estimateGas: async () => 21_000n
+    } as unknown as PublicClient;
+    const result = await runPreparePreflight({
+      ...preflightArgs(
+        makePlan({
+          plannedAtBlockNumber: 90n,
+          plannedAtTimestampMs: 100
+        }),
+        client
+      ),
+      nowMs: 10_000
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('PREPARE_STALE_PLAN');
+  });
+
+  it('fresh scheduled plan with matching session id can enter prepare preflight', async () => {
+    const client = {
+      getChainId: async () => 42161,
+      call: async () => ({ data: '0x' }),
+      estimateGas: async () => 21_000n
+    } as unknown as PublicClient;
+    const result = await runPreparePreflight({
+      ...preflightArgs(makePlan(), client)
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.estimatedGas).toBe(21_000n);
   });
 });

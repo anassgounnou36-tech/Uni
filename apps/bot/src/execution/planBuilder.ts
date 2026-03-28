@@ -19,6 +19,7 @@ export type BuildExecutionPlanParams = {
   blockNumberish: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   conditionalEnvelope: ConditionalEnvelope;
+  runtimeSessionId: string;
   routeEvalReadCache?: RouteEvalReadCache;
 };
 
@@ -27,12 +28,11 @@ function totalRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint
 }
 
 function timestampSecToMs(timestampSec: bigint): number {
-  const ms = timestampSec * 1_000n;
-  const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
-  if (ms > maxSafe) {
-    throw new Error(`resolved timestamp exceeds max safe integer milliseconds: ${ms.toString()}`);
+  const maxSafeTimestampSec = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1_000));
+  if (timestampSec > maxSafeTimestampSec) {
+    throw new Error(`timestamp conversion to milliseconds exceeds max safe integer: ${timestampSec.toString()}`);
   }
-  return Number(ms);
+  return Number(timestampSec) * 1_000;
 }
 
 export async function buildExecutionPlan(params: BuildExecutionPlanParams): Promise<BuildExecutionPlanResult> {
@@ -121,6 +121,9 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     selectedPathDirection: routeDecision.chosenRoute.pathDirection ?? 'FORWARD',
     selectedBlock: params.blockNumberish,
     resolveEnv: params.resolveEnv,
+    runtimeSessionId: params.runtimeSessionId,
+    plannedAtBlockNumber: params.blockNumberish,
+    plannedAtTimestampMs: timestampSecToMs(params.resolveEnv.timestamp),
     resolvedAtBlockNumber: params.blockNumberish,
     resolvedAtTimestampSec: params.resolveEnv.timestamp,
     scheduledAtMs: timestampSecToMs(params.resolveEnv.timestamp),

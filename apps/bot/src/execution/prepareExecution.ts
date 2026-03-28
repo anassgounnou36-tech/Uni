@@ -32,27 +32,21 @@ export type PrepareExecutionParams = {
     currentBlockNumber: bigint;
     nowMs: number;
   };
+  runtimeSessionId: string;
+  staleRetryCount?: number;
 };
 
 export async function prepareExecution(params: PrepareExecutionParams): Promise<PreparedExecution> {
-  const stalenessBlocks = params.stalePolicy.currentBlockNumber - params.executionPlan.resolvedAtBlockNumber;
-  const stalenessMs = params.stalePolicy.nowMs - params.executionPlan.scheduledAtMs;
-  if (stalenessBlocks > params.stalePolicy.maxPrepareStalenessBlocks || stalenessMs > params.stalePolicy.maxPrepareStalenessMs) {
-    throw new PrepareFailureError({
-      reason: 'PREPARE_STALE_PLAN',
-      errorCategory: 'STALE_PLAN',
-      errorMessage: `plan is stale (blocks=${stalenessBlocks.toString()} ms=${stalenessMs})`,
-      preflightStage: 'staleness',
-      venue: params.executionPlan.route.venue,
-      pathKind: params.executionPlan.route.pathKind,
-      executionMode: params.executionPlan.selectedExecutionMode
-    });
-  }
-
   const preflight = await runPreparePreflight({
     executionPlan: params.executionPlan,
     account: params.account,
-    publicClient: params.publicClient
+    publicClient: params.publicClient,
+    runtimeSessionId: params.runtimeSessionId,
+    currentBlockNumber: params.stalePolicy.currentBlockNumber,
+    nowMs: params.stalePolicy.nowMs,
+    maxPrepareStalenessBlocks: params.stalePolicy.maxPrepareStalenessBlocks,
+    maxPrepareStalenessMs: params.stalePolicy.maxPrepareStalenessMs,
+    staleRetryCount: params.staleRetryCount
   });
   if (!preflight.ok) {
     throw new PrepareFailureError(preflight.failure);

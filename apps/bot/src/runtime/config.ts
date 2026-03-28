@@ -95,6 +95,7 @@ const baseSchema = z.object({
   MAX_REVERTED_PROBES_PER_ORDER: z.coerce.number().int().positive().default(3),
   MAX_PREPARE_STALENESS_BLOCKS: z.string().default('2'),
   MAX_PREPARE_STALENESS_MS: z.coerce.number().int().positive().default(4_000),
+  MAX_PREPARE_STALE_RETRIES: z.coerce.number().int().nonnegative().default(1),
 
   SHADOW_MODE: z.string().optional(),
   CANARY_MODE: z.string().optional(),
@@ -155,6 +156,7 @@ export type RuntimeConfig = {
   maxRevertedProbesPerOrder: number;
   maxPrepareStalenessBlocks: bigint;
   maxPrepareStalenessMs: number;
+  maxPrepareStaleRetries: number;
 
   shadowMode: boolean;
   canaryMode: boolean;
@@ -218,6 +220,7 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxRevertedProbesPerOrder: parsed.MAX_REVERTED_PROBES_PER_ORDER,
     maxPrepareStalenessBlocks: parseBigInt(parsed.MAX_PREPARE_STALENESS_BLOCKS, 'MAX_PREPARE_STALENESS_BLOCKS'),
     maxPrepareStalenessMs: parsed.MAX_PREPARE_STALENESS_MS,
+    maxPrepareStaleRetries: parsed.MAX_PREPARE_STALE_RETRIES,
 
     shadowMode: parseBoolean(parsed.SHADOW_MODE, true),
     canaryMode: parseBoolean(parsed.CANARY_MODE, false),

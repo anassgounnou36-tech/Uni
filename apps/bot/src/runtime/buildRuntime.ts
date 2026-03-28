@@ -216,7 +216,7 @@ export async function buildRuntimeFromConfig(
 
   const executionPreparer =
     overrides.executionPreparer ??
-    (async ({ executionPlan }) => {
+    (async ({ executionPlan, staleRetryCount, runtimeSessionId }) => {
       const currentBlockNumber = await forkPublicClient.getBlockNumber();
       return prepareExecution({
         executionPlan,
@@ -239,7 +239,9 @@ export async function buildRuntimeFromConfig(
           maxPrepareStalenessMs: config.maxPrepareStalenessMs,
           currentBlockNumber,
           nowMs: nowMs()
-        }
+        },
+        runtimeSessionId,
+        staleRetryCount
       });
     });
 
@@ -446,6 +448,7 @@ export async function buildRuntimeFromConfig(
       simService,
       sequencerClient,
       nonceManager,
+      resolveEnvProvider: schedulerContext.resolveEnvProvider,
       executionPreparer
     };
 

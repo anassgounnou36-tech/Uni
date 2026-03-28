@@ -41,6 +41,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxRevertedProbesPerOrder: 3,
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
+    maxPrepareStaleRetries: 1,
     shadowMode: false,
     canaryMode: false,
     canaryAllowlistedPairs: [],

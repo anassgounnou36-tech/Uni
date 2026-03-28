@@ -68,6 +68,7 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxRevertedProbesPerOrder: 3,
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
+    maxPrepareStaleRetries: 1,
     bridgeTokens: ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'],
 
     enableMetricsServer: false,

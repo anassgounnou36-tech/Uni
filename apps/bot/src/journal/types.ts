@@ -220,6 +220,12 @@ export type DecisionJournalEvent =
         decodedErrorName?: string;
         prepareFailureReason?: string;
         preflightStage?: string;
+        runtimeSessionId?: string;
+        plannedAtBlockNumber?: string;
+        candidateBlockNumberish?: string;
+        blockDelta?: string;
+        timeDeltaMs?: number;
+        staleRetryCount?: number;
         netEdgeOut?: string;
         simReason?: string;
       }
@@ -257,6 +263,12 @@ export type DecisionJournalEvent =
         decodedErrorName?: string;
         prepareFailureReason?: string;
         preflightStage?: string;
+        runtimeSessionId?: string;
+        plannedAtBlockNumber?: string;
+        candidateBlockNumberish?: string;
+        blockDelta?: string;
+        timeDeltaMs?: number;
+        staleRetryCount?: number;
       }
     >
   | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>

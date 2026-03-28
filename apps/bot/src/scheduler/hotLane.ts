@@ -46,7 +46,13 @@ export type HotLaneDecision =
       prepareFailureReason?: PrepareFailureReason;
       prepareErrorSelector?: `0x${string}`;
       decodedErrorName?: string;
-      preflightStage?: 'validate' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+      preflightStage?: 'validate' | 'anchor' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+      runtimeSessionId?: string;
+      plannedAtBlockNumber?: bigint;
+      candidateBlockNumberish?: bigint;
+      blockDelta?: bigint;
+      timeDeltaMs?: number;
+      staleRetryCount?: number;
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -65,6 +71,12 @@ export type HotLaneDecision =
       prepareErrorSelector?: `0x${string}`;
       decodedErrorName?: string;
       preflightStage?: 'staleness';
+      runtimeSessionId?: string;
+      plannedAtBlockNumber?: bigint;
+      candidateBlockNumberish?: bigint;
+      blockDelta?: bigint;
+      timeDeltaMs?: number;
+      staleRetryCount?: number;
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -98,11 +110,17 @@ export type HotLaneStepParams = {
   simService: ForkSimService;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: {
+    executionPlan: ExecutionPlan;
+    staleRetryCount?: number;
+    runtimeSessionId: string;
+  }) => Promise<PreparedExecution>;
   shadowMode: boolean;
   leadBlocks?: bigint;
   routeEvalReadCache?: RouteEvalReadCache;
   onPrepareAttempt?: () => void;
+  runtimeSessionId: string;
+  staleRetryCount?: number;
 };
 
 export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint, leadBlocks: bigint = 2n): boolean {
@@ -115,7 +133,13 @@ function toPrepareErrorContext(error: unknown): {
   prepareFailureReason: PrepareFailureReason;
   prepareErrorSelector?: `0x${string}`;
   decodedErrorName?: string;
-  preflightStage?: 'validate' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+  preflightStage?: 'validate' | 'anchor' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+  runtimeSessionId?: string;
+  plannedAtBlockNumber?: bigint;
+  candidateBlockNumberish?: bigint;
+  blockDelta?: bigint;
+  timeDeltaMs?: number;
+  staleRetryCount?: number;
 } {
   if (error instanceof PrepareFailureError) {
     return {
@@ -124,7 +148,13 @@ function toPrepareErrorContext(error: unknown): {
       prepareFailureReason: error.reason,
       prepareErrorSelector: error.errorSelector,
       decodedErrorName: error.decodedErrorName,
-      preflightStage: error.preflightStage
+      preflightStage: error.preflightStage,
+      runtimeSessionId: error.runtimeSessionId,
+      plannedAtBlockNumber: error.plannedAtBlockNumber,
+      candidateBlockNumberish: error.candidateBlockNumberish,
+      blockDelta: error.blockDelta,
+      timeDeltaMs: error.timeDeltaMs,
+      staleRetryCount: error.staleRetryCount
     };
   }
   if (error instanceof Error) {
@@ -208,6 +238,7 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     blockNumberish: params.currentBlock,
     resolveEnv: params.resolveEnv,
     conditionalEnvelope: params.conditionalEnvelope,
+    runtimeSessionId: params.runtimeSessionId,
     routeEvalReadCache: params.routeEvalReadCache
   } satisfies BuildExecutionPlanParams;
   const result = await buildExecutionPlan(planInput);
@@ -220,7 +251,9 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
   try {
     params.onPrepareAttempt?.();
     preparedExecution = await params.executionPreparer({
-      executionPlan: result.plan
+      executionPlan: result.plan,
+      staleRetryCount: params.staleRetryCount,
+      runtimeSessionId: params.runtimeSessionId
     });
   } catch (error) {
     const prepareErrorContext = toPrepareErrorContext(error);
@@ -237,6 +270,12 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
         prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
         decodedErrorName: prepareErrorContext.decodedErrorName,
         preflightStage: 'staleness',
+        runtimeSessionId: prepareErrorContext.runtimeSessionId,
+        plannedAtBlockNumber: prepareErrorContext.plannedAtBlockNumber,
+        candidateBlockNumberish: prepareErrorContext.candidateBlockNumberish,
+        blockDelta: prepareErrorContext.blockDelta,
+        timeDeltaMs: prepareErrorContext.timeDeltaMs,
+        staleRetryCount: prepareErrorContext.staleRetryCount ?? params.staleRetryCount,
         chosenRouteVenue: route.venue,
         pathKind: route.pathKind,
         hopCount: route.hopCount,
@@ -255,6 +294,12 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
       prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
       decodedErrorName: prepareErrorContext.decodedErrorName,
       preflightStage: prepareErrorContext.preflightStage,
+      runtimeSessionId: prepareErrorContext.runtimeSessionId,
+      plannedAtBlockNumber: prepareErrorContext.plannedAtBlockNumber,
+      candidateBlockNumberish: prepareErrorContext.candidateBlockNumberish,
+      blockDelta: prepareErrorContext.blockDelta,
+      timeDeltaMs: prepareErrorContext.timeDeltaMs,
+      staleRetryCount: prepareErrorContext.staleRetryCount ?? params.staleRetryCount,
       chosenRouteVenue: route.venue,
       pathKind: route.pathKind,
       hopCount: route.hopCount,

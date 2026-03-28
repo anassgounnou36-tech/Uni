@@ -38,6 +38,9 @@ export type ExecutionPlan = {
   selectedPathDirection: PathEncodingDirection;
   selectedBlock: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  runtimeSessionId: string;
+  plannedAtBlockNumber: bigint;
+  plannedAtTimestampMs: number;
   resolvedAtBlockNumber: bigint;
   resolvedAtTimestampSec: bigint;
   scheduledAtMs: number;

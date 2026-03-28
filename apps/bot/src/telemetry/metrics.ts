@@ -275,6 +275,18 @@ export class BotMetrics {
     this.increment(`prepare_failure_selector_total{selector="${selector}"}`);
   }
 
+  incrementPrepareStalePlan(): void {
+    this.increment('prepare_stale_plan_total');
+  }
+
+  incrementPrepareInvalidPlanAnchor(): void {
+    this.increment('prepare_invalid_plan_anchor_total');
+  }
+
+  incrementPrepareStaleRetryExhausted(): void {
+    this.increment('prepare_stale_retry_exhausted_total');
+  }
+
   incrementOrdersSupportedToScheduled(): void {
     this.increment('orders_supported_to_scheduled_total');
   }

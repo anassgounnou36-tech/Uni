@@ -79,6 +79,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxRevertedProbesPerOrder: 3,
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
+    maxPrepareStaleRetries: 1,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],
@@ -541,7 +542,7 @@ function makeRuntime(params: {
   hotRouteBook?: RouteBook;
   simService?: ForkSimService;
   sequencerClient?: SequencerClient;
-  executionPreparer?: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer?: (input: { executionPlan: ExecutionPlan; staleRetryCount?: number; runtimeSessionId: string }) => Promise<PreparedExecution>;
   logger?: JsonConsoleLogger;
 }) {
   const metrics = new BotMetrics();
@@ -636,6 +637,42 @@ function makeRuntime(params: {
 }
 
 describe('runtime scheduler no-edge diagnostics + dropped state persistence', () => {
+  it('startup revalidates previously scheduled orders instead of preparing blindly', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const noEdgeRouteBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'NOT_PROFITABLE' as const,
+        evaluations: [],
+        bestObservedEvaluation: undefined,
+        alternativeRoutes: []
+      })
+    } as unknown as RouteBook;
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ schedulerCadenceMs: 10, hotLaneCadenceMs: 10, pollCadenceMs: 10 }),
+      schedulerRouteBook: noEdgeRouteBook,
+      hotRouteBook: noEdgeRouteBook,
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new Error('should not prepare old scheduled order before revalidation');
+      }
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await runtime.start();
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    await runtime.stop();
+
+    const record = await store.get(payload.orderHash);
+    expect(record?.state === 'SCHEDULED' || record?.state === 'DROPPED').toBe(true);
+    expect(prepareCalls).toBe(0);
+  });
+
   it('scheduler no-edge transitions order to DROPPED with SCHEDULER_NO_EDGE reason', async () => {
     const payload = makePayload();
     const logs: string[] = [];
@@ -1170,7 +1207,7 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const normalized = toNormalizedOrder(payload);
     let prepareCalls = 0;
     const { runtime, store, journal, metrics } = makeRuntime({
-      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      config: runtimeConfig({ shadowMode: false, canaryMode: false, maxPrepareStaleRetries: 1 }),
       schedulerRouteBook: routeBookWithNetEdge(30n),
       executionPreparer: async () => {
         prepareCalls += 1;
@@ -1205,31 +1242,71 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     });
     await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
     const afterSecond = await store.get(payload.orderHash);
-    expect(afterSecond?.state).toEqual('SCHEDULED');
+    expect(afterSecond?.state).toEqual('DROPPED');
+    expect(prepareCalls).toBe(2);
 
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailedEvents = events.filter((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect(prepareFailedEvents.length).toBeGreaterThanOrEqual(1);
+    const droppedEvent = events.find((event) => event.type === 'ORDER_DROPPED');
+    const failedEvent = prepareFailedEvents[0];
+    expect((failedEvent?.payload as Record<string, unknown>).errorCategory).toBe('STALE_PLAN');
+    expect((failedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    const counters = metrics.snapshot().counters;
+    expect(counters.prepare_stale_plan_total).toBe(2);
+    expect(counters.prepare_stale_retry_exhausted_total).toBe(1);
+    expect(counters['prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}']).toBe(2);
+  });
+
+  it('invalid plan anchor is not retried as stale and is dropped once', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new PrepareFailureError({
+          reason: 'PREPARE_INVALID_PLAN_ANCHOR',
+          errorCategory: 'INVALID_PLAN_ANCHOR',
+          errorMessage: 'invalid_plan_anchor: negative block delta',
+          preflightStage: 'anchor',
+          runtimeSessionId: 'runtime-old',
+          plannedAtBlockNumber: 1100n,
+          candidateBlockNumberish: 1100n,
+          blockDelta: -100n,
+          timeDeltaMs: 100,
+          staleRetryCount: 0
+        });
+      }
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
     (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
       orderHash: payload.orderHash,
       scheduledBlock: 1000n,
       competeWindowEnd: 1002n,
       predictedEdgeOut: 30n
     });
-    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
-    const afterThird = await store.get(payload.orderHash);
-    expect(afterThird?.state).toEqual('DROPPED');
-    expect(prepareCalls).toBe(3);
 
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const dropped = await store.get(payload.orderHash);
+    expect(dropped?.state).toEqual('PREPARE_FAILED');
+    expect(prepareCalls).toBe(1);
     const events = await journal.byOrderHash(payload.orderHash);
-    const prepareFailedEvents = events.filter((event) => event.type === 'ORDER_PREPARE_FAILED');
-    expect(prepareFailedEvents.length).toBeGreaterThanOrEqual(2);
-    const droppedEvent = events.find((event) => event.type === 'ORDER_DROPPED');
-    const failedEvent = prepareFailedEvents[0];
-    expect((failedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
-    expect((failedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
-    expect((droppedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
-    expect((droppedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    const prepareFailed = events.find((event) => event.type === 'ORDER_PREPARE_FAILED');
+    const orderDropped = events.find((event) => event.type === 'ORDER_DROPPED');
+    expect((prepareFailed?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+    expect((orderDropped?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+    expect((orderDropped?.payload as Record<string, unknown>).blockDelta).toBe('-100');
     const counters = metrics.snapshot().counters;
-    expect(counters.prepare_stale_plan_total).toBe(3);
-    expect(counters['prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}']).toBe(3);
+    expect(counters.prepare_invalid_plan_anchor_total).toBe(1);
   });
 
   it('increments false dominant metric when no-edge follows dominant-looking best rejected', async () => {

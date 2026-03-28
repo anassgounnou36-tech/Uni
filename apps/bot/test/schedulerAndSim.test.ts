@@ -486,7 +486,8 @@ describe('scheduler + prepared-execution gate', () => {
           nonceLease: lease
         };
       },
-      shadowMode: false
+      shadowMode: false,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(decision.action).toEqual('WOULD_SEND');
@@ -591,7 +592,8 @@ describe('scheduler + prepared-execution gate', () => {
           nonceLease: lease
         };
       },
-      shadowMode: true
+      shadowMode: true,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(sendCalls).toEqual(0);
@@ -647,7 +649,8 @@ describe('scheduler + prepared-execution gate', () => {
       executionPreparer: async () => {
         throw new Error('should not prepare');
       },
-      shadowMode: false
+      shadowMode: false,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(decision.action).toEqual('DROP');
@@ -702,6 +705,7 @@ describe('scheduler + prepared-execution gate', () => {
         throw error;
       },
       shadowMode: false,
+      runtimeSessionId: 'runtime-test',
       onPrepareAttempt: () => {
         prepareAttemptCount += 1;
       }
