@@ -46,6 +46,7 @@ export type HotLaneDecision =
       prepareFailureReason?: PrepareFailureReason;
       prepareErrorSelector?: `0x${string}`;
       decodedErrorName?: string;
+      preflightStage?: 'validate' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -61,6 +62,9 @@ export type HotLaneDecision =
       prepareError?: string;
       prepareMessage?: string;
       prepareFailureReason: 'PREPARE_STALE_PLAN';
+      prepareErrorSelector?: `0x${string}`;
+      decodedErrorName?: string;
+      preflightStage?: 'staleness';
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -98,6 +102,7 @@ export type HotLaneStepParams = {
   shadowMode: boolean;
   leadBlocks?: bigint;
   routeEvalReadCache?: RouteEvalReadCache;
+  onPrepareAttempt?: () => void;
 };
 
 export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint, leadBlocks: bigint = 2n): boolean {
@@ -110,6 +115,7 @@ function toPrepareErrorContext(error: unknown): {
   prepareFailureReason: PrepareFailureReason;
   prepareErrorSelector?: `0x${string}`;
   decodedErrorName?: string;
+  preflightStage?: 'validate' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
 } {
   if (error instanceof PrepareFailureError) {
     return {
@@ -117,7 +123,8 @@ function toPrepareErrorContext(error: unknown): {
       prepareMessage: error.errorMessage,
       prepareFailureReason: error.reason,
       prepareErrorSelector: error.errorSelector,
-      decodedErrorName: error.decodedErrorName
+      decodedErrorName: error.decodedErrorName,
+      preflightStage: error.preflightStage
     };
   }
   if (error instanceof Error) {
@@ -127,7 +134,8 @@ function toPrepareErrorContext(error: unknown): {
       prepareMessage: decoded.errorMessage,
       prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
       prepareErrorSelector: decoded.errorSelector,
-      decodedErrorName: decoded.decodedErrorName
+      decodedErrorName: decoded.decodedErrorName,
+      preflightStage: 'tx_build'
     };
   }
   const decoded = decodeExecutionError(error);
@@ -136,7 +144,8 @@ function toPrepareErrorContext(error: unknown): {
     prepareMessage: decoded.errorMessage,
     prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
     prepareErrorSelector: decoded.errorSelector,
-    decodedErrorName: decoded.decodedErrorName
+    decodedErrorName: decoded.decodedErrorName,
+    preflightStage: 'tx_build'
   };
 }
 
@@ -209,6 +218,7 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
 
   let preparedExecution: PreparedExecution;
   try {
+    params.onPrepareAttempt?.();
     preparedExecution = await params.executionPreparer({
       executionPlan: result.plan
     });
@@ -224,6 +234,9 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
         prepareError: prepareErrorContext.prepareError,
         prepareMessage: prepareErrorContext.prepareMessage,
         prepareFailureReason: 'PREPARE_STALE_PLAN',
+        prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
+        decodedErrorName: prepareErrorContext.decodedErrorName,
+        preflightStage: 'staleness',
         chosenRouteVenue: route.venue,
         pathKind: route.pathKind,
         hopCount: route.hopCount,
@@ -241,6 +254,7 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
       prepareFailureReason: prepareErrorContext.prepareFailureReason,
       prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
       decodedErrorName: prepareErrorContext.decodedErrorName,
+      preflightStage: prepareErrorContext.preflightStage,
       chosenRouteVenue: route.venue,
       pathKind: route.pathKind,
       hopCount: route.hopCount,

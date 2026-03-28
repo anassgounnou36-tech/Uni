@@ -1,5 +1,6 @@
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import type { PrepareFailureReason } from '../execution/prepareFailureTypes.js';
 
 export type Quantiles = {
   p50: number;
@@ -259,6 +260,19 @@ export class BotMetrics {
     if (venue && pathKind && executionMode) {
       this.increment(`prepare_preflight_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`);
     }
+  }
+
+  incrementPreparePreflightFailed(reason: PrepareFailureReason): void {
+    this.increment('prepare_preflight_failed_total');
+    this.increment(`prepare_preflight_failed_total{reason="${reason}"}`);
+  }
+
+  incrementPrepareFailureReason(reason: PrepareFailureReason): void {
+    this.increment(`prepare_failure_reason_total{reason="${reason}"}`);
+  }
+
+  incrementPrepareFailureSelector(selector: `0x${string}`): void {
+    this.increment(`prepare_failure_selector_total{selector="${selector}"}`);
   }
 
   incrementOrdersSupportedToScheduled(): void {

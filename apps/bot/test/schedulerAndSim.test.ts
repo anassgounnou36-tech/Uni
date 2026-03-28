@@ -664,6 +664,7 @@ describe('scheduler + prepared-execution gate', () => {
       chainNonceReader: async () => 7n
     });
 
+    let prepareAttemptCount = 0;
     const decision = await runHotLaneStep({
       entry: {
         orderHash,
@@ -700,7 +701,10 @@ describe('scheduler + prepared-execution gate', () => {
         error.name = 'PrepareExecutionError';
         throw error;
       },
-      shadowMode: false
+      shadowMode: false,
+      onPrepareAttempt: () => {
+        prepareAttemptCount += 1;
+      }
     });
 
     expect(decision.action).toEqual('DROP');
@@ -715,5 +719,6 @@ describe('scheduler + prepared-execution gate', () => {
     expect(decision.hopCount).toEqual(1);
     expect(decision.executionMode).toEqual('EXACT_INPUT');
     expect(decision.pathDescriptor).toContain('DIRECT:');
+    expect(prepareAttemptCount).toBe(1);
   });
 });

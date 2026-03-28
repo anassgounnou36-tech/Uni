@@ -18,7 +18,16 @@ export async function runPreparePreflight(params: PreflightParams): Promise<Prep
   const chainId = await params.publicClient.getChainId();
   const staticValidation = validateExecutionPlanStatic(params.executionPlan, BigInt(chainId));
   if (!staticValidation.ok) {
-    return staticValidation;
+    return {
+      ok: false,
+      failure: {
+        ...staticValidation.failure,
+        preflightStage: 'validate',
+        venue: params.executionPlan.route.venue,
+        pathKind: params.executionPlan.route.pathKind,
+        executionMode: params.executionPlan.selectedExecutionMode
+      }
+    };
   }
 
   try {
@@ -37,7 +46,11 @@ export async function runPreparePreflight(params: PreflightParams): Promise<Prep
         errorCategory: decoded.errorCategory,
         errorMessage: decoded.errorMessage,
         errorSelector: decoded.errorSelector,
-        decodedErrorName: decoded.decodedErrorName
+        decodedErrorName: decoded.decodedErrorName,
+        preflightStage: 'call',
+        venue: params.executionPlan.route.venue,
+        pathKind: params.executionPlan.route.pathKind,
+        executionMode: params.executionPlan.selectedExecutionMode
       }
     };
   }
@@ -59,9 +72,12 @@ export async function runPreparePreflight(params: PreflightParams): Promise<Prep
         errorCategory: decoded.errorCategory,
         errorMessage: decoded.errorMessage,
         errorSelector: decoded.errorSelector,
-        decodedErrorName: decoded.decodedErrorName
+        decodedErrorName: decoded.decodedErrorName,
+        preflightStage: 'estimate_gas',
+        venue: params.executionPlan.route.venue,
+        pathKind: params.executionPlan.route.pathKind,
+        executionMode: params.executionPlan.selectedExecutionMode
       }
     };
   }
 }
-

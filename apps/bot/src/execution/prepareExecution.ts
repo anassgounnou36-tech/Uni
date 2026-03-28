@@ -41,7 +41,11 @@ export async function prepareExecution(params: PrepareExecutionParams): Promise<
     throw new PrepareFailureError({
       reason: 'PREPARE_STALE_PLAN',
       errorCategory: 'STALE_PLAN',
-      errorMessage: `plan is stale (blocks=${stalenessBlocks.toString()} ms=${stalenessMs})`
+      errorMessage: `plan is stale (blocks=${stalenessBlocks.toString()} ms=${stalenessMs})`,
+      preflightStage: 'staleness',
+      venue: params.executionPlan.route.venue,
+      pathKind: params.executionPlan.route.pathKind,
+      executionMode: params.executionPlan.selectedExecutionMode
     });
   }
 
@@ -78,7 +82,11 @@ export async function prepareExecution(params: PrepareExecutionParams): Promise<
         errorCategory: decoded.errorCategory,
         errorMessage: decoded.errorMessage,
         errorSelector: decoded.errorSelector,
-        decodedErrorName: decoded.decodedErrorName
+        decodedErrorName: decoded.decodedErrorName,
+        preflightStage: reason === 'PREPARE_SIGN_FAILED' ? 'sign' : 'tx_build',
+        venue: params.executionPlan.route.venue,
+        pathKind: params.executionPlan.route.pathKind,
+        executionMode: params.executionPlan.selectedExecutionMode
       });
     }
 

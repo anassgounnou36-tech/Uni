@@ -1140,7 +1140,8 @@ export class BotRuntime {
         nonceManager: hotLane.nonceManager,
         executionPreparer: hotLane.executionPreparer,
         shadowMode: policy.mode !== 'LIVE',
-        routeEvalReadCache
+        routeEvalReadCache,
+        onPrepareAttempt: () => this.deps.metrics.incrementPreparePreflight()
       });
       this.deps.metrics.setGauge('route_eval_cache_entries', routeEvalReadCache.getEntryCount());
       this.deps.metrics.setGauge('route_eval_negative_cache_entries', routeEvalReadCache.getNegativeEntryCount());
@@ -1157,9 +1158,8 @@ export class BotRuntime {
         const retry = this.stalePlanRetryByOrder.get(queued.orderHash) ?? { attempts: 0, nextEligibleTick: this.schedulerTickCounter };
         const nextAttempts = retry.attempts + 1;
         this.deps.metrics.increment('prepare_stale_plan_total');
-        this.deps.metrics.increment('prepare_preflight_failed_total');
-        this.deps.metrics.increment('prepare_preflight_failed_total{reason="PREPARE_STALE_PLAN"}');
-        this.deps.metrics.increment('prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}');
+        this.deps.metrics.incrementPreparePreflightFailed('PREPARE_STALE_PLAN');
+        this.deps.metrics.incrementPrepareFailureReason('PREPARE_STALE_PLAN');
         if (nextAttempts <= STALE_PLAN_MAX_RETRIES) {
           this.stalePlanRetryByOrder.set(queued.orderHash, {
             attempts: nextAttempts,
@@ -1183,7 +1183,11 @@ export class BotRuntime {
               error: decision.prepareError ?? 'STALE_PLAN',
               message: decision.prepareMessage ?? 'execution plan is stale',
               errorCategory: 'PREPARE_STALE_PLAN',
-              errorMessage: decision.prepareMessage ?? 'execution plan is stale'
+              errorMessage: decision.prepareMessage ?? 'execution plan is stale',
+              errorSelector: decision.prepareErrorSelector,
+              decodedErrorName: decision.decodedErrorName,
+              prepareFailureReason: 'PREPARE_STALE_PLAN',
+              preflightStage: decision.preflightStage ?? 'staleness'
             }
           });
           await this.deps.journal.append({
@@ -1211,7 +1215,11 @@ export class BotRuntime {
             error: decision.prepareError ?? 'STALE_PLAN_RETRY_EXHAUSTED',
             message: decision.prepareMessage ?? 'stale plan retry exhausted',
             errorCategory: 'PREPARE_STALE_PLAN',
-            errorMessage: decision.prepareMessage ?? 'stale plan retry exhausted'
+            errorMessage: decision.prepareMessage ?? 'stale plan retry exhausted',
+            errorSelector: decision.prepareErrorSelector,
+            decodedErrorName: decision.decodedErrorName,
+            prepareFailureReason: 'PREPARE_STALE_PLAN',
+            preflightStage: decision.preflightStage ?? 'staleness'
           }
         });
         this.deps.metrics.increment('orders_dropped_total{reason="PREPARE_STALE_PLAN"}');
@@ -1264,7 +1272,6 @@ export class BotRuntime {
             : undefined
         }
       });
-      this.deps.metrics.incrementPreparePreflight();
 
       let preparedAtMs: number | undefined;
       if ('preparedExecution' in decision && decision.preparedExecution) {
@@ -1282,16 +1289,17 @@ export class BotRuntime {
         const message = (decision.prepareMessage ?? 'executionPreparer failed').trim() || 'executionPreparer failed';
         const prepareFailureReason = decision.prepareFailureReason ?? 'PREPARE_TX_BUILD_FAILED';
         this.deps.metrics.incrementOrdersPrepareFailed(decision.chosenRouteVenue, decision.pathKind, decision.executionMode);
-        this.deps.metrics.increment('prepare_preflight_failed_total');
-        this.deps.metrics.increment(`prepare_preflight_failed_total{reason="${prepareFailureReason}"}`);
-        this.deps.metrics.increment('prepare_preflight_failed_total{reason="PREPARE_FAILED"}');
+        this.deps.metrics.incrementPreparePreflightFailed(prepareFailureReason);
         if (prepareFailureReason === 'PREPARE_CALL_REVERTED') {
           this.deps.metrics.increment('prepare_call_reverted_total');
         }
         if (prepareFailureReason === 'PREPARE_ESTIMATE_GAS_FAILED') {
           this.deps.metrics.increment('prepare_estimate_gas_failed_total');
         }
-        this.deps.metrics.increment(`prepare_failure_reason_total{reason="${error}"}`);
+        this.deps.metrics.incrementPrepareFailureReason(prepareFailureReason);
+        if (decision.prepareErrorSelector) {
+          this.deps.metrics.incrementPrepareFailureSelector(decision.prepareErrorSelector);
+        }
         await this.deps.journal.append({
           type: 'PREPARED',
           atMs: Date.now(),
@@ -1317,7 +1325,9 @@ export class BotRuntime {
             errorCategory: prepareFailureReason,
             errorMessage: message,
             errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
-            decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined
+            decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined,
+            prepareFailureReason,
+            preflightStage: decision.preflightStage
           }
         });
       }
@@ -1477,7 +1487,9 @@ export class BotRuntime {
                 errorCategory: decision.prepareFailureReason ?? decision.prepareError ?? 'PrepareError',
                 errorMessage: decision.prepareMessage ?? 'executionPreparer failed',
                 errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
-                decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined
+                decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined,
+                prepareFailureReason: decision.prepareFailureReason,
+                preflightStage: decision.preflightStage
               }
             : undefined;
         await this.deps.journal.append({
@@ -1500,7 +1512,11 @@ export class BotRuntime {
             error: droppedErrorContext?.error,
             message: droppedErrorContext?.message,
             errorCategory: droppedErrorContext?.errorCategory,
-            errorMessage: droppedErrorContext?.errorMessage
+            errorMessage: droppedErrorContext?.errorMessage,
+            errorSelector: droppedErrorContext?.errorSelector,
+            decodedErrorName: droppedErrorContext?.decodedErrorName,
+            prepareFailureReason: droppedErrorContext?.prepareFailureReason,
+            preflightStage: droppedErrorContext?.preflightStage
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);

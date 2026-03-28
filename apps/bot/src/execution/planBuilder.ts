@@ -26,6 +26,15 @@ function totalRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
 }
 
+function timestampSecToMs(timestampSec: bigint): number {
+  const ms = timestampSec * 1_000n;
+  const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+  if (ms > maxSafe) {
+    throw new Error(`resolved timestamp exceeds max safe integer milliseconds: ${ms.toString()}`);
+  }
+  return Number(ms);
+}
+
 export async function buildExecutionPlan(params: BuildExecutionPlanParams): Promise<BuildExecutionPlanResult> {
   const signedOrder = params.normalizedOrder.decodedOrder;
   const resolvedOrder = await resolveAt(
@@ -114,7 +123,7 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     resolveEnv: params.resolveEnv,
     resolvedAtBlockNumber: params.blockNumberish,
     resolvedAtTimestampSec: params.resolveEnv.timestamp,
-    scheduledAtMs: Number(params.resolveEnv.timestamp * 1_000n),
+    scheduledAtMs: timestampSecToMs(params.resolveEnv.timestamp),
     candidateBlockNumberish: params.blockNumberish,
     planFingerprint: keccak256(
       stringToHex(

@@ -1146,6 +1146,13 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       error: 'PrepareExecutionError',
       message: 'failed to prepare execution payload'
     });
+    const failedPayload = prepareFailed?.payload as Record<string, unknown>;
+    const droppedPayload = dropped?.payload as Record<string, unknown>;
+    expect(failedPayload.errorCategory).toBe(droppedPayload.errorCategory);
+    expect(failedPayload.errorMessage).toBe(droppedPayload.errorMessage);
+    expect(failedPayload.prepareFailureReason).toBe(droppedPayload.prepareFailureReason);
+    expect(failedPayload.errorSelector).toBe(droppedPayload.errorSelector);
+    expect(failedPayload.decodedErrorName).toBe(droppedPayload.decodedErrorName);
     expect((dropped?.payload as Record<string, unknown>).chosenRoutePathDescriptor).toEqual(
       `DIRECT: ${normalized.decodedOrder.order.baseInput.token} -> ${normalized.decodedOrder.order.baseOutputs[0]!.token}`
     );
@@ -1153,8 +1160,9 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const counters = metrics.snapshot().counters;
     expect(counters.orders_prepare_failed_total).toBe(1);
     expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
-    expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
+    expect(counters['prepare_failure_reason_total{reason="PREPARE_TX_BUILD_FAILED"}']).toBe(1);
     expect(counters['prepare_preflight_failed_total{reason="PREPARE_TX_BUILD_FAILED"}']).toBe(1);
+    expect(counters['prepare_preflight_total']).toBe(1);
   });
 
   it('stale plan prepare is requeued (non-terminal) and eventually dropped only after bounded retries', async () => {
@@ -1213,8 +1221,15 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const events = await journal.byOrderHash(payload.orderHash);
     const prepareFailedEvents = events.filter((event) => event.type === 'ORDER_PREPARE_FAILED');
     expect(prepareFailedEvents.length).toBeGreaterThanOrEqual(2);
+    const droppedEvent = events.find((event) => event.type === 'ORDER_DROPPED');
+    const failedEvent = prepareFailedEvents[0];
+    expect((failedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
+    expect((failedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
     const counters = metrics.snapshot().counters;
     expect(counters.prepare_stale_plan_total).toBe(3);
+    expect(counters['prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}']).toBe(3);
   });
 
   it('increments false dominant metric when no-edge follows dominant-looking best rejected', async () => {

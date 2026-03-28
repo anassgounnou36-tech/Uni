@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PublicClient } from 'viem';
+import { decodeExecutionError } from '../src/execution/errorDecode.js';
 import { runPreparePreflight } from '../src/execution/preparePreflight.js';
 import { validateExecutionPlanStatic } from '../src/execution/planValidators.js';
 import type { ExecutionPlan } from '../src/execution/types.js';
@@ -87,6 +88,24 @@ describe('prepare preflight pipeline', () => {
     expect(result.failure.reason).toBe('PREPARE_PLAN_INVALID');
   });
 
+  it('uniswap exact-output malformed plan fails early as PREPARE_PLAN_INVALID', () => {
+    const invalid = makePlan({
+      selectedExecutionMode: 'EXACT_OUTPUT',
+      selectedPathDirection: 'FORWARD',
+      route: {
+        ...(makePlan().route as never),
+        venue: 'UNISWAP_V3',
+        executionMode: 'EXACT_OUTPUT',
+        targetOutput: 9n,
+        maxAmountIn: 10n
+      } as never
+    });
+    const result = validateExecutionPlanStatic(invalid, 42161n);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure.reason).toBe('PREPARE_PLAN_INVALID');
+  });
+
   it('reverting call is PREPARE_CALL_REVERTED with selector preservation', async () => {
     const client = {
       getChainId: async () => 42161,
@@ -124,6 +143,36 @@ describe('prepare preflight pipeline', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.failure.errorSelector).toBe('0x12345678');
+    expect(result.failure.decodedErrorName).toBe('UNKNOWN_SELECTOR_0x12345678');
+  });
+
+  it('nested viem-like text-only selector mention is extracted', () => {
+    const decoded = decodeExecutionError({
+      shortMessage: 'Execution reverted',
+      details: 'execution reverted: custom error 0xb08ce5b3',
+      cause: {
+        message: 'rpc error',
+        metaMessages: ['Simulation failed with custom error 0xb08ce5b3']
+      }
+    });
+    expect(decoded.errorSelector).toBe('0xb08ce5b3');
+    expect(decoded.decodedErrorName).toBe('DeadlineReached');
+  });
+
+  it('known selector maps to decodedErrorName', () => {
+    const decoded = decodeExecutionError({
+      data: '0x5c427cd9'
+    });
+    expect(decoded.errorSelector).toBe('0x5c427cd9');
+    expect(decoded.decodedErrorName).toBe('UnauthorizedCaller');
+  });
+
+  it('unknown textual selector persists with stable fallback decode name', () => {
+    const decoded = decodeExecutionError({
+      message: 'custom error 0xfeedbeef'
+    });
+    expect(decoded.errorSelector).toBe('0xfeedbeef');
+    expect(decoded.decodedErrorName).toBe('UNKNOWN_SELECTOR_0xfeedbeef');
   });
 
   it('successful call then estimateGas failure is PREPARE_ESTIMATE_GAS_FAILED', async () => {
