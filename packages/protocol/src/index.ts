@@ -26,7 +26,15 @@ export {
   mulDivDown,
   mulDivUp
 } from './uniswapx/v3dutch/gasAdjustment.js';
-export { decayInput, decayOutput, decayOutputs, locateCurvePosition } from './uniswapx/v3dutch/decay.js';
+export {
+  decayInput,
+  decayOutput,
+  decayOutputs,
+  getCurveEndRelativeBlock,
+  getCurvePoints,
+  getOrderDecayEndBlock,
+  locateCurvePosition
+} from './uniswapx/v3dutch/decay.js';
 export { classifySupport } from './uniswapx/v3dutch/supportPolicy.js';
 export { resolveAt, resolveSignedOrder, validateOrder } from './uniswapx/v3dutch/resolve.js';
 export {

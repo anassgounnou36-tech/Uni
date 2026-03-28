@@ -6,6 +6,7 @@ import type { HedgeRoutePlan, HedgeVenue, RouteCandidateSummary } from './venues
 import type { RejectedVenueRouteAttemptSummary, VenueRouteAttemptSummary } from './attemptTypes.js';
 import type { ExactOutputViabilityStatus } from './exactOutputTypes.js';
 import { ensureRejectedCandidateClass, rejectedCandidateClassPriority } from './rejectedCandidateTypes.js';
+import { computeDirectFamilyDominance, type FamilyDominanceConfidence } from './familyTypes.js';
 
 export type RouteBookSelection =
   | {
@@ -48,6 +49,14 @@ function venueTieBreak(a: HedgeVenue, b: HedgeVenue): number {
 }
 
 function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
+  const dominance = computeDirectFamilyDominance({
+    pathKind: route.pathKind,
+    status: 'ROUTEABLE',
+    outputCoverageBps: route.requiredOutput > 0n ? (route.quotedAmountOut * 10_000n) / route.requiredOutput : 10_000n,
+    exactOutputStatus: route.executionMode === 'EXACT_OUTPUT' ? 'SATISFIABLE' : 'NOT_CHECKED',
+    nearMiss: false,
+    requiredShortfallOut: 0n
+  });
   return {
     venue: route.venue,
     executionMode: route.executionMode,
@@ -57,6 +66,10 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
       route.pathKind === 'DIRECT'
         ? `${route.venue}:DIRECT:${route.tokenIn.toLowerCase()}:${route.tokenOut.toLowerCase()}`
         : `${route.venue}:TWO_HOP:${route.tokenIn.toLowerCase()}:${(route.bridgeToken ?? '').toLowerCase()}:${route.tokenOut.toLowerCase()}`,
+    dominanceScore: dominance.dominanceScore,
+    dominanceMargin: dominance.dominanceMargin,
+    dominanceConfidence: dominance.dominanceConfidence,
+    dominanceReason: dominance.dominanceReason,
     exactOutputPromotedFromFamily: route.executionMode === 'EXACT_OUTPUT',
     pathKind: route.pathKind,
     hopCount: route.hopCount,
@@ -75,6 +88,89 @@ function toSummary(route: HedgeRoutePlan): RouteCandidateSummary {
     netEdgeOut: route.netEdgeOut,
     gasCostOut: route.gasCostOut
   };
+}
+
+function deriveDominanceConfidence(
+  route: HedgeRoutePlan,
+  summary: RouteCandidateSummary | VenueRouteAttemptSummary | undefined,
+  margin: number,
+  minMargin: number
+): FamilyDominanceConfidence {
+  const candidateClass = summary?.candidateClass;
+  const constraintReason = summary?.constraintReason;
+  const nearMiss = summary?.constraintBreakdown?.nearMiss ?? summary?.hedgeGap?.nearMiss ?? false;
+  const unsat = summary?.exactOutputViability?.status === 'UNSATISFIABLE';
+  if (
+    candidateClass === 'LIQUIDITY_BLOCKED'
+    || constraintReason === 'REQUIRED_OUTPUT'
+    || nearMiss
+    || unsat
+  ) {
+    return margin >= minMargin ? 'MEDIUM' : 'LOW';
+  }
+  if (margin >= minMargin * 2) {
+    return 'HIGH';
+  }
+  if (margin >= minMargin) {
+    return 'MEDIUM';
+  }
+  return route.pathKind === 'DIRECT' ? 'MEDIUM' : 'LOW';
+}
+
+function isPoolMissingOrNotRouteable(attempt: VenueRouteAttemptSummary | undefined): boolean {
+  if (!attempt) return false;
+  return attempt.status === 'NOT_ROUTEABLE'
+    || attempt.reason === 'POOL_MISSING'
+    || attempt.reason === 'POOL_OR_QUOTE_UNAVAILABLE';
+}
+
+function isActionabilityRisk(summary: VenueRouteAttemptSummary | RouteCandidateSummary | undefined): boolean {
+  if (!summary) return false;
+  const nearMiss = summary.constraintBreakdown?.nearMiss ?? summary.hedgeGap?.nearMiss ?? false;
+  return (summary.candidateClass === 'LIQUIDITY_BLOCKED'
+    || summary.constraintReason === 'REQUIRED_OUTPUT'
+    || nearMiss
+    || summary.exactOutputViability?.status === 'UNSATISFIABLE');
+}
+
+type FamilyWinStats = {
+  evaluated: number;
+  bestRejected: number;
+  chosen: number;
+};
+
+const MIN_EVALUATIONS_FOR_WIN_RATE_PENALTY = 3;
+const WIN_RATE_PENALTY_SCALE_FACTOR = 100;
+
+function familyStatsKey(summary: Pick<RouteCandidateSummary, 'venue' | 'familyKey' | 'familyKind' | 'pathKind'>): string {
+  if (summary.familyKey) {
+    return summary.familyKey;
+  }
+  return `${summary.venue}:${summary.familyKind ?? summary.pathKind ?? 'UNKNOWN'}`;
+}
+
+function winRatePenalty(
+  statsMap: Map<string, FamilyWinStats>,
+  summary: Pick<RouteCandidateSummary, 'venue' | 'familyKey' | 'familyKind' | 'pathKind'>
+): number {
+  const stats = statsMap.get(familyStatsKey(summary));
+  if (!stats || stats.evaluated < MIN_EVALUATIONS_FOR_WIN_RATE_PENALTY) {
+    return 0;
+  }
+  const winRate = stats.chosen / stats.evaluated;
+  const bestRejectedRate = stats.bestRejected / stats.evaluated;
+  return Math.max(0, Math.floor((bestRejectedRate - winRate) * WIN_RATE_PENALTY_SCALE_FACTOR));
+}
+
+function bumpFamilyStats(
+  statsMap: Map<string, FamilyWinStats>,
+  summary: Pick<RouteCandidateSummary, 'venue' | 'familyKey' | 'familyKind' | 'pathKind'>,
+  field: keyof FamilyWinStats
+): void {
+  const key = familyStatsKey(summary);
+  const current = statsMap.get(key) ?? { evaluated: 0, bestRejected: 0, chosen: 0 };
+  current[field] += 1;
+  statsMap.set(key, current);
 }
 
 function sumRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
@@ -327,6 +423,8 @@ function rejectedCandidateSort(a: VenueRouteAttemptSummary, b: VenueRouteAttempt
 }
 
 export class RouteBook {
+  private readonly familyWinStats = new Map<string, FamilyWinStats>();
+
   constructor(
     private readonly planners: {
       uniswapV3: UniV3RoutePlanner;
@@ -334,7 +432,34 @@ export class RouteBook {
       lfjLb?: LfjLbRoutePlanner;
       enableCamelotAmmv3: boolean;
       enableLfjLb?: boolean;
+      maxExtraFamiliesAfterDominantDirect?: number;
+      dominanceMinScoreMargin?: number;
+      maxExtraSameVenueChallengersAfterOtherVenuesMissing?: number;
       maxRevertedProbesPerOrder?: number;
+      onRouteEvalFamilyDominant?: (venue: HedgeVenue, pathKind: 'DIRECT' | 'TWO_HOP') => void;
+      onRouteEvalFamilyDemoted?: (venue: HedgeVenue, pathKind: 'DIRECT' | 'TWO_HOP') => void;
+      onRouteEvalFamilyBestRejected?: (venue: HedgeVenue, pathKind: 'DIRECT' | 'TWO_HOP') => void;
+      onRouteEvalFamilyProvisionalWinner?: (
+        venue: HedgeVenue,
+        pathKind: 'DIRECT' | 'TWO_HOP',
+        executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT'
+      ) => void;
+      onRouteEvalFamilyChosen?: (
+        venue: HedgeVenue,
+        pathKind: 'DIRECT' | 'TWO_HOP',
+        executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT'
+      ) => void;
+      onRouteEvalFamilyFalseDominant?: (
+        venue: HedgeVenue,
+        pathKind: 'DIRECT' | 'TWO_HOP',
+        executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT'
+      ) => void;
+      onRouteEvalFamilyDominanceMargin?: (
+        venue: HedgeVenue,
+        pathKind: 'DIRECT' | 'TWO_HOP',
+        margin: number
+      ) => void;
+      onRouteEvalFamilyRegistrySize?: (size: number) => void;
     }
   ) {}
 
@@ -362,6 +487,15 @@ export class RouteBook {
       }
     } else {
       const failureSummary = ensureCandidateClass(uniswapResult.failure.summary as RejectedVenueRouteAttemptSummary);
+      const dominance = computeDirectFamilyDominance({
+        pathKind: failureSummary.pathKind,
+        status: failureSummary.status,
+        outputCoverageBps: failureSummary.hedgeGap?.outputCoverageBps,
+        exactOutputStatus: failureSummary.exactOutputViability?.status,
+        candidateClass: failureSummary.candidateClass,
+        nearMiss: failureSummary.constraintBreakdown?.nearMiss ?? failureSummary.hedgeGap?.nearMiss,
+        requiredShortfallOut: failureSummary.hedgeGap?.requiredOutputShortfallOut ?? failureSummary.constraintBreakdown?.requiredOutputShortfallOut
+      });
       venueAttempts.push(failureSummary);
         alternatives.push({
           venue: 'UNISWAP_V3',
@@ -369,6 +503,10 @@ export class RouteBook {
           familyKind: failureSummary.familyKind,
           probePriority: failureSummary.probePriority,
           familyKey: failureSummary.familyKey,
+          dominanceScore: failureSummary.dominanceScore ?? dominance.dominanceScore,
+          dominanceMargin: failureSummary.dominanceMargin ?? dominance.dominanceMargin,
+          dominanceConfidence: failureSummary.dominanceConfidence ?? dominance.dominanceConfidence,
+          dominanceReason: failureSummary.dominanceReason ?? dominance.dominanceReason,
           exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
           pathKind: failureSummary.pathKind,
         hopCount: failureSummary.hopCount,
@@ -395,6 +533,15 @@ export class RouteBook {
         }
       } else {
         const failureSummary = ensureCandidateClass(camelotResult.failure.summary as RejectedVenueRouteAttemptSummary);
+        const dominance = computeDirectFamilyDominance({
+          pathKind: failureSummary.pathKind,
+          status: failureSummary.status,
+          outputCoverageBps: failureSummary.hedgeGap?.outputCoverageBps,
+          exactOutputStatus: failureSummary.exactOutputViability?.status,
+          candidateClass: failureSummary.candidateClass,
+          nearMiss: failureSummary.constraintBreakdown?.nearMiss ?? failureSummary.hedgeGap?.nearMiss,
+          requiredShortfallOut: failureSummary.hedgeGap?.requiredOutputShortfallOut ?? failureSummary.constraintBreakdown?.requiredOutputShortfallOut
+        });
         venueAttempts.push(failureSummary);
         alternatives.push({
           venue: 'CAMELOT_AMMV3',
@@ -402,6 +549,10 @@ export class RouteBook {
           familyKind: failureSummary.familyKind,
           probePriority: failureSummary.probePriority,
           familyKey: failureSummary.familyKey,
+          dominanceScore: failureSummary.dominanceScore ?? dominance.dominanceScore,
+          dominanceMargin: failureSummary.dominanceMargin ?? dominance.dominanceMargin,
+          dominanceConfidence: failureSummary.dominanceConfidence ?? dominance.dominanceConfidence,
+          dominanceReason: failureSummary.dominanceReason ?? dominance.dominanceReason,
           exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
           pathKind: failureSummary.pathKind,
           hopCount: failureSummary.hopCount,
@@ -453,6 +604,15 @@ export class RouteBook {
         }
       } else {
         const failureSummary = ensureCandidateClass(lfjResult.failure.summary as RejectedVenueRouteAttemptSummary);
+        const dominance = computeDirectFamilyDominance({
+          pathKind: failureSummary.pathKind,
+          status: failureSummary.status,
+          outputCoverageBps: failureSummary.hedgeGap?.outputCoverageBps,
+          exactOutputStatus: failureSummary.exactOutputViability?.status,
+          candidateClass: failureSummary.candidateClass,
+          nearMiss: failureSummary.constraintBreakdown?.nearMiss ?? failureSummary.hedgeGap?.nearMiss,
+          requiredShortfallOut: failureSummary.hedgeGap?.requiredOutputShortfallOut ?? failureSummary.constraintBreakdown?.requiredOutputShortfallOut
+        });
         venueAttempts.push(failureSummary);
         alternatives.push({
           venue: 'LFJ_LB',
@@ -460,6 +620,10 @@ export class RouteBook {
           familyKind: failureSummary.familyKind,
           probePriority: failureSummary.probePriority,
           familyKey: failureSummary.familyKey,
+          dominanceScore: failureSummary.dominanceScore ?? dominance.dominanceScore,
+          dominanceMargin: failureSummary.dominanceMargin ?? dominance.dominanceMargin,
+          dominanceConfidence: failureSummary.dominanceConfidence ?? dominance.dominanceConfidence,
+          dominanceReason: failureSummary.dominanceReason ?? dominance.dominanceReason,
           exactOutputPromotedFromFamily: failureSummary.exactOutputPromotedFromFamily,
           pathKind: failureSummary.pathKind,
           hopCount: failureSummary.hopCount,
@@ -497,6 +661,22 @@ export class RouteBook {
             candidateClass: ensureCandidateClass(bestRejectedSummary).candidateClass
           }
         : undefined;
+      if (bestRejectedWithClass) {
+        this.planners.onRouteEvalFamilyBestRejected?.(
+          bestRejectedWithClass.venue,
+          bestRejectedWithClass.pathKind ?? 'DIRECT'
+        );
+        bumpFamilyStats(
+          this.familyWinStats,
+          {
+            venue: bestRejectedWithClass.venue,
+            familyKey: bestRejectedWithClass.familyKey,
+            familyKind: bestRejectedWithClass.familyKind,
+            pathKind: bestRejectedWithClass.pathKind
+          },
+          'bestRejected'
+        );
+      }
       const statuses = venueAttempts.map((attempt) => attempt.status);
       const allNotRouteableOrQuoteFailed = statuses.every(
         (status) =>
@@ -583,7 +763,129 @@ export class RouteBook {
         familyBest.set(key, route);
       }
     }
-    const [chosenRoute, ...otherRoutes] = sortByBestEdge([...familyBest.values()]);
+    this.planners.onRouteEvalFamilyRegistrySize?.(familyBest.size);
+    const candidates = [...familyBest.values()];
+    for (const route of candidates) {
+      bumpFamilyStats(
+        this.familyWinStats,
+        {
+          venue: route.venue,
+          familyKey: routeFamilyKey(route),
+          familyKind: route.pathKind,
+          pathKind: route.pathKind
+        },
+        'evaluated'
+      );
+    }
+    const withDominance = candidates.map((route) => {
+      const summary = toSummary(route);
+      return {
+        route,
+        summary,
+        score: (summary.dominanceScore ?? 0) - winRatePenalty(this.familyWinStats, summary)
+      };
+    });
+    withDominance.sort((a, b) => {
+      if (a.score !== b.score) {
+        return b.score - a.score;
+      }
+      const sorted = sortByBestEdge([a.route, b.route]);
+      return sorted[0] === a.route ? -1 : 1;
+    });
+    const dominantDirect = withDominance.find((entry) => entry.route.pathKind === 'DIRECT');
+    const nextBest = withDominance.find((entry) => entry !== dominantDirect);
+    const dominanceMargin = dominantDirect ? Math.max(0, dominantDirect.score - (nextBest?.score ?? 0)) : 0;
+    const dominanceMinScoreMargin = this.planners.dominanceMinScoreMargin ?? 10;
+    if (dominantDirect) {
+      dominantDirect.summary.dominanceMargin = dominanceMargin;
+      dominantDirect.summary.dominanceConfidence = deriveDominanceConfidence(
+        dominantDirect.route,
+        venueAttempts.find((attempt) => attempt.venue === dominantDirect.route.venue),
+        dominanceMargin,
+        dominanceMinScoreMargin
+      );
+      this.planners.onRouteEvalFamilyDominanceMargin?.(
+        dominantDirect.route.venue,
+        dominantDirect.route.pathKind,
+        dominanceMargin
+      );
+    }
+    const maxExtraFamilies = this.planners.maxExtraFamiliesAfterDominantDirect ?? 1;
+    const dominantTrusted = dominantDirect
+      && dominanceMargin >= dominanceMinScoreMargin
+      && dominantDirect.summary.dominanceConfidence !== 'LOW';
+    let filtered = dominantTrusted
+      ? [
+          dominantDirect,
+          ...withDominance
+            .filter((entry) => entry !== dominantDirect)
+            .slice(0, maxExtraFamilies)
+        ]
+      : withDominance;
+    if (dominantDirect) {
+      const dominantAttempt = venueAttempts.find(
+        (attempt) => attempt.venue === dominantDirect.route.venue && (attempt.pathKind ?? dominantDirect.route.pathKind) === dominantDirect.route.pathKind
+      );
+      const retainChallengers = isActionabilityRisk(dominantAttempt);
+      if (retainChallengers) {
+        const sameVenueDifferentPath = withDominance.find(
+          (entry) =>
+            entry !== dominantDirect
+            && entry.route.venue === dominantDirect.route.venue
+            && entry.route.pathKind !== dominantDirect.route.pathKind
+        );
+        const bestCamelotDirect = withDominance.find(
+          (entry) => entry !== dominantDirect && entry.route.venue === 'CAMELOT_AMMV3' && entry.route.pathKind === 'DIRECT'
+        );
+        const bestLfjDirect = withDominance.find(
+          (entry) => entry !== dominantDirect && entry.route.venue === 'LFJ_LB' && entry.route.pathKind === 'DIRECT'
+        );
+        for (const candidate of [sameVenueDifferentPath, bestCamelotDirect, bestLfjDirect]) {
+          if (candidate && !filtered.includes(candidate)) {
+            filtered.push(candidate);
+          }
+        }
+      }
+
+      const nonDominantAttempts = venueAttempts.filter((attempt) => attempt.venue !== dominantDirect.route.venue);
+      const allOtherVenuesMissing = nonDominantAttempts.length > 0 && nonDominantAttempts.every((attempt) => isPoolMissingOrNotRouteable(attempt));
+      if (allOtherVenuesMissing) {
+        const extraSameVenue = this.planners.maxExtraSameVenueChallengersAfterOtherVenuesMissing ?? 2;
+        const sameVenueCandidates = withDominance
+          .filter((entry) => entry !== dominantDirect && entry.route.venue === dominantDirect.route.venue)
+          .slice(0, extraSameVenue);
+        for (const candidate of sameVenueCandidates) {
+          if (!filtered.includes(candidate)) {
+            filtered.push(candidate);
+          }
+        }
+      }
+    }
+    if (dominantTrusted && dominantDirect) {
+      this.planners.onRouteEvalFamilyDominant?.(dominantDirect.route.venue, dominantDirect.route.pathKind);
+      withDominance
+        .filter((entry) => !filtered.includes(entry))
+        .forEach((entry) => this.planners.onRouteEvalFamilyDemoted?.(entry.route.venue, entry.route.pathKind));
+    }
+    const provisional = filtered[0]?.route ?? dominantDirect?.route ?? withDominance[0]!.route;
+    this.planners.onRouteEvalFamilyProvisionalWinner?.(
+      provisional.venue,
+      provisional.pathKind,
+      (provisional.executionMode ?? 'EXACT_INPUT') as
+        | 'EXACT_INPUT'
+        | 'EXACT_OUTPUT'
+    );
+    const [chosenRoute, ...otherRoutes] = sortByBestEdge(filtered.map((entry) => entry.route));
+    bumpFamilyStats(
+      this.familyWinStats,
+      {
+        venue: chosenRoute.venue,
+        familyKey: routeFamilyKey(chosenRoute),
+        familyKind: chosenRoute.pathKind,
+        pathKind: chosenRoute.pathKind
+      },
+      'chosen'
+    );
     const alternativeRoutes = alternatives.map((candidate) => {
       if (candidate.venue === chosenRoute.venue && candidate.eligible) {
         return candidate;
@@ -606,6 +908,17 @@ export class RouteBook {
 
     const chosenSummary = venueAttempts.find((summary) => summary.venue === chosenRoute.venue) ?? {
       venue: chosenRoute.venue,
+      executionMode: chosenRoute.executionMode,
+      pathKind: chosenRoute.pathKind,
+      hopCount: chosenRoute.hopCount,
+      bridgeToken: chosenRoute.bridgeToken,
+      familyKind: chosenRoute.pathKind,
+      probePriority: chosenRoute.pathKind === 'DIRECT' ? 0 : 100,
+      familyKey: routeFamilyKey(chosenRoute),
+      dominanceScore: toSummary(chosenRoute).dominanceScore,
+      dominanceMargin: toSummary(chosenRoute).dominanceMargin,
+      dominanceConfidence: toSummary(chosenRoute).dominanceConfidence,
+      dominanceReason: toSummary(chosenRoute).dominanceReason,
       status: 'ROUTEABLE',
       reason: 'ROUTEABLE',
       quotedAmountOut: chosenRoute.quotedAmountOut,

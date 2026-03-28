@@ -145,4 +145,56 @@ describe('routing rpc infra helpers', () => {
     expect(cache.getNegativeEntryCount()).toBe(1);
     expect(calls).toBe(1);
   });
+
+  it('evicts oldest entries when cache exceeds max entries', async () => {
+    const cache = new RouteEvalReadCache({ maxEntries: 2, maxNegativeEntries: 2 });
+    let calls = 0;
+    const load = async (value: string) => {
+      calls += 1;
+      return value;
+    };
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1, target: '0x1', fn: 'a' }, () => load('a'));
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1, target: '0x1', fn: 'b' }, () => load('b'));
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1, target: '0x1', fn: 'c' }, () => load('c'));
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1, target: '0x1', fn: 'a' }, () => load('a2'));
+    expect(cache.getEntryCount()).toBe(2);
+    expect(calls).toBe(4);
+  });
+
+  it('prunes old block snapshots when snapshot cap is exceeded', async () => {
+    const cache = new RouteEvalReadCache({ maxEntries: 10, maxNegativeEntries: 10, maxSnapshots: 2 });
+    let calls = 0;
+    const load = async () => {
+      calls += 1;
+      return 'ok';
+    };
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1000n, target: '0x1', fn: 'x' }, load);
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1001n, target: '0x1', fn: 'x' }, load);
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1002n, target: '0x1', fn: 'x' }, load);
+    expect(cache.getSnapshotCount()).toBe(2);
+    await cache.getOrSet({ chainId: 1, blockNumberish: 1000n, target: '0x1', fn: 'x' }, load);
+    expect(calls).toBe(4);
+  });
+
+  it('bounds negative-result cache and evicts safely', async () => {
+    const cache = new RouteEvalReadCache({ maxEntries: 10, maxNegativeEntries: 1 });
+    const mkLoader = (msg: string) => async () => {
+      throw new Error(msg);
+    };
+    await expect(
+      cache.getOrSetNegative(
+        { chainId: 1, blockNumberish: 1, target: '0x1', fn: 'f1' },
+        mkLoader('revert-1'),
+        () => true
+      )
+    ).rejects.toThrow('revert-1');
+    await expect(
+      cache.getOrSetNegative(
+        { chainId: 1, blockNumberish: 1, target: '0x1', fn: 'f2' },
+        mkLoader('revert-2'),
+        () => true
+      )
+    ).rejects.toThrow('revert-2');
+    expect(cache.getNegativeEntryCount()).toBe(1);
+  });
 });

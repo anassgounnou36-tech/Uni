@@ -1,5 +1,5 @@
 import type { ResolveEnv, ResolvedV3DutchOrder, V3DutchOrder } from '@uni/protocol';
-import { resolveAt } from '@uni/protocol';
+import { getOrderDecayEndBlock, resolveAt } from '@uni/protocol';
 import type { RouteBook } from '../routing/routeBook.js';
 import type { HedgeRoutePlan } from '../routing/venues.js';
 import type { VenueRouteAttemptSummary } from '../routing/attemptTypes.js';
@@ -73,7 +73,65 @@ export type FirstProfitableBlockParams = {
   candidateBlocks?: readonly bigint[];
   threshold: bigint;
   competeWindowBlocks: bigint;
+  routeEvalCacheMaxEntries?: number;
+  routeEvalNegativeCacheMaxEntries?: number;
+  maxCandidateBlocksPerOrder?: number;
+  onRouteEvalCacheStats?: (stats: { entries: number; negativeEntries: number; snapshots: number }) => void;
 };
+
+const DEFAULT_MAX_CANDIDATE_BLOCKS_PER_ORDER = 7;
+const DEFAULT_CANDIDATE_BLOCK_OFFSETS = [0n, 1n, 2n] as const;
+const ONE_SECOND_PER_BLOCK = 1n;
+
+function toDeadlineBlockCap(nowBlock: bigint, nowTimestamp: bigint, deadlineTimestamp: bigint): bigint {
+  if (deadlineTimestamp <= nowTimestamp) {
+    return nowBlock;
+  }
+  return nowBlock + (deadlineTimestamp - nowTimestamp) / ONE_SECOND_PER_BLOCK;
+}
+
+function clampBlock(value: bigint, minValue: bigint, maxValue: bigint): bigint {
+  if (value < minValue) return minValue;
+  if (value > maxValue) return maxValue;
+  return value;
+}
+
+type CandidatePlanInput = {
+  order: V3DutchOrder;
+  currentBlockNumberish: bigint;
+  defaultOffsets: readonly bigint[];
+  maxBlocks: number;
+  fillerAddress?: `0x${string}`;
+  deadlineBlockCap?: bigint;
+};
+
+export function planCandidateBlocks(input: CandidatePlanInput): bigint[] {
+  const raw = new Set<bigint>();
+  for (const offset of input.defaultOffsets) {
+    raw.add(input.currentBlockNumberish + offset);
+  }
+
+  const decayStartPlusOne = input.order.cosignerData.decayStartBlock + 1n;
+  const decayEndBlock = getOrderDecayEndBlock(input.order);
+  const earliest = input.currentBlockNumberish > decayStartPlusOne ? input.currentBlockNumberish : decayStartPlusOne;
+  const latest = input.deadlineBlockCap !== undefined
+    ? (input.deadlineBlockCap < decayEndBlock ? input.deadlineBlockCap : decayEndBlock)
+    : decayEndBlock;
+
+  raw.add(decayStartPlusOne);
+  raw.add(decayEndBlock);
+  if (latest >= earliest) {
+    const span = latest - earliest;
+    raw.add(earliest + span / 2n);
+    raw.add(earliest + (span * 2n) / 3n);
+  }
+
+  const filtered = [...raw]
+    .filter((block) => block >= input.currentBlockNumberish)
+    .filter((block) => input.deadlineBlockCap === undefined || block <= input.deadlineBlockCap)
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return filtered.slice(0, Math.max(1, input.maxBlocks));
+}
 
 function totalOutputAmount(resolved: ResolvedV3DutchOrder): bigint {
   return resolved.outputs.reduce((sum, output) => sum + output.amount, 0n);
@@ -89,12 +147,35 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         chainId: currentEnv.chainId
       }
     : (params.baseEnv ?? { timestamp: 0n, basefee: 0n, chainId: 42161n });
-  const candidateBlocks = currentEnv
-    ? (params.candidateBlockOffsets ?? [0n, 1n, 2n]).map((offset) => currentEnv.blockNumberish + offset)
-    : (params.candidateBlocks ?? []);
+  const maxBlocks = params.maxCandidateBlocksPerOrder ?? DEFAULT_MAX_CANDIDATE_BLOCKS_PER_ORDER;
+  const nowBlock = currentEnv?.blockNumberish ?? (params.candidateBlocks?.[0] ?? 0n);
+  const deadlineBlockCap = toDeadlineBlockCap(nowBlock, baseEnv.timestamp, params.order.info.deadline);
+  const initialCandidates = currentEnv
+    ? planCandidateBlocks({
+      order: params.order,
+      currentBlockNumberish: currentEnv.blockNumberish,
+      defaultOffsets: params.candidateBlockOffsets ?? DEFAULT_CANDIDATE_BLOCK_OFFSETS,
+      maxBlocks,
+      deadlineBlockCap
+    })
+    : [...(params.candidateBlocks ?? [])]
+      .filter((block) => block >= nowBlock && block <= deadlineBlockCap)
+      .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+      .slice(0, maxBlocks);
+  const candidateBlocks = [...initialCandidates];
+  const evaluatedBlocks = new Set<bigint>();
+  const decayEndBlock = getOrderDecayEndBlock(params.order);
 
-  const readCache = new RouteEvalReadCache();
-  for (const block of [...candidateBlocks].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+  const readCache = new RouteEvalReadCache({
+    maxEntries: params.routeEvalCacheMaxEntries,
+    maxNegativeEntries: params.routeEvalNegativeCacheMaxEntries
+  });
+  for (let index = 0; index < candidateBlocks.length; index += 1) {
+    const block = candidateBlocks[index]!;
+    if (evaluatedBlocks.has(block)) {
+      continue;
+    }
+    evaluatedBlocks.add(block);
     const resolved = await resolveAt(params.order, {
       ...baseEnv,
       blockNumberish: block
@@ -107,6 +188,11 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         blockNumberish: block,
         readCache
       }
+    });
+    params.onRouteEvalCacheStats?.({
+      entries: readCache.getEntryCount(),
+      negativeEntries: readCache.getNegativeEntryCount(),
+      snapshots: readCache.getSnapshotCount()
     });
     if (!routeResult.ok) {
       const bestRejectedSummary = routeResult.bestRejectedSummary ? { ...routeResult.bestRejectedSummary } : undefined;
@@ -140,6 +226,37 @@ export async function findFirstProfitableBlock(params: FirstProfitableBlockParam
         venueAttempts: routeResult.venueAttempts,
         bestRejectedSummary
       });
+      if (
+        candidateBlocks.length < maxBlocks
+        && bestRejectedSummary?.constraintReason === 'REQUIRED_OUTPUT'
+        && bestRejectedSummary?.exactOutputViability?.status === 'UNSATISFIABLE'
+        && bestRejectedSummary?.constraintBreakdown?.nearMiss === true
+        && block < decayEndBlock
+      ) {
+        const shortfallOut =
+          bestRejectedSummary?.hedgeGap?.requiredOutputShortfallOut
+          ?? bestRejectedSummary?.constraintBreakdown?.requiredOutputShortfallOut
+          ?? 0n;
+        if (shortfallOut > 0n) {
+          const nextResolved = await resolveAt(params.order, {
+            ...baseEnv,
+            blockNumberish: block + 1n
+          });
+          const requiredNow = totalOutputAmount(resolved);
+          const requiredNext = totalOutputAmount(nextResolved);
+          const deltaRequiredOutputPerBlock = requiredNow > requiredNext ? requiredNow - requiredNext : 1n;
+          const blocksNeeded = (shortfallOut + deltaRequiredOutputPerBlock - 1n) / deltaRequiredOutputPerBlock;
+          const jumpMax = deadlineBlockCap < decayEndBlock ? deadlineBlockCap : decayEndBlock;
+          const jumpBlock = clampBlock(block + blocksNeeded, block, jumpMax);
+          if (!evaluatedBlocks.has(jumpBlock) && !candidateBlocks.includes(jumpBlock)) {
+            candidateBlocks.push(jumpBlock);
+            candidateBlocks.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+            if (candidateBlocks.length > maxBlocks) {
+              candidateBlocks.length = maxBlocks;
+            }
+          }
+        }
+      }
       continue;
     }
 

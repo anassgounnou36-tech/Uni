@@ -18,6 +18,7 @@ export type ReplaySupportPolicy = {
   allowlistedPairs: ReadonlyArray<{ inputToken: `0x${string}`; outputToken: `0x${string}` }>;
   thresholdOut: bigint;
   candidateBlockOffsets?: readonly bigint[];
+  maxCandidateBlocksPerOrder?: number;
   competeWindowBlocks: bigint;
 };
 
@@ -123,6 +124,7 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       baseEnv: params.resolveEnv,
       routeBook: params.routeBook,
       candidateBlockOffsets,
+      maxCandidateBlocksPerOrder: params.supportPolicy.maxCandidateBlocksPerOrder,
       threshold: params.supportPolicy.thresholdOut,
       competeWindowBlocks: params.supportPolicy.competeWindowBlocks
     });
@@ -242,6 +244,7 @@ export async function runReplayRegression(params: {
   corpus: readonly NormalizedOrder[];
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   candidateBlockOffsets?: readonly bigint[];
+  maxCandidateBlocksPerOrder?: number;
   resolveEnvProvider?: ResolveEnvProvider;
   baselineRouteBook: RouteBook;
   candidateRouteBook: RouteBook;

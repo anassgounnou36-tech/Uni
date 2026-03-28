@@ -276,6 +276,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -324,6 +325,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -374,6 +376,7 @@ export async function buildRuntimeFromConfig(
           },
           onRouteEvalFamilyPromoted: (venue, pathKind, executionMode) => {
             metrics.incrementRouteEvalFamilyPromoted(venue, pathKind, executionMode);
+            metrics.incrementRouteEvalFamilyPromotedEarly(venue, pathKind, executionMode);
           },
           onRouteEvalInfraError: (category, venue, pathKind) => {
             if (category === 'RATE_LIMITED') {
@@ -387,6 +390,34 @@ export async function buildRuntimeFromConfig(
         }),
       enableCamelotAmmv3: config.enableCamelotAmmv3,
       enableLfjLb: config.enableLfjLb,
+      maxExtraFamiliesAfterDominantDirect: config.maxExtraFamiliesAfterDominantDirect,
+      dominanceMinScoreMargin: config.dominanceMinScoreMargin,
+      maxExtraSameVenueChallengersAfterOtherVenuesMissing:
+        config.maxExtraSameVenueChallengersAfterOtherVenuesMissing,
+      onRouteEvalFamilyDominant: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyDominant(venue, pathKind);
+      },
+      onRouteEvalFamilyDemoted: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyDemoted(venue, pathKind);
+      },
+      onRouteEvalFamilyBestRejected: (venue, pathKind) => {
+        metrics.incrementRouteEvalFamilyBestRejected(venue, pathKind);
+      },
+      onRouteEvalFamilyProvisionalWinner: (venue, pathKind, executionMode) => {
+        metrics.incrementRouteEvalFamilyProvisionalWinner(venue, pathKind, executionMode);
+      },
+      onRouteEvalFamilyChosen: () => {
+        // Chosen/actionable family metrics are counted at schedule time in BotRuntime.
+      },
+      onRouteEvalFamilyFalseDominant: (venue, pathKind, executionMode) => {
+        metrics.incrementRouteEvalFamilyFalseDominant(venue, pathKind, executionMode);
+      },
+      onRouteEvalFamilyDominanceMargin: (venue, pathKind, margin) => {
+        metrics.observeRouteEvalFamilyDominanceMargin(venue, pathKind, margin);
+      },
+      onRouteEvalFamilyRegistrySize: (size) => {
+        metrics.setGauge('route_eval_family_registry_entries', size);
+      },
       maxRevertedProbesPerOrder: config.maxRevertedProbesPerOrder
       })
     };

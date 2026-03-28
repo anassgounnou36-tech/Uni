@@ -1217,4 +1217,139 @@ describe('RouteBook', () => {
     expect(selected.reason).toBe('RPC_FAILED');
     expect(selected.infraBlocked).toBe(true);
   });
+
+  it('limits extra family exploration after dominant direct family', async () => {
+    const dominant = makeRoute('UNISWAP_V3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 30n, quotedAmountOut: 1_020n });
+    const challenger = makeRoute('CAMELOT_AMMV3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 20n, quotedAmountOut: 1_010n });
+    const weak = makeRoute('LFJ_LB', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 10n, quotedAmountOut: 980n });
+    const routeBook = new RouteBook({
+      uniswapV3: plannerSuccess(dominant, 'UNISWAP_V3'),
+      camelotAmmv3: plannerSuccess(challenger, 'CAMELOT_AMMV3'),
+      lfjLb: plannerSuccess(weak, 'LFJ_LB'),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true,
+      maxExtraFamiliesAfterDominantDirect: 1
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: dominant.tokenIn, amount: 1_000n }, outputs: [{ token: dominant.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.chosenRoute.venue).toBe('UNISWAP_V3');
+    const beaten = selected.alternativeRoutes.filter((candidate) => candidate.reason === 'BEAT_BY_HIGHER_NET_EDGE');
+    expect(beaten.some((candidate) => candidate.venue === 'CAMELOT_AMMV3')).toBe(true);
+    expect(beaten.some((candidate) => candidate.venue === 'LFJ_LB')).toBe(true);
+  });
+
+  it('tracks dominance fields for rejected summaries', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: plannerFailure('UNISWAP_V3', 'POOL_MISSING'),
+      camelotAmmv3: plannerFailure('CAMELOT_AMMV3', 'POOL_MISSING'),
+      lfjLb: plannerFailure('LFJ_LB', 'POOL_MISSING'),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+    expect(selected.ok).toBe(false);
+    if (selected.ok) return;
+    expect(selected.alternativeRoutes.every((candidate) => candidate.dominanceScore !== undefined)).toBe(true);
+  });
+
+  it('near_miss_unsatisfiable_direct_retains_same_venue_and_cross_venue_challengers', async () => {
+    const routeBook = new RouteBook({
+      uniswapV3: {
+        planBestRoute: async () => ({
+          ok: true as const,
+          route: makeRoute('UNISWAP_V3', {
+            pathKind: 'DIRECT',
+            hopCount: 1,
+            executionMode: 'EXACT_OUTPUT',
+            netEdgeOut: 15n,
+            quotedAmountOut: 1_005n,
+            minAmountOut: 900n
+          }),
+          summary: venueSummary('UNISWAP_V3', 'CONSTRAINT_REJECTED', {
+            pathKind: 'DIRECT',
+            hopCount: 1,
+            executionMode: 'EXACT_OUTPUT',
+            constraintReason: 'REQUIRED_OUTPUT',
+            candidateClass: 'LIQUIDITY_BLOCKED',
+            exactOutputViability: {
+              status: 'UNSATISFIABLE',
+              targetOutput: 900n,
+              requiredInputForTargetOutput: 1_001n,
+              availableInput: 1_000n,
+              inputDeficit: 1n,
+              inputSlack: 0n,
+              reason: 'required output unsatisfiable'
+            },
+            hedgeGap: {
+              requiredOutput: 900n,
+              quotedAmountOut: 898n,
+              outputCoverageBps: 9_977n,
+              requiredOutputShortfallOut: 2n,
+              minAmountOutShortfallOut: 2n,
+              inputDeficit: 1n,
+              inputSlack: 0n,
+              gapClass: 'SMALL',
+              nearMiss: true,
+              nearMissBps: 25n
+            }
+          })
+        })
+      },
+      camelotAmmv3: plannerSuccess(
+        makeRoute('CAMELOT_AMMV3', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 13n, quotedAmountOut: 896n }),
+        'CAMELOT_AMMV3'
+      ),
+      lfjLb: plannerSuccess(
+        makeRoute('LFJ_LB', { pathKind: 'DIRECT', hopCount: 1, netEdgeOut: 12n, quotedAmountOut: 895n }),
+        'LFJ_LB'
+      ),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true,
+      maxExtraFamiliesAfterDominantDirect: 0
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: {
+        input: { token: makeRoute('UNISWAP_V3').tokenIn, amount: 1_000n },
+        outputs: [{ token: makeRoute('UNISWAP_V3').tokenOut, amount: 900n }]
+      } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    const altVenues = selected.alternativeRoutes.map((candidate) => candidate.venue);
+    expect(altVenues).toContain('CAMELOT_AMMV3');
+    expect(altVenues).toContain('LFJ_LB');
+  });
+
+  it('pool_missing_on_other_venues_keeps_additional_same_venue_challengers', async () => {
+    const uniswapRoute = makeRoute('UNISWAP_V3', {
+      pathKind: 'DIRECT',
+      hopCount: 1,
+      netEdgeOut: 30n,
+      quotedAmountOut: 1_020n
+    });
+    const routeBook = new RouteBook({
+      uniswapV3: plannerSuccess(uniswapRoute, 'UNISWAP_V3'),
+      camelotAmmv3: plannerFailure('CAMELOT_AMMV3', 'POOL_MISSING'),
+      lfjLb: plannerFailure('LFJ_LB', 'POOL_MISSING'),
+      enableCamelotAmmv3: true,
+      enableLfjLb: true,
+      maxExtraFamiliesAfterDominantDirect: 0,
+      maxExtraSameVenueChallengersAfterOtherVenuesMissing: 2
+    });
+    const selected = await routeBook.selectBestRoute({
+      resolvedOrder: { input: { token: uniswapRoute.tokenIn, amount: 1_000n }, outputs: [{ token: uniswapRoute.tokenOut, amount: 900n }] } as never
+    });
+    expect(selected.ok).toBe(true);
+    if (!selected.ok) return;
+    expect(selected.alternativeRoutes.some((candidate) => candidate.venue === 'CAMELOT_AMMV3')).toBe(true);
+    expect(selected.alternativeRoutes.some((candidate) => candidate.venue === 'LFJ_LB')).toBe(true);
+  });
 });

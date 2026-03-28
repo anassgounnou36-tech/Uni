@@ -32,6 +32,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     schedulerCadenceMs: 100,
     hotLaneCadenceMs: 100,
     candidateBlockOffsets: [0n],
+    maxCandidateBlocksPerOrder: 7,
     competeWindowBlocks: 2n,
     thresholdOut: 1n,
     routeEvalMaxConcurrency: 4,

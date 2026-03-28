@@ -111,6 +111,63 @@ describe('scheduler + prepared-execution gate', () => {
     expect(scheduleResult.evaluations[0]?.block).toBe(5555n);
   });
 
+  it('caps candidate planning at deadline-derived block horizon', async () => {
+    const signed = loadSigned();
+    const seenBlocks: bigint[] = [];
+    const routeBook = {
+      selectBestRoute: async ({ routeEval, resolvedOrder }) => {
+        seenBlocks.push((routeEval?.blockNumberish as bigint | undefined) ?? 0n);
+        const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
+        return {
+          ok: true as const,
+          chosenRoute: {
+            venue: 'UNISWAP_V3' as const,
+            pathKind: 'DIRECT' as const,
+            hopCount: 1 as const,
+            tokenIn: resolvedOrder.input.token,
+            tokenOut: resolvedOrder.outputs[0]!.token,
+            amountIn: resolvedOrder.input.amount,
+            requiredOutput,
+            quotedAmountOut: requiredOutput + 100n,
+            minAmountOut: requiredOutput,
+            limitSqrtPriceX96: 0n,
+            slippageBufferOut: 5n,
+            gasCostOut: 10n,
+            riskBufferOut: 0n,
+            profitFloorOut: 0n,
+            grossEdgeOut: 100n,
+            netEdgeOut: -1n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+          },
+          venueAttempts: [],
+          alternativeRoutes: []
+        };
+      }
+    } as RouteBook;
+    const result = await findFirstProfitableBlock({
+      order: signed.order,
+      resolveEnvProvider: {
+        getCurrent: async () => ({
+          chainId: 42161n,
+          blockNumber: 1000n,
+          blockNumberish: 1000n,
+          timestamp: signed.order.info.deadline - 1n,
+          baseFeePerGas: 100_000_000n,
+          sampledAtMs: 1
+        })
+      },
+      routeBook,
+      candidateBlockOffsets: [0n, 1n, 2n, 3n],
+      maxCandidateBlocksPerOrder: 7,
+      threshold: 1n,
+      competeWindowBlocks: 2n
+    });
+
+    expect(result.ok).toBe(false);
+    expect(seenBlocks.length).toBeGreaterThan(0);
+    expect(seenBlocks.every((block) => block <= 1001n)).toBe(true);
+  });
+
   it('returns INCONCLUSIVE when route evaluation is infraBlocked via routeBook flag', async () => {
     const signed = loadSigned();
     const routeBook = {
@@ -187,6 +244,136 @@ describe('scheduler + prepared-execution gate', () => {
       competeWindowBlocks: 2n
     });
     expect(seenCaches.size).toBe(1);
+  });
+
+  it('schedules later block when early near-miss REQUIRED_OUTPUT is unsatisfiable', async () => {
+    const signed = loadSigned();
+    const nowBlock = 1000n;
+    const routeBook = {
+      selectBestRoute: async ({ routeEval, resolvedOrder }) => {
+        const block = (routeEval?.blockNumberish as bigint | undefined) ?? nowBlock;
+        const requiredOutput = resolvedOrder.outputs.reduce((sum, output) => sum + output.amount, 0n);
+        if (block <= nowBlock) {
+          return {
+            ok: false as const,
+            reason: 'CONSTRAINT_REJECTED' as const,
+            infraBlocked: false,
+            venueAttempts: [
+              {
+                venue: 'UNISWAP_V3' as const,
+                status: 'CONSTRAINT_REJECTED' as const,
+                reason: 'REQUIRED_OUTPUT',
+                constraintReason: 'REQUIRED_OUTPUT' as const,
+                exactOutputViability: {
+                  status: 'UNSATISFIABLE' as const,
+                  targetOutput: requiredOutput,
+                  requiredInputForTargetOutput: resolvedOrder.input.amount + 5n,
+                  availableInput: resolvedOrder.input.amount,
+                  inputDeficit: 5n,
+                  reason: 'INSUFFICIENT_INPUT'
+                },
+                constraintBreakdown: {
+                  requiredOutput,
+                  quotedAmountOut: requiredOutput - 5n,
+                  slippageBufferOut: 0n,
+                  gasCostOut: 0n,
+                  riskBufferOut: 0n,
+                  profitFloorOut: 0n,
+                  slippageFloorOut: requiredOutput - 5n,
+                  profitabilityFloorOut: requiredOutput,
+                  minAmountOut: requiredOutput,
+                  requiredOutputShortfallOut: 5n,
+                  minAmountOutShortfallOut: 5n,
+                  bindingFloor: 'PROFITABILITY_FLOOR' as const,
+                  nearMiss: true,
+                  nearMissBps: 50n
+                },
+                netEdgeOut: -1n
+              }
+            ],
+            bestRejectedSummary: {
+              venue: 'UNISWAP_V3' as const,
+              status: 'CONSTRAINT_REJECTED' as const,
+              reason: 'REQUIRED_OUTPUT',
+              constraintReason: 'REQUIRED_OUTPUT' as const,
+              exactOutputViability: {
+                status: 'UNSATISFIABLE' as const,
+                targetOutput: requiredOutput,
+                requiredInputForTargetOutput: resolvedOrder.input.amount + 5n,
+                availableInput: resolvedOrder.input.amount,
+                inputDeficit: 5n,
+                reason: 'INSUFFICIENT_INPUT'
+              },
+              constraintBreakdown: {
+                requiredOutput,
+                quotedAmountOut: requiredOutput - 5n,
+                slippageBufferOut: 0n,
+                gasCostOut: 0n,
+                riskBufferOut: 0n,
+                profitFloorOut: 0n,
+                slippageFloorOut: requiredOutput - 5n,
+                profitabilityFloorOut: requiredOutput,
+                minAmountOut: requiredOutput,
+                requiredOutputShortfallOut: 5n,
+                minAmountOutShortfallOut: 5n,
+                bindingFloor: 'PROFITABILITY_FLOOR' as const,
+                nearMiss: true,
+                nearMissBps: 50n
+              },
+              netEdgeOut: -1n
+            },
+            alternativeRoutes: []
+          };
+        }
+        return {
+          ok: true as const,
+          chosenRoute: {
+            venue: 'UNISWAP_V3' as const,
+            pathKind: 'DIRECT' as const,
+            hopCount: 1 as const,
+            tokenIn: resolvedOrder.input.token,
+            tokenOut: resolvedOrder.outputs[0]!.token,
+            amountIn: resolvedOrder.input.amount,
+            requiredOutput,
+            quotedAmountOut: requiredOutput + 100n,
+            minAmountOut: requiredOutput,
+            limitSqrtPriceX96: 0n,
+            slippageBufferOut: 5n,
+            gasCostOut: 10n,
+            riskBufferOut: 0n,
+            profitFloorOut: 0n,
+            grossEdgeOut: 100n,
+            netEdgeOut: 50n,
+            quoteMetadata: { venue: 'UNISWAP_V3', poolFee: 500 }
+          },
+          venueAttempts: [],
+          alternativeRoutes: [{ venue: 'UNISWAP_V3', eligible: true, netEdgeOut: 50n }]
+        };
+      }
+    } as RouteBook;
+
+    const result = await findFirstProfitableBlock({
+      order: signed.order,
+      resolveEnvProvider: {
+        getCurrent: async () => ({
+          chainId: 42161n,
+          blockNumber: nowBlock,
+          blockNumberish: nowBlock,
+          timestamp: 1_900_000_000n,
+          baseFeePerGas: 100_000_000n,
+          sampledAtMs: 1
+        })
+      },
+      routeBook,
+      candidateBlockOffsets: [0n],
+      maxCandidateBlocksPerOrder: 7,
+      threshold: 1n,
+      competeWindowBlocks: 2n
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.schedule.scheduledBlock).toBeGreaterThan(nowBlock);
   });
 
   it('uses the exact same serialized tx for simulation and live send', async () => {

@@ -31,6 +31,10 @@ export type LfjLbRoutingContext = {
   onRouteEvalFamilyEvaluated?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP', familyKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPruned?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP') => void;
   onRouteEvalFamilyPromoted?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
+  onRouteEvalFamilyDominant?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyDemoted?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyBestRejected?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP') => void;
+  onRouteEvalFamilyChosen?: (venue: 'LFJ_LB', pathKind: 'DIRECT' | 'TWO_HOP', executionMode: 'EXACT_INPUT' | 'EXACT_OUTPUT') => void;
   onRouteEvalInfraError?: (
     category: 'RATE_LIMITED' | 'RPC_UNAVAILABLE' | 'RPC_FAILED' | 'QUOTE_REVERTED',
     venue: 'LFJ_LB',

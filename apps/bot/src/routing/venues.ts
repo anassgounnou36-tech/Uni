@@ -6,6 +6,8 @@ import type { ExactOutputViability } from './exactOutputTypes.js';
 import type { HedgeGapSummary } from './hedgeGapTypes.js';
 import type { HedgeExecutionMode } from './executionModeTypes.js';
 import type { RouteFamilyKind } from './familyTypes.js';
+import type { FamilyDominanceReason } from './familyTypes.js';
+import type { FamilyDominanceConfidence } from './familyTypes.js';
 
 export const HEDGE_VENUES = ['UNISWAP_V3', 'CAMELOT_AMMV3', 'LFJ_LB'] as const;
 export type HedgeVenue = (typeof HEDGE_VENUES)[number];
@@ -76,6 +78,10 @@ export type RouteCandidateSummary = {
   familyKind?: RouteFamilyKind;
   probePriority?: number;
   familyKey?: string;
+  dominanceScore?: number;
+  dominanceMargin?: number;
+  dominanceConfidence?: FamilyDominanceConfidence;
+  dominanceReason?: FamilyDominanceReason;
   exactOutputPromotedFromFamily?: boolean;
   pathKind?: RoutePathKind;
   hopCount?: 1 | 2;

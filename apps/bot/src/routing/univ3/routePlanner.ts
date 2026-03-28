@@ -26,7 +26,7 @@ import { buildHedgeGapSummary } from '../hedgeGapTypes.js';
 import { deriveRejectedCandidateClass, ensureRejectedCandidateClass } from '../rejectedCandidateTypes.js';
 import type { RoutePathKind } from '../pathTypes.js';
 import type { HedgeExecutionMode } from '../executionModeTypes.js';
-import type { RouteFamily } from '../familyTypes.js';
+import { computeDirectFamilyDominance, type RouteFamily } from '../familyTypes.js';
 
 const DEFAULT_FEE_TIERS: readonly UniV3FeeTier[] = [500, 3000, 10000];
 const DEFAULT_NEAR_MISS_BPS = 25n;
@@ -46,6 +46,7 @@ function normalizePolicy(policy: RoutePlanningPolicy | undefined): Required<Rout
     feeTiers: policy?.feeTiers ?? DEFAULT_FEE_TIERS,
     bridgeTokens: policy?.bridgeTokens ?? [],
     maxTwoHopFamiliesPerOrder: policy?.maxTwoHopFamiliesPerOrder ?? DEFAULT_MAX_TWO_HOP_FAMILIES_PER_ORDER,
+    maxExtraFamiliesAfterDominantDirect: policy?.maxExtraFamiliesAfterDominantDirect ?? 1,
     slippageBufferBps: policy?.slippageBufferBps ?? 50n,
     effectiveGasPriceWei: policy?.effectiveGasPriceWei ?? 0n,
     riskBufferBps: policy?.riskBufferBps ?? 10n,
@@ -900,6 +901,19 @@ export class UniV3RoutePlanner {
           constraintBreakdown: attempt.constraintBreakdown
         });
       }
+      const dominance = computeDirectFamilyDominance({
+        pathKind: attempt.pathKind,
+        status: attempt.status,
+        outputCoverageBps: attempt.hedgeGap?.outputCoverageBps,
+        exactOutputStatus: attempt.exactOutputViability?.status,
+        candidateClass: attempt.candidateClass,
+        nearMiss: attempt.constraintBreakdown?.nearMiss ?? attempt.hedgeGap?.nearMiss,
+        requiredShortfallOut: attempt.hedgeGap?.requiredOutputShortfallOut ?? attempt.constraintBreakdown?.requiredOutputShortfallOut
+      });
+      attempt.dominanceScore = dominance.dominanceScore;
+      attempt.dominanceMargin = dominance.dominanceMargin;
+      attempt.dominanceConfidence = dominance.dominanceConfidence;
+      attempt.dominanceReason = dominance.dominanceReason;
     }
     const sortByNetEdge = (a: Candidate, b: Candidate): number => {
       if (a.route.netEdgeOut !== b.route.netEdgeOut) {
@@ -930,6 +944,10 @@ export class UniV3RoutePlanner {
         familyKind: best.feeTierAttempt.familyKind,
         probePriority: best.feeTierAttempt.probePriority,
         familyKey: best.feeTierAttempt.familyKey,
+        dominanceScore: best.feeTierAttempt.dominanceScore,
+        dominanceMargin: best.feeTierAttempt.dominanceMargin,
+        dominanceConfidence: best.feeTierAttempt.dominanceConfidence,
+        dominanceReason: best.feeTierAttempt.dominanceReason,
         exactOutputPromotedFromFamily: best.feeTierAttempt.exactOutputPromotedFromFamily,
         status: 'ROUTEABLE',
         reason: 'ROUTEABLE',
@@ -1031,6 +1049,10 @@ export class UniV3RoutePlanner {
         familyKind: bestRejected.feeTierAttempt.familyKind,
         probePriority: bestRejected.feeTierAttempt.probePriority,
         familyKey: bestRejected.feeTierAttempt.familyKey,
+        dominanceScore: bestRejected.feeTierAttempt.dominanceScore,
+        dominanceMargin: bestRejected.feeTierAttempt.dominanceMargin,
+        dominanceConfidence: bestRejected.feeTierAttempt.dominanceConfidence,
+        dominanceReason: bestRejected.feeTierAttempt.dominanceReason,
         exactOutputPromotedFromFamily: bestRejected.feeTierAttempt.exactOutputPromotedFromFamily,
         status: hasConstraintReject ? 'CONSTRAINT_REJECTED' : 'NOT_PROFITABLE',
         reason: hasConstraintReject ? (bestRejected.constraintReason ?? 'MIN_AMOUNT_OUT') : 'NET_EDGE_NON_POSITIVE',
