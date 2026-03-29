@@ -1,5 +1,5 @@
 import type { ResolveEnv } from '@uni/protocol';
-import { encodeFunctionData, type Address } from 'viem';
+import { encodeFunctionData, keccak256, stringToHex, type Address } from 'viem';
 import { resolveAt } from '@uni/protocol';
 import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import { EXECUTOR_ABI } from './abi.js';
@@ -19,11 +19,20 @@ export type BuildExecutionPlanParams = {
   blockNumberish: bigint;
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
   conditionalEnvelope: ConditionalEnvelope;
+  runtimeSessionId: string;
   routeEvalReadCache?: RouteEvalReadCache;
 };
 
 function totalRequiredOutput(outputs: ReadonlyArray<{ amount: bigint }>): bigint {
   return outputs.reduce((sum, output) => sum + output.amount, 0n);
+}
+
+function timestampSecToMs(timestampSec: bigint): number {
+  const maxSafeTimestampSec = BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1_000));
+  if (timestampSec > maxSafeTimestampSec) {
+    throw new Error(`timestamp conversion to milliseconds exceeds max safe integer: ${timestampSec.toString()}`);
+  }
+  return Number(timestampSec) * 1_000;
 }
 
 export async function buildExecutionPlan(params: BuildExecutionPlanParams): Promise<BuildExecutionPlanResult> {
@@ -111,7 +120,25 @@ export async function buildExecutionPlan(params: BuildExecutionPlanParams): Prom
     selectedLfjPath: routeDecision.chosenRoute.lfjPath,
     selectedPathDirection: routeDecision.chosenRoute.pathDirection ?? 'FORWARD',
     selectedBlock: params.blockNumberish,
-    resolveEnv: params.resolveEnv
+    resolveEnv: params.resolveEnv,
+    runtimeSessionId: params.runtimeSessionId,
+    plannedAtBlockNumber: params.blockNumberish,
+    plannedAtTimestampMs: timestampSecToMs(params.resolveEnv.timestamp),
+    resolvedAtBlockNumber: params.blockNumberish,
+    resolvedAtTimestampSec: params.resolveEnv.timestamp,
+    scheduledAtMs: timestampSecToMs(params.resolveEnv.timestamp),
+    candidateBlockNumberish: params.blockNumberish,
+    planFingerprint: keccak256(
+      stringToHex(
+        [
+          params.normalizedOrder.orderHash,
+          params.blockNumberish.toString(),
+          routeDecision.chosenRoute.venue,
+          routeDecision.chosenRoute.pathKind,
+          routeDecision.chosenRoute.executionMode ?? 'EXACT_INPUT'
+        ].join('|')
+      )
+    )
   };
 
   return { ok: true, plan };

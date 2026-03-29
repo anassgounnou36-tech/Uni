@@ -1,5 +1,6 @@
 import type { HedgeGapClass } from '../routing/hedgeGapTypes.js';
 import type { RejectedCandidateClass } from '../routing/rejectedCandidateTypes.js';
+import type { PrepareFailureReason } from '../execution/prepareFailureTypes.js';
 
 export type Quantiles = {
   p50: number;
@@ -252,6 +253,62 @@ export class BotMetrics {
         `orders_prepare_failed_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`
       );
     }
+  }
+
+  incrementPreparePreflight(venue?: string, pathKind?: string, executionMode?: string): void {
+    this.increment('prepare_preflight_total');
+    if (venue && pathKind && executionMode) {
+      this.increment(`prepare_preflight_total{venue="${venue}",path_kind="${pathKind}",execution_mode="${executionMode}"}`);
+    }
+  }
+
+  incrementPreparePreflightFailed(reason: PrepareFailureReason): void {
+    this.increment('prepare_preflight_failed_total');
+    this.increment(`prepare_preflight_failed_total{reason="${reason}"}`);
+  }
+
+  incrementPrepareFailureReason(reason: PrepareFailureReason): void {
+    this.increment(`prepare_failure_reason_total{reason="${reason}"}`);
+  }
+
+  incrementPrepareFailureSelector(selector: `0x${string}`): void {
+    this.increment(`prepare_failure_selector_total{selector="${selector}"}`);
+  }
+
+  incrementPrepareStalePlan(): void {
+    this.increment('prepare_stale_plan_total');
+  }
+
+  incrementPrepareInvalidPlanAnchor(): void {
+    this.increment('prepare_invalid_plan_anchor_total');
+  }
+
+  incrementPrepareStaleRetryExhausted(): void {
+    this.increment('prepare_stale_retry_exhausted_total');
+  }
+
+  incrementScheduledWindowExpired(): void {
+    this.increment('scheduled_window_expired_total');
+  }
+
+  incrementScheduledRehydrated(): void {
+    this.increment('scheduled_rehydrated_total');
+  }
+
+  incrementScheduledNotTracked(): void {
+    this.increment('scheduled_not_tracked_total');
+  }
+
+  incrementScheduledRequeued(): void {
+    this.increment('scheduled_requeued_total');
+  }
+
+  incrementScheduledRehydrateExpired(): void {
+    this.increment('scheduled_rehydrate_expired_total');
+  }
+
+  incrementSchedulerDeadlineReached(): void {
+    this.increment('scheduler_deadline_reached_total');
   }
 
   incrementOrdersSupportedToScheduled(): void {

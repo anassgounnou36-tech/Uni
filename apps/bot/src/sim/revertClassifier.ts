@@ -1,4 +1,5 @@
 import type { OrderReasonCode } from '../store/types.js';
+import { decodeExecutionError } from '../execution/errorDecode.js';
 
 type ClassificationSignal = {
   viemName?: string;
@@ -36,6 +37,14 @@ export function classifyRevertReason(reason: unknown): OrderReasonCode {
 
   for (const { code, pattern } of CLASSIFICATION_PATTERNS) {
     if (pattern.test(text)) {
+      return code;
+    }
+  }
+
+  const decoded = decodeExecutionError(reason);
+  const decodedText = `${decoded.errorCategory} ${decoded.errorMessage} ${decoded.errorSelector ?? ''}`.trim();
+  for (const { code, pattern } of CLASSIFICATION_PATTERNS) {
+    if (pattern.test(decodedText)) {
       return code;
     }
   }

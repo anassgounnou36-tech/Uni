@@ -19,6 +19,7 @@ import { JsonConsoleLogger } from '../src/telemetry/logging.js';
 import { InflightTracker } from '../src/runtime/inflightTracker.js';
 import type { PreparedExecution } from '../src/execution/preparedExecution.js';
 import type { ExecutionPlan } from '../src/execution/types.js';
+import { PrepareFailureError } from '../src/execution/prepareFailureTypes.js';
 import type { NormalizedOrder } from '../src/store/types.js';
 import type { ResolveEnvProvider } from '../src/runtime/resolveEnvProvider.js';
 
@@ -76,6 +77,10 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     infraBlockedRetryCooldownTicks: 2,
     twoHopUnlockMinCoverageBps: 9_800n,
     maxRevertedProbesPerOrder: 3,
+    maxPrepareStalenessBlocks: 2n,
+    maxPrepareStalenessMs: 4_000,
+    maxPrepareStaleRetries: 1,
+    scheduledUrgentWindowMs: 1_000,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],
@@ -538,7 +543,7 @@ function makeRuntime(params: {
   hotRouteBook?: RouteBook;
   simService?: ForkSimService;
   sequencerClient?: SequencerClient;
-  executionPreparer?: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer?: (input: { executionPlan: ExecutionPlan; staleRetryCount?: number; runtimeSessionId: string }) => Promise<PreparedExecution>;
   logger?: JsonConsoleLogger;
 }) {
   const metrics = new BotMetrics();
@@ -633,6 +638,184 @@ function makeRuntime(params: {
 }
 
 describe('runtime scheduler no-edge diagnostics + dropped state persistence', () => {
+  it('startup revalidates previously scheduled orders instead of preparing blindly', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const noEdgeRouteBook = {
+      selectBestRoute: async () => ({
+        ok: false as const,
+        reason: 'NOT_PROFITABLE' as const,
+        evaluations: [],
+        bestObservedEvaluation: undefined,
+        alternativeRoutes: []
+      })
+    } as unknown as RouteBook;
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ schedulerCadenceMs: 10, hotLaneCadenceMs: 10, pollCadenceMs: 10 }),
+      schedulerRouteBook: noEdgeRouteBook,
+      hotRouteBook: noEdgeRouteBook,
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new Error('should not prepare old scheduled order before revalidation');
+      }
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await runtime.start();
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+    await runtime.stop();
+
+    const record = await store.get(payload.orderHash);
+    expect(record?.state === 'SCHEDULED' || record?.state === 'DROPPED').toBe(true);
+    expect(prepareCalls).toBe(0);
+  });
+
+  it('does not requeue expired persisted SCHEDULED orders during startup reconciliation', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    (normalized.decodedOrder.order.info as { deadline: bigint }).deadline = 1n;
+    const { runtime, store, ingress, journal, metrics } = makeRuntime({ config: runtimeConfig() });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await (runtime as unknown as { bootstrapScheduledOrdersForRevalidation: () => Promise<void> }).bootstrapScheduledOrdersForRevalidation();
+
+    const pending = ingress.dequeueForScheduling();
+    expect(pending).toEqual([]);
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toBe('DROPPED');
+    expect(record?.reason).toBe('WINDOW_EXPIRED');
+    const events = await journal.byOrderHash(payload.orderHash);
+    const reconciled = events.find((event) => event.type === 'SCHEDULED_ORDER_RECONCILED');
+    expect((reconciled?.payload as Record<string, unknown>).reason).toBe('SCHEDULED_REHYDRATE_EXPIRED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_rehydrate_expired_total).toBe(1);
+  });
+
+  it('does not requeue expired persisted PLAN_BUILT orders during startup reconciliation', async () => {
+    const payload = makePayload('live-02.json');
+    const normalized = toNormalizedOrder(payload);
+    (normalized.decodedOrder.order.info as { deadline: bigint }).deadline = 1n;
+    const { runtime, store, ingress, metrics } = makeRuntime({ config: runtimeConfig() });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'PLAN_BUILT');
+
+    await (runtime as unknown as { bootstrapScheduledOrdersForRevalidation: () => Promise<void> }).bootstrapScheduledOrdersForRevalidation();
+
+    expect(ingress.dequeueForScheduling()).toEqual([]);
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toBe('DROPPED');
+    expect(record?.reason).toBe('WINDOW_EXPIRED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_rehydrate_expired_total).toBe(1);
+  });
+
+  it('catches DeadlineReached per order and continues scheduler queue processing', async () => {
+    const firstPayload = makePayload('live-01.json');
+    const secondPayload = makePayload('live-02.json');
+    let throwDeadline = true;
+    const fallbackRouteBook = noEdgeRouteBook();
+    const routeBook = {
+      selectBestRoute: async () => {
+        if (throwDeadline) {
+          throwDeadline = false;
+          throw new Error('DeadlineReached');
+        }
+        return fallbackRouteBook.selectBestRoute({} as never);
+      }
+    } as unknown as RouteBook;
+    const { runtime, store, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlockOffsets: [0n], maxCandidateBlocksPerOrder: 1 }),
+      schedulerRouteBook: routeBook
+    });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload: firstPayload, orderHashHint: firstPayload.orderHash });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 2, payload: secondPayload, orderHashHint: secondPayload.orderHash });
+
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const firstRecord = await store.get(firstPayload.orderHash);
+    const secondRecord = await store.get(secondPayload.orderHash);
+    expect(firstRecord?.state).toBe('DROPPED');
+    expect(firstRecord?.reason).toBe('WINDOW_EXPIRED');
+    expect(secondRecord?.state).toBe('DROPPED');
+    expect(secondRecord?.reason).toBe('SCHEDULER_NO_EDGE');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduler_deadline_reached_total).toBe(1);
+  });
+
+  it('reconciliation classifies missing scheduled runtime ownership explicitly', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ schedulerCadenceMs: 10, hotLaneCadenceMs: 10, pollCadenceMs: 10 }),
+      schedulerRouteBook: noEdgeRouteBook()
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailed = events.find((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect((prepareFailed?.payload as Record<string, unknown>).prepareFailureReason).toBe('SCHEDULED_NOT_TRACKED');
+    const reconciled = events.find((event) => event.type === 'SCHEDULED_ORDER_RECONCILED');
+    expect((reconciled?.payload as Record<string, unknown>).action).toBe('REQUEUED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_not_tracked_total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('near-deadline scheduled orders are prioritized in hot-lane prepare order', async () => {
+    const payloadUrgent = makePayload('live-01.json');
+    const payloadLater = makePayload('live-02.json');
+    const normalizedUrgent = toNormalizedOrder(payloadUrgent);
+    const normalizedLater = toNormalizedOrder(payloadLater);
+    const prepareOrder: string[] = [];
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ scheduledUrgentWindowMs: 10_000 }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async ({ executionPlan }) => {
+        prepareOrder.push(executionPlan.orderHash);
+        throw new Error('intentional prepare fail for priority ordering');
+      }
+    });
+    await store.upsertDiscovered(normalizedUrgent, normalizedUrgent);
+    await store.transition(payloadUrgent.orderHash, 'DECODED');
+    await store.transition(payloadUrgent.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payloadUrgent.orderHash, 'SCHEDULED');
+    await store.upsertDiscovered(normalizedLater, normalizedLater);
+    await store.transition(payloadLater.orderHash, 'DECODED');
+    await store.transition(payloadLater.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payloadLater.orderHash, 'SCHEDULED');
+    const hotQueueRef = runtime as unknown as {
+      hotQueue: Array<{ orderHash: `0x${string}`; scheduledBlock: bigint; competeWindowEnd: bigint; predictedEdgeOut: bigint }>;
+    };
+    hotQueueRef.hotQueue.push({
+      orderHash: payloadLater.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 3000n,
+      predictedEdgeOut: 30n
+    });
+    hotQueueRef.hotQueue.push({
+      orderHash: payloadUrgent.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1001n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    expect(prepareOrder[0]).toBe(payloadUrgent.orderHash);
+  });
+
   it('scheduler no-edge transitions order to DROPPED with SCHEDULER_NO_EDGE reason', async () => {
     const payload = makePayload();
     const logs: string[] = [];
@@ -1083,6 +1266,29 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(record?.state).toEqual('SUBMITTING');
   });
 
+  it('scheduled order expiring in hot-lane increments scheduled_window_expired_total', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    const { runtime, store, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n)
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 999n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_window_expired_total).toBe(1);
+  });
+
   it('prepare failure transitions to PREPARE_FAILED, emits rich prepare events, and avoids tight-loop retries', async () => {
     const payload = makePayload();
     const normalized = toNormalizedOrder(payload);
@@ -1143,6 +1349,13 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
       error: 'PrepareExecutionError',
       message: 'failed to prepare execution payload'
     });
+    const failedPayload = prepareFailed?.payload as Record<string, unknown>;
+    const droppedPayload = dropped?.payload as Record<string, unknown>;
+    expect(failedPayload.errorCategory).toBe(droppedPayload.errorCategory);
+    expect(failedPayload.errorMessage).toBe(droppedPayload.errorMessage);
+    expect(failedPayload.prepareFailureReason).toBe(droppedPayload.prepareFailureReason);
+    expect(failedPayload.errorSelector).toBe(droppedPayload.errorSelector);
+    expect(failedPayload.decodedErrorName).toBe(droppedPayload.decodedErrorName);
     expect((dropped?.payload as Record<string, unknown>).chosenRoutePathDescriptor).toEqual(
       `DIRECT: ${normalized.decodedOrder.order.baseInput.token} -> ${normalized.decodedOrder.order.baseOutputs[0]!.token}`
     );
@@ -1150,7 +1363,116 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     const counters = metrics.snapshot().counters;
     expect(counters.orders_prepare_failed_total).toBe(1);
     expect(counters['orders_prepare_failed_total{venue="UNISWAP_V3",path_kind="DIRECT",execution_mode="EXACT_INPUT"}']).toBe(1);
-    expect(counters['prepare_failure_reason_total{reason="PrepareExecutionError"}']).toBe(1);
+    expect(counters['prepare_failure_reason_total{reason="PREPARE_TX_BUILD_FAILED"}']).toBe(1);
+    expect(counters['prepare_preflight_failed_total{reason="PREPARE_TX_BUILD_FAILED"}']).toBe(1);
+    expect(counters['prepare_preflight_total']).toBe(1);
+  });
+
+  it('stale plan prepare is requeued (non-terminal) and eventually dropped only after bounded retries', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false, maxPrepareStaleRetries: 1 }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new PrepareFailureError({
+          reason: 'PREPARE_STALE_PLAN',
+          errorCategory: 'STALE_PLAN',
+          errorMessage: 'plan stale'
+        });
+      }
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const afterFirst = await store.get(payload.orderHash);
+    expect(afterFirst?.state).toEqual('SCHEDULED');
+
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const afterSecond = await store.get(payload.orderHash);
+    expect(afterSecond?.state).toEqual('DROPPED');
+    expect(prepareCalls).toBe(2);
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailedEvents = events.filter((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect(prepareFailedEvents.length).toBeGreaterThanOrEqual(1);
+    const droppedEvent = events.find((event) => event.type === 'ORDER_DROPPED');
+    const failedEvent = prepareFailedEvents[0];
+    expect((failedEvent?.payload as Record<string, unknown>).errorCategory).toBe('STALE_PLAN');
+    expect((failedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).errorCategory).toBe('PREPARE_STALE_PLAN');
+    expect((droppedEvent?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_STALE_PLAN');
+    const counters = metrics.snapshot().counters;
+    expect(counters.prepare_stale_plan_total).toBe(2);
+    expect(counters.prepare_stale_retry_exhausted_total).toBe(1);
+    expect(counters['prepare_failure_reason_total{reason="PREPARE_STALE_PLAN"}']).toBe(2);
+  });
+
+  it('invalid plan anchor is not retried as stale and is dropped once', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    let prepareCalls = 0;
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async () => {
+        prepareCalls += 1;
+        throw new PrepareFailureError({
+          reason: 'PREPARE_INVALID_PLAN_ANCHOR',
+          errorCategory: 'INVALID_PLAN_ANCHOR',
+          errorMessage: 'invalid_plan_anchor: negative block delta',
+          preflightStage: 'anchor',
+          runtimeSessionId: 'runtime-old',
+          plannedAtBlockNumber: 1100n,
+          candidateBlockNumberish: 1100n,
+          blockDelta: -100n,
+          timeDeltaMs: 100,
+          staleRetryCount: 0
+        });
+      }
+    });
+
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1002n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const dropped = await store.get(payload.orderHash);
+    expect(dropped?.state).toEqual('PREPARE_FAILED');
+    expect(prepareCalls).toBe(1);
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailed = events.find((event) => event.type === 'ORDER_PREPARE_FAILED');
+    const orderDropped = events.find((event) => event.type === 'ORDER_DROPPED');
+    expect((prepareFailed?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+    expect((orderDropped?.payload as Record<string, unknown>).prepareFailureReason).toBe('PREPARE_INVALID_PLAN_ANCHOR');
+    expect((orderDropped?.payload as Record<string, unknown>).blockDelta).toBe('-100');
+    const counters = metrics.snapshot().counters;
+    expect(counters.prepare_invalid_plan_anchor_total).toBe(1);
   });
 
   it('increments false dominant metric when no-edge follows dominant-looking best rejected', async () => {

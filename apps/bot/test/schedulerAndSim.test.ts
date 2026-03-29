@@ -486,7 +486,8 @@ describe('scheduler + prepared-execution gate', () => {
           nonceLease: lease
         };
       },
-      shadowMode: false
+      shadowMode: false,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(decision.action).toEqual('WOULD_SEND');
@@ -591,7 +592,8 @@ describe('scheduler + prepared-execution gate', () => {
           nonceLease: lease
         };
       },
-      shadowMode: true
+      shadowMode: true,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(sendCalls).toEqual(0);
@@ -647,7 +649,8 @@ describe('scheduler + prepared-execution gate', () => {
       executionPreparer: async () => {
         throw new Error('should not prepare');
       },
-      shadowMode: false
+      shadowMode: false,
+      runtimeSessionId: 'runtime-test'
     });
 
     expect(decision.action).toEqual('DROP');
@@ -664,6 +667,7 @@ describe('scheduler + prepared-execution gate', () => {
       chainNonceReader: async () => 7n
     });
 
+    let prepareAttemptCount = 0;
     const decision = await runHotLaneStep({
       entry: {
         orderHash,
@@ -700,7 +704,11 @@ describe('scheduler + prepared-execution gate', () => {
         error.name = 'PrepareExecutionError';
         throw error;
       },
-      shadowMode: false
+      shadowMode: false,
+      runtimeSessionId: 'runtime-test',
+      onPrepareAttempt: () => {
+        prepareAttemptCount += 1;
+      }
     });
 
     expect(decision.action).toEqual('DROP');
@@ -715,5 +723,6 @@ describe('scheduler + prepared-execution gate', () => {
     expect(decision.hopCount).toEqual(1);
     expect(decision.executionMode).toEqual('EXACT_INPUT');
     expect(decision.pathDescriptor).toContain('DIRECT:');
+    expect(prepareAttemptCount).toBe(1);
   });
 });

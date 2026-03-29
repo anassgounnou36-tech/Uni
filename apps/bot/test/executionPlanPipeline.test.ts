@@ -767,6 +767,7 @@ describe('execution plan pipeline integration', () => {
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
 
@@ -916,6 +917,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
     expect(planResult.ok).toEqual(true);
@@ -1009,7 +1011,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         scheduledWindowBlocks: 2n,
         avgBlockTimeSec: 1n,
         maxStalenessSec: 10n
-      }
+      },
+      runtimeSessionId: planResult.plan.runtimeSessionId
     });
 
     expect(prepared.serializedTransaction.startsWith('0x')).toEqual(true);
@@ -1108,6 +1111,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
     expect(planResult.ok).toEqual(true);
@@ -1142,7 +1146,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         enableConditionalBlockBounds: true,
         blockNumberMin: 1000n,
         blockNumberMax: 1010n
-      }
+      },
+      runtimeSessionId: planResult.plan.runtimeSessionId
     });
 
     expect(preparedWithBounds.conditionalEnvelope.BlockNumberMin).toEqual(1000n);
@@ -1348,6 +1353,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
     expect(planResult.ok).toEqual(true);
@@ -1428,7 +1434,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         scheduledWindowBlocks: 2n,
         avgBlockTimeSec: 1n,
         maxStalenessSec: 10n
-      }
+      },
+      runtimeSessionId: planResult.plan.runtimeSessionId
     });
     expect(prepared.executionPlan.route.venue).toEqual('CAMELOT_AMMV3');
     expect(prepared.txRequest.to.toLowerCase()).toEqual(executorAddress.toLowerCase());
@@ -1526,6 +1533,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
     expect(planResult.ok).toEqual(true);
@@ -1615,7 +1623,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         scheduledWindowBlocks: 2n,
         avgBlockTimeSec: 1n,
         maxStalenessSec: 10n
-      }
+      },
+      runtimeSessionId: planResult.plan.runtimeSessionId
     });
     const sim = new ForkSimService({ clients });
     const simResult = await sim.simulatePrepared(prepared);
@@ -1708,6 +1717,7 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         basefee: 100_000_000n,
         chainId: 42161n
       },
+      runtimeSessionId: 'runtime-test',
       conditionalEnvelope: { TimestampMax: 1_900_000_100n }
     });
     expect(planResult.ok).toEqual(true);
@@ -1795,7 +1805,8 @@ describe.skipIf(!ARB_FORK_URL)('fork-backed execution pipeline using real execut
         scheduledWindowBlocks: 2n,
         avgBlockTimeSec: 1n,
         maxStalenessSec: 10n
-      }
+      },
+      runtimeSessionId: planResult.plan.runtimeSessionId
     });
     const sim = new ForkSimService({ clients });
     const simResult = await sim.simulatePrepared(prepared);

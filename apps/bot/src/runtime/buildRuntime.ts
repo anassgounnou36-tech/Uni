@@ -216,8 +216,9 @@ export async function buildRuntimeFromConfig(
 
   const executionPreparer =
     overrides.executionPreparer ??
-    (async ({ executionPlan }) =>
-      prepareExecution({
+    (async ({ executionPlan, staleRetryCount, runtimeSessionId }) => {
+      const currentBlockNumber = await forkPublicClient.getBlockNumber();
+      return prepareExecution({
         executionPlan,
         account: account.address,
         nonceManager,
@@ -232,8 +233,17 @@ export async function buildRuntimeFromConfig(
           scheduledWindowBlocks: config.competeWindowBlocks,
           avgBlockTimeSec: 1n,
           maxStalenessSec: 10n
-        }
-      }));
+        },
+        stalePolicy: {
+          maxPrepareStalenessBlocks: config.maxPrepareStalenessBlocks,
+          maxPrepareStalenessMs: config.maxPrepareStalenessMs,
+          currentBlockNumber,
+          nowMs: nowMs()
+        },
+        runtimeSessionId,
+        staleRetryCount
+      });
+    });
 
   const routeEvalRpcGate = new RouteEvalRpcGate(config.routeEvalMaxConcurrency);
 
@@ -438,6 +448,7 @@ export async function buildRuntimeFromConfig(
       simService,
       sequencerClient,
       nonceManager,
+      resolveEnvProvider: schedulerContext.resolveEnvProvider,
       executionPreparer
     };
 

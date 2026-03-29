@@ -5,6 +5,9 @@ import { buildTransaction, validateSerializedTransactionShape } from '../send/tx
 import type { TxBuildPolicy } from '../send/types.js';
 import type { PreparedExecution } from './preparedExecution.js';
 import type { ExecutionPlan } from './types.js';
+import { runPreparePreflight } from './preparePreflight.js';
+import { PrepareFailureError } from './prepareFailureTypes.js';
+import { decodeExecutionError } from './errorDecode.js';
 
 export type PrepareExecutionParams = {
   executionPlan: ExecutionPlan;
@@ -23,20 +26,63 @@ export type PrepareExecutionParams = {
     blockNumberMin?: bigint;
     blockNumberMax?: bigint;
   };
+  stalePolicy: {
+    maxPrepareStalenessBlocks: bigint;
+    maxPrepareStalenessMs: number;
+    currentBlockNumber: bigint;
+    nowMs: number;
+  };
+  runtimeSessionId: string;
+  staleRetryCount?: number;
 };
 
 export async function prepareExecution(params: PrepareExecutionParams): Promise<PreparedExecution> {
+  const preflight = await runPreparePreflight({
+    executionPlan: params.executionPlan,
+    account: params.account,
+    publicClient: params.publicClient,
+    runtimeSessionId: params.runtimeSessionId,
+    currentBlockNumber: params.stalePolicy.currentBlockNumber,
+    nowMs: params.stalePolicy.nowMs,
+    maxPrepareStalenessBlocks: params.stalePolicy.maxPrepareStalenessBlocks,
+    maxPrepareStalenessMs: params.stalePolicy.maxPrepareStalenessMs,
+    staleRetryCount: params.staleRetryCount
+  });
+  if (!preflight.ok) {
+    throw new PrepareFailureError(preflight.failure);
+  }
+
   const lease = await params.nonceManager.lease(params.account, params.executionPlan.orderHash);
   try {
-    const builtTx = await buildTransaction({
-      plan: params.executionPlan,
-      publicClient: params.publicClient,
-      walletClient: params.walletClient,
-      sender: params.account,
-      leasedNonce: lease.nonce,
-      simulationGasUsed: params.simulationGasUsed,
-      policy: params.txPolicy
-    });
+    let builtTx;
+    try {
+      builtTx = await buildTransaction({
+        plan: params.executionPlan,
+        publicClient: params.publicClient,
+        walletClient: params.walletClient,
+        sender: params.account,
+        leasedNonce: lease.nonce,
+        simulationGasUsed: params.simulationGasUsed,
+        estimatedGas: preflight.estimatedGas,
+        policy: params.txPolicy
+      });
+    } catch (error) {
+      const decoded = decodeExecutionError(error);
+      const reason = error instanceof Error && error.name === 'SignTransactionError'
+        ? 'PREPARE_SIGN_FAILED'
+        : 'PREPARE_TX_BUILD_FAILED';
+      throw new PrepareFailureError({
+        reason,
+        errorCategory: decoded.errorCategory,
+        errorMessage: decoded.errorMessage,
+        errorSelector: decoded.errorSelector,
+        decodedErrorName: decoded.decodedErrorName,
+        preflightStage: reason === 'PREPARE_SIGN_FAILED' ? 'sign' : 'tx_build',
+        venue: params.executionPlan.route.venue,
+        pathKind: params.executionPlan.route.pathKind,
+        executionMode: params.executionPlan.selectedExecutionMode
+      });
+    }
 
     validateSerializedTransactionShape(builtTx.serializedTransaction, {
       executor: params.executionPlan.executor,

@@ -16,6 +16,7 @@ export type JournalEventType =
   | 'ORDER_DROPPED'
   | 'ORDER_EVALUATION_BLOCKED'
   | 'ORDER_PREPARE_FAILED'
+  | 'SCHEDULED_ORDER_RECONCILED'
   | 'PLAN_BUILT'
   | 'PREPARED'
   | 'SIM_RESULT'
@@ -152,6 +153,19 @@ export type DecisionJournalEvent =
     >
   | BaseJournalEvent<'ORDER_REPRICED', { reason?: string; edgeOut?: string }>
   | BaseJournalEvent<
+      'SCHEDULED_ORDER_RECONCILED',
+      {
+        orderHash: `0x${string}`;
+        action: 'ENQUEUED' | 'REQUEUED' | 'DROPPED' | 'UNCHANGED';
+        reason:
+          | 'STARTUP_REHYDRATE'
+          | 'MISSING_RUNTIME_OWNERSHIP'
+          | 'WINDOW_EXPIRED'
+          | 'SCHEDULED_REHYDRATE_EXPIRED'
+          | 'TERMINAL_STATE';
+      }
+    >
+  | BaseJournalEvent<
       'ORDER_DROPPED',
       {
         reason: string;
@@ -216,6 +230,16 @@ export type DecisionJournalEvent =
         message?: string;
         errorCategory?: string;
         errorMessage?: string;
+        errorSelector?: string;
+        decodedErrorName?: string;
+        prepareFailureReason?: string;
+        preflightStage?: string;
+        runtimeSessionId?: string;
+        plannedAtBlockNumber?: string;
+        candidateBlockNumberish?: string;
+        blockDelta?: string;
+        timeDeltaMs?: number;
+        staleRetryCount?: number;
         netEdgeOut?: string;
         simReason?: string;
       }
@@ -249,6 +273,16 @@ export type DecisionJournalEvent =
         message: string;
         errorCategory?: string;
         errorMessage?: string;
+        errorSelector?: string;
+        decodedErrorName?: string;
+        prepareFailureReason?: string;
+        preflightStage?: string;
+        runtimeSessionId?: string;
+        plannedAtBlockNumber?: string;
+        candidateBlockNumberish?: string;
+        blockDelta?: string;
+        timeDeltaMs?: number;
+        staleRetryCount?: number;
       }
     >
   | BaseJournalEvent<'PLAN_BUILT', { ok: boolean; reason?: string; routeDecision?: RouteDecisionAttribution }>

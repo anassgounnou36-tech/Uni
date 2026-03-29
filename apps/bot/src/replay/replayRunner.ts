@@ -47,7 +47,11 @@ export type ReplayRunnerParams = {
   conditionalEnvelope: ConditionalEnvelope;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: {
+    executionPlan: ExecutionPlan;
+    staleRetryCount?: number;
+    runtimeSessionId: string;
+  }) => Promise<PreparedExecution>;
 };
 
 export type ReplayRegressionSummary = {
@@ -186,7 +190,8 @@ export async function runReplay(params: ReplayRunnerParams): Promise<ReplayRecor
       sequencerClient: params.sequencerClient,
       nonceManager: params.nonceManager,
       executionPreparer: params.executionPreparer,
-      shadowMode: params.shadowMode
+      shadowMode: params.shadowMode,
+      runtimeSessionId: 'replay-runtime'
     });
 
     if (hotDecision.action === 'WOULD_SEND') {

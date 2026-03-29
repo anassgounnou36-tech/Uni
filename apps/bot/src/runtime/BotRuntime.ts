@@ -1,4 +1,5 @@
 import { findFirstProfitableBlock, type BlockEvaluation } from '../scheduler/firstProfitableBlock.js';
+import { randomUUID } from 'node:crypto';
 import { runHotLaneStep, type HotLaneEntry } from '../scheduler/hotLane.js';
 import type { OrdersPoller } from '../intake/poller.js';
 import type { HybridIngressCoordinator } from '../ingress/hybridIngress.js';
@@ -34,6 +35,7 @@ import {
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import type { OrderState } from '../domain/orderState.js';
+import { isDeadlineReachedError, isOrderExpiredForLifecycle } from './orderExpiry.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -43,12 +45,17 @@ export type SchedulerContext = {
 
 export type HotLaneContext = SchedulerContext & {
   resolveEnv: Omit<ResolveEnv, 'blockNumberish'>;
+  resolveEnvProvider?: ResolveEnvProvider;
   conditionalEnvelope: ConditionalEnvelope;
   executor: `0x${string}`;
   simService: ForkSimService;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: {
+    executionPlan: ExecutionPlan;
+    staleRetryCount?: number;
+    runtimeSessionId: string;
+  }) => Promise<PreparedExecution>;
 };
 
 type ScheduledOrder = HotLaneEntry;
@@ -60,6 +67,10 @@ type BlockedRetryState = {
   blockedCount: number;
   revertedProbeCount: number;
   revertedProbeBudgetExhausted: boolean;
+};
+type StalePlanRetryState = {
+  attempts: number;
+  nextEligibleTick: number;
 };
 
 export type BotRuntimeDeps = {
@@ -85,6 +96,8 @@ export class BotRuntime {
   private readonly hotQueue: ScheduledOrder[] = [];
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
+  private readonly stalePlanRetryByOrder = new Map<`0x${string}`, StalePlanRetryState>();
+  private readonly runtimeSessionId = `runtime-${randomUUID()}`;
   private maintenanceTickCounter = 0;
   private schedulerTickCounter = 0;
   private static readonly HOT_QUEUE_MAX_ENTRIES = 10_000;
@@ -147,6 +160,7 @@ export class BotRuntime {
   private removeOrderTracking(orderHash: `0x${string}`): void {
     this.removeQueuedEntries(orderHash);
     this.blockedRetryByOrder.delete(orderHash);
+    this.stalePlanRetryByOrder.delete(orderHash);
     this.deps.inflightTracker.markResolved(orderHash);
   }
 
@@ -174,6 +188,206 @@ export class BotRuntime {
       }
     }
     this.observeRuntimeGaugeSnapshot();
+  }
+
+  private isOrderInHotQueue(orderHash: `0x${string}`): boolean {
+    return this.hotQueue.some((entry) => entry.orderHash === orderHash);
+  }
+
+  private isOrderRuntimeTracked(orderHash: `0x${string}`): boolean {
+    return (
+      this.isOrderInHotQueue(orderHash)
+      || this.blockedRetryByOrder.has(orderHash)
+      || this.stalePlanRetryByOrder.has(orderHash)
+      || this.deps.inflightTracker.has(orderHash)
+    );
+  }
+
+  private sortHotQueueByUrgency(currentBlock: bigint): void {
+    const urgentWindowMs = this.deps.config.scheduledUrgentWindowMs;
+    this.hotQueue.sort((a, b) => {
+      const aBlocksToDeadline = a.competeWindowEnd - currentBlock;
+      const bBlocksToDeadline = b.competeWindowEnd - currentBlock;
+      const aMsToDeadline = Number(aBlocksToDeadline > 0n ? aBlocksToDeadline : 0n) * 1_000;
+      const bMsToDeadline = Number(bBlocksToDeadline > 0n ? bBlocksToDeadline : 0n) * 1_000;
+      const aUrgent = aMsToDeadline <= urgentWindowMs;
+      const bUrgent = bMsToDeadline <= urgentWindowMs;
+      if (aUrgent !== bUrgent) {
+        return aUrgent ? -1 : 1;
+      }
+      return Number(aBlocksToDeadline - bBlocksToDeadline);
+    });
+  }
+
+  private async reconcileScheduledOrderOwnership(reason: 'STARTUP_REHYDRATE' | 'MISSING_RUNTIME_OWNERSHIP'): Promise<void> {
+    const records = await this.deps.store.list().catch(() => []);
+    const nowMs = Date.now();
+    for (const record of records) {
+      if (record.state !== 'SCHEDULED' && record.state !== 'PLAN_BUILT') {
+        continue;
+      }
+      if (this.isOrderRuntimeTracked(record.orderHash)) {
+        await this.deps.journal.append({
+          type: 'SCHEDULED_ORDER_RECONCILED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+          payload: {
+            orderHash: record.orderHash,
+            action: 'UNCHANGED',
+            reason
+          }
+        });
+        continue;
+      }
+      this.deps.metrics.incrementScheduledNotTracked();
+      await this.deps.journal.append({
+        type: 'ORDER_PREPARE_FAILED',
+        atMs: nowMs,
+        orderHash: record.orderHash,
+        payload: {
+          orderHash: record.orderHash,
+          error: 'SCHEDULED_NOT_TRACKED',
+          message: 'scheduled order had no runtime ownership and was reconciled',
+          errorCategory: 'SCHEDULED_NOT_TRACKED',
+          errorMessage: 'scheduled order had no runtime ownership and was reconciled',
+          prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
+        }
+      });
+      if (record.reason === 'WINDOW_EXPIRED' || isOrderExpiredForLifecycle(record)) {
+        await this.deps.store.transition(record.orderHash, 'DROPPED', 'WINDOW_EXPIRED');
+        this.removeOrderTracking(record.orderHash);
+        this.deps.metrics.incrementScheduledWindowExpired();
+        this.deps.metrics.incrementScheduledRehydrateExpired();
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+            payload: {
+              reason: 'WINDOW_EXPIRED',
+              error: 'SCHEDULED_NOT_TRACKED',
+              message: 'scheduled order was already expired during reconciliation',
+              errorCategory: 'SCHEDULED_NOT_TRACKED',
+              errorMessage: 'scheduled order was already expired during reconciliation',
+              prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
+            }
+          });
+        await this.deps.journal.append({
+          type: 'SCHEDULED_ORDER_RECONCILED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+            payload: {
+              orderHash: record.orderHash,
+              action: 'DROPPED',
+              reason: 'SCHEDULED_REHYDRATE_EXPIRED'
+            }
+          });
+        continue;
+      }
+      this.deps.ingress.requeueForScheduling(record.orderHash);
+      this.deps.metrics.incrementScheduledRequeued();
+      if (reason === 'STARTUP_REHYDRATE') {
+        this.deps.metrics.incrementScheduledRehydrated();
+      }
+      await this.deps.journal.append({
+        type: 'SCHEDULED_ORDER_RECONCILED',
+        atMs: nowMs,
+        orderHash: record.orderHash,
+        payload: {
+          orderHash: record.orderHash,
+          action: 'REQUEUED',
+          reason
+        }
+      });
+    }
+  }
+
+  private async bootstrapScheduledOrdersForRevalidation(): Promise<void> {
+    await this.reconcileScheduledOrderOwnership('STARTUP_REHYDRATE');
+  }
+
+  private validatePlanAnchorForQueuedOrder(
+    plan: ExecutionPlan,
+    currentBlock: bigint,
+    nowMs: number,
+    staleRetryCount: number
+  ):
+    | { ok: true }
+    | {
+        ok: false;
+        reason: 'PREPARE_STALE_PLAN' | 'PREPARE_INVALID_PLAN_ANCHOR';
+        context: {
+          runtimeSessionId: string;
+          plannedAtBlockNumber?: bigint;
+          candidateBlockNumberish?: bigint;
+          blockDelta?: bigint;
+          timeDeltaMs?: number;
+          staleRetryCount: number;
+          errorMessage: string;
+        };
+      } {
+    if (!plan.runtimeSessionId || plan.runtimeSessionId !== this.runtimeSessionId) {
+      return {
+        ok: false,
+        reason: 'PREPARE_INVALID_PLAN_ANCHOR',
+        context: {
+          runtimeSessionId: plan.runtimeSessionId ?? 'missing',
+          plannedAtBlockNumber: plan.plannedAtBlockNumber,
+          candidateBlockNumberish: plan.candidateBlockNumberish,
+          staleRetryCount,
+          errorMessage: `invalid_plan_anchor: runtime session mismatch (plan=${plan.runtimeSessionId ?? 'missing'} runtime=${this.runtimeSessionId})`
+        }
+      };
+    }
+    if (
+      plan.plannedAtBlockNumber === undefined
+      || plan.plannedAtTimestampMs === undefined
+      || plan.candidateBlockNumberish === undefined
+    ) {
+      return {
+        ok: false,
+        reason: 'PREPARE_INVALID_PLAN_ANCHOR',
+        context: {
+          runtimeSessionId: plan.runtimeSessionId,
+          plannedAtBlockNumber: plan.plannedAtBlockNumber,
+          candidateBlockNumberish: plan.candidateBlockNumberish,
+          staleRetryCount,
+          errorMessage: 'invalid_plan_anchor: missing planned block/time/candidate metadata'
+        }
+      };
+    }
+    const blockDelta = currentBlock - plan.plannedAtBlockNumber;
+    const timeDeltaMs = nowMs - plan.plannedAtTimestampMs;
+    if (blockDelta < 0n) {
+      return {
+        ok: false,
+        reason: 'PREPARE_INVALID_PLAN_ANCHOR',
+        context: {
+          runtimeSessionId: plan.runtimeSessionId,
+          plannedAtBlockNumber: plan.plannedAtBlockNumber,
+          candidateBlockNumberish: plan.candidateBlockNumberish,
+          blockDelta,
+          timeDeltaMs,
+          staleRetryCount,
+          errorMessage: `invalid_plan_anchor: negative block delta (current=${currentBlock.toString()} planned=${plan.plannedAtBlockNumber.toString()} delta=${blockDelta.toString()})`
+        }
+      };
+    }
+    if (blockDelta > this.deps.config.maxPrepareStalenessBlocks || timeDeltaMs > this.deps.config.maxPrepareStalenessMs) {
+      return {
+        ok: false,
+        reason: 'PREPARE_STALE_PLAN',
+        context: {
+          runtimeSessionId: plan.runtimeSessionId,
+          plannedAtBlockNumber: plan.plannedAtBlockNumber,
+          candidateBlockNumberish: plan.candidateBlockNumberish,
+          blockDelta,
+          timeDeltaMs,
+          staleRetryCount,
+          errorMessage: `stale_plan: plan exceeded freshness window (block_delta=${blockDelta.toString()} time_delta_ms=${timeDeltaMs})`
+        }
+      };
+    }
+    return { ok: true };
   }
 
   private logTerminalOrderSkipped(orderHash: `0x${string}`, state: OrderState, attemptedAction: string): void {
@@ -661,6 +875,7 @@ export class BotRuntime {
         baseFeePerGas: snapshot.baseFeePerGas.toString()
       });
     }
+    await this.bootstrapScheduledOrdersForRevalidation();
 
     this.pollTimer = setInterval(
       () =>
@@ -753,13 +968,22 @@ export class BotRuntime {
     }
     this.schedulerTickCounter += 1;
     this.maintenanceTickCounter += 1;
+    if (this.hotQueue.length === 0) {
+      await this.reconcileScheduledOrderOwnership('MISSING_RUNTIME_OWNERSHIP');
+    }
     if (this.maintenanceTickCounter % BotRuntime.MAINTENANCE_SWEEP_EVERY_TICKS === 0) {
       await this.runMaintenanceSweep();
+      await this.reconcileScheduledOrderOwnership('MISSING_RUNTIME_OWNERSHIP');
     }
 
     for (const orderHash of this.deps.ingress.dequeueForScheduling()) {
       const blockedRetry = this.blockedRetryByOrder.get(orderHash);
       if (blockedRetry && blockedRetry.nextEligibleTick > this.schedulerTickCounter) {
+        this.deps.ingress.requeueForScheduling(orderHash);
+        continue;
+      }
+      const staleRetry = this.stalePlanRetryByOrder.get(orderHash);
+      if (staleRetry && staleRetry.nextEligibleTick > this.schedulerTickCounter) {
         this.deps.ingress.requeueForScheduling(orderHash);
         continue;
       }
@@ -773,29 +997,53 @@ export class BotRuntime {
         this.removeOrderTracking(orderHash);
         continue;
       }
-      if (record.state !== 'SUPPORTED') {
+      if (!['SUPPORTED', 'SCHEDULED', 'PLAN_BUILT'].includes(record.state)) {
         continue;
       }
       const resolveSnapshot = scheduler.resolveEnvProvider
         ? await scheduler.resolveEnvProvider.getCurrent().catch(() => undefined)
         : undefined;
-      const scheduleResult = await findFirstProfitableBlock({
-        order: record.normalizedOrder.decodedOrder.order,
-        resolveEnvProvider: scheduler.resolveEnvProvider,
-        baseEnv: scheduler.resolveEnv,
-        routeBook: scheduler.routeBook,
-        candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
-        maxCandidateBlocksPerOrder: this.deps.config.maxCandidateBlocksPerOrder,
-        routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
-        routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
-        onRouteEvalCacheStats: (stats) => {
-          this.deps.metrics.setGauge('route_eval_cache_entries', stats.entries);
-          this.deps.metrics.setGauge('route_eval_negative_cache_entries', stats.negativeEntries);
-          this.deps.metrics.setGauge('route_eval_cache_snapshots', stats.snapshots);
-        },
-        threshold: this.deps.config.thresholdOut,
-        competeWindowBlocks: this.deps.config.competeWindowBlocks
-      });
+      let scheduleResult: Awaited<ReturnType<typeof findFirstProfitableBlock>>;
+      try {
+        scheduleResult = await findFirstProfitableBlock({
+          order: record.normalizedOrder.decodedOrder.order,
+          resolveEnvProvider: scheduler.resolveEnvProvider,
+          baseEnv: scheduler.resolveEnv,
+          routeBook: scheduler.routeBook,
+          candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
+          maxCandidateBlocksPerOrder: this.deps.config.maxCandidateBlocksPerOrder,
+          routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
+          routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
+          onRouteEvalCacheStats: (stats) => {
+            this.deps.metrics.setGauge('route_eval_cache_entries', stats.entries);
+            this.deps.metrics.setGauge('route_eval_negative_cache_entries', stats.negativeEntries);
+            this.deps.metrics.setGauge('route_eval_cache_snapshots', stats.snapshots);
+          },
+          threshold: this.deps.config.thresholdOut,
+          competeWindowBlocks: this.deps.config.competeWindowBlocks
+        });
+      } catch (error) {
+        if (!isDeadlineReachedError(error)) {
+          throw error;
+        }
+        await this.deps.store.transition(orderHash, 'DROPPED', 'WINDOW_EXPIRED');
+        this.removeOrderTracking(orderHash);
+        this.deps.metrics.incrementScheduledWindowExpired();
+        this.deps.metrics.incrementSchedulerDeadlineReached();
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: Date.now(),
+          orderHash,
+          payload: {
+            reason: 'WINDOW_EXPIRED',
+            error: 'DeadlineReached',
+            message: 'scheduler evaluation hit DeadlineReached',
+            errorCategory: 'SCHEDULED_REHYDRATE_EXPIRED',
+            errorMessage: 'scheduler evaluation hit DeadlineReached'
+          }
+        });
+        continue;
+      }
       if (!scheduleResult.ok && scheduleResult.reason === 'INCONCLUSIVE') {
         const blockedAttempts = scheduleResult.evaluations.flatMap((evaluation) =>
           evaluation.venueAttempts.filter(
@@ -1025,6 +1273,7 @@ export class BotRuntime {
         competeWindowEnd: schedule.competeWindowEnd,
         predictedEdgeOut: schedule.chosenRoute.netEdgeOut
       });
+      this.sortHotQueueByUrgency(schedule.scheduledBlock);
       while (this.hotQueue.length > BotRuntime.HOT_QUEUE_MAX_ENTRIES) {
         this.hotQueue.shift();
       }
@@ -1051,6 +1300,12 @@ export class BotRuntime {
     const hotLane = this.deps.hotLaneContext;
     if (!hotLane) {
       return;
+    }
+    if (this.hotQueue.length > 1) {
+      const priorityBlock = hotLane.resolveEnvProvider
+        ? (await hotLane.resolveEnvProvider.getCurrent().catch(() => ({ blockNumberish: this.hotQueue[0]!.scheduledBlock } as const))).blockNumberish
+        : this.hotQueue[0]!.scheduledBlock;
+      this.sortHotQueueByUrgency(priorityBlock);
     }
 
     for (let index = 0; index < this.hotQueue.length; ) {
@@ -1115,7 +1370,9 @@ export class BotRuntime {
 
       const decision = await runHotLaneStep({
         entry: queued,
-        currentBlock: queued.scheduledBlock,
+        currentBlock: hotLane.resolveEnvProvider
+          ? (await hotLane.resolveEnvProvider.getCurrent().catch(() => ({ blockNumberish: queued.scheduledBlock } as const))).blockNumberish
+          : queued.scheduledBlock,
         thresholdOut: this.deps.config.thresholdOut,
         normalizedOrder: normalized,
         order: normalized.decodedOrder.order,
@@ -1128,8 +1385,20 @@ export class BotRuntime {
         nonceManager: hotLane.nonceManager,
         executionPreparer: hotLane.executionPreparer,
         shadowMode: policy.mode !== 'LIVE',
-        routeEvalReadCache
+        routeEvalReadCache,
+        onPrepareAttempt: () => this.deps.metrics.incrementPreparePreflight(),
+        runtimeSessionId: this.runtimeSessionId,
+        staleRetryCount: this.stalePlanRetryByOrder.get(queued.orderHash)?.attempts ?? 0
       });
+      const prepareFailureReason =
+        (decision.action === 'DROP' || decision.action === 'REQUEUE')
+        && 'prepareFailureReason' in decision
+        && decision.prepareFailureReason
+          ? decision.prepareFailureReason
+          : undefined;
+      if (prepareFailureReason === 'PREPARE_INVALID_PLAN_ANCHOR') {
+        this.deps.metrics.incrementPrepareInvalidPlanAnchor();
+      }
       this.deps.metrics.setGauge('route_eval_cache_entries', routeEvalReadCache.getEntryCount());
       this.deps.metrics.setGauge('route_eval_negative_cache_entries', routeEvalReadCache.getNegativeEntryCount());
       this.deps.metrics.setGauge('route_eval_cache_snapshots', routeEvalReadCache.getSnapshotCount());
@@ -1139,6 +1408,94 @@ export class BotRuntime {
           this.deps.inflightTracker.markResolved(queued.orderHash);
         }
         index += 1;
+        continue;
+      }
+      if (decision.action === 'REQUEUE' && decision.reason === 'PREPARE_STALE_PLAN') {
+        const retry = this.stalePlanRetryByOrder.get(queued.orderHash) ?? { attempts: 0, nextEligibleTick: this.schedulerTickCounter };
+        const nextAttempts = retry.attempts + 1;
+        this.deps.metrics.incrementPrepareStalePlan();
+        this.deps.metrics.incrementPreparePreflightFailed('PREPARE_STALE_PLAN');
+        this.deps.metrics.incrementPrepareFailureReason('PREPARE_STALE_PLAN');
+        if (nextAttempts <= this.deps.config.maxPrepareStaleRetries) {
+          this.stalePlanRetryByOrder.set(queued.orderHash, {
+            attempts: nextAttempts,
+            nextEligibleTick: this.schedulerTickCounter + this.deps.config.infraBlockedRetryCooldownTicks
+          });
+          this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.deps.metrics.incrementScheduledRequeued();
+          this.removeQueuedEntries(queued.orderHash);
+          this.deps.inflightTracker.markResolved(queued.orderHash);
+          await this.deps.journal.append({
+            type: 'ORDER_PREPARE_FAILED',
+            atMs: Date.now(),
+            orderHash: queued.orderHash,
+            payload: {
+              orderHash: queued.orderHash,
+              venue: decision.chosenRouteVenue,
+              pathKind: decision.pathKind,
+              hopCount: decision.hopCount,
+              bridgeToken: decision.bridgeToken,
+              executionMode: decision.executionMode,
+              pathDescriptor: decision.pathDescriptor,
+              error: decision.prepareError ?? 'STALE_PLAN',
+              message: decision.prepareMessage ?? 'execution plan is stale',
+              errorCategory: decision.prepareError ?? 'PREPARE_STALE_PLAN',
+              errorMessage: decision.prepareMessage ?? 'execution plan is stale',
+              errorSelector: decision.prepareErrorSelector,
+              decodedErrorName: decision.decodedErrorName,
+              prepareFailureReason: 'PREPARE_STALE_PLAN',
+              preflightStage: decision.preflightStage ?? 'staleness',
+              runtimeSessionId: decision.runtimeSessionId,
+              plannedAtBlockNumber: decision.plannedAtBlockNumber?.toString(),
+              candidateBlockNumberish: decision.candidateBlockNumberish?.toString(),
+              blockDelta: decision.blockDelta?.toString(),
+              timeDeltaMs: decision.timeDeltaMs,
+              staleRetryCount: nextAttempts
+            }
+          });
+          await this.deps.journal.append({
+            type: 'PREPARED',
+            atMs: Date.now(),
+            orderHash: queued.orderHash,
+            payload: { ok: false, reason: 'PREPARE_STALE_PLAN' }
+          });
+          continue;
+        }
+        this.deps.metrics.incrementPrepareStaleRetryExhausted();
+        this.stalePlanRetryByOrder.delete(queued.orderHash);
+        await this.deps.store.transition(queued.orderHash, 'DROPPED', 'PREPARE_STALE_PLAN');
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: Date.now(),
+          orderHash: queued.orderHash,
+          payload: {
+            reason: 'PREPARE_STALE_PLAN',
+            chosenRouteVenue: decision.chosenRouteVenue,
+            chosenRoutePathKind: decision.pathKind,
+            chosenRouteHopCount: decision.hopCount,
+            chosenRouteBridgeToken: decision.bridgeToken,
+            chosenRouteExecutionMode: decision.executionMode,
+            chosenRoutePathDescriptor: decision.pathDescriptor,
+            error: decision.prepareError ?? 'STALE_PLAN_RETRY_EXHAUSTED',
+            message: decision.prepareMessage ?? 'stale plan retry exhausted',
+            errorCategory: 'PREPARE_STALE_PLAN',
+            errorMessage: decision.prepareMessage ?? 'stale plan retry exhausted',
+            errorSelector: decision.prepareErrorSelector,
+            decodedErrorName: decision.decodedErrorName,
+            prepareFailureReason: 'PREPARE_STALE_PLAN',
+            preflightStage: decision.preflightStage ?? 'staleness',
+            runtimeSessionId: decision.runtimeSessionId,
+            plannedAtBlockNumber: decision.plannedAtBlockNumber?.toString(),
+            candidateBlockNumberish: decision.candidateBlockNumberish?.toString(),
+            blockDelta: decision.blockDelta?.toString(),
+            timeDeltaMs: decision.timeDeltaMs,
+            staleRetryCount: nextAttempts
+          }
+        });
+        this.deps.metrics.increment('orders_dropped_total{reason="PREPARE_STALE_PLAN"}');
+        this.deps.inflightTracker.markResolved(queued.orderHash);
+        this.hotQueue.splice(index, 1);
+        this.observeRuntimeGaugeSnapshot();
         continue;
       }
 
@@ -1200,8 +1557,19 @@ export class BotRuntime {
       if (decision.action === 'DROP' && decision.reason === 'PREPARE_FAILED') {
         const error = (decision.prepareError ?? 'PrepareError').trim() || 'PrepareError';
         const message = (decision.prepareMessage ?? 'executionPreparer failed').trim() || 'executionPreparer failed';
+        const prepareFailureReason = decision.prepareFailureReason ?? 'PREPARE_TX_BUILD_FAILED';
         this.deps.metrics.incrementOrdersPrepareFailed(decision.chosenRouteVenue, decision.pathKind, decision.executionMode);
-        this.deps.metrics.increment(`prepare_failure_reason_total{reason="${error}"}`);
+        this.deps.metrics.incrementPreparePreflightFailed(prepareFailureReason);
+        if (prepareFailureReason === 'PREPARE_CALL_REVERTED') {
+          this.deps.metrics.increment('prepare_call_reverted_total');
+        }
+        if (prepareFailureReason === 'PREPARE_ESTIMATE_GAS_FAILED') {
+          this.deps.metrics.increment('prepare_estimate_gas_failed_total');
+        }
+        this.deps.metrics.incrementPrepareFailureReason(prepareFailureReason);
+        if (decision.prepareErrorSelector) {
+          this.deps.metrics.incrementPrepareFailureSelector(decision.prepareErrorSelector);
+        }
         await this.deps.journal.append({
           type: 'PREPARED',
           atMs: Date.now(),
@@ -1224,12 +1592,21 @@ export class BotRuntime {
             constraintReason: decision.chosenRouteConstraintReason,
             error,
             message,
-            errorCategory: error,
-            errorMessage: message
+            errorCategory: prepareFailureReason,
+            errorMessage: message,
+            errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
+            decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined,
+            prepareFailureReason,
+            preflightStage: decision.preflightStage,
+            runtimeSessionId: decision.runtimeSessionId,
+            plannedAtBlockNumber: decision.plannedAtBlockNumber?.toString(),
+            candidateBlockNumberish: decision.candidateBlockNumberish?.toString(),
+            blockDelta: decision.blockDelta?.toString(),
+            timeDeltaMs: decision.timeDeltaMs,
+            staleRetryCount: decision.staleRetryCount
           }
         });
       }
-
       if ('simResult' in decision && decision.simResult) {
         const simOk = decision.simResult.ok;
         this.deps.metrics.increment(
@@ -1351,6 +1728,7 @@ export class BotRuntime {
         } else if (decision.reason === 'INFRA_BLOCKED') {
           await this.deps.store.transition(queued.orderHash, 'SUPPORTED', 'INFRA_BLOCKED');
           this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.deps.metrics.incrementScheduledRequeued();
           this.deps.metrics.incrementOrdersEvaluationBlocked();
           await this.deps.journal.append({
             type: 'ORDER_EVALUATION_BLOCKED',
@@ -1369,6 +1747,9 @@ export class BotRuntime {
           await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
           this.blockedRetryByOrder.delete(queued.orderHash);
         }
+        if (decision.reason === 'WINDOW_EXPIRED') {
+          this.deps.metrics.incrementScheduledWindowExpired();
+        }
         if (decision.reason !== 'INFRA_BLOCKED') {
           this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);
         }
@@ -1383,8 +1764,18 @@ export class BotRuntime {
             ? {
                 error: decision.prepareError ?? 'PrepareError',
                 message: decision.prepareMessage ?? 'executionPreparer failed',
-                errorCategory: decision.prepareError ?? 'PrepareError',
-                errorMessage: decision.prepareMessage ?? 'executionPreparer failed'
+                errorCategory: decision.prepareFailureReason ?? decision.prepareError ?? 'PrepareError',
+                errorMessage: decision.prepareMessage ?? 'executionPreparer failed',
+                errorSelector: 'prepareErrorSelector' in decision ? decision.prepareErrorSelector : undefined,
+                decodedErrorName: 'decodedErrorName' in decision ? decision.decodedErrorName : undefined,
+                prepareFailureReason: decision.prepareFailureReason,
+                preflightStage: decision.preflightStage,
+                runtimeSessionId: decision.runtimeSessionId,
+                plannedAtBlockNumber: decision.plannedAtBlockNumber?.toString(),
+                candidateBlockNumberish: decision.candidateBlockNumberish?.toString(),
+                blockDelta: decision.blockDelta?.toString(),
+                timeDeltaMs: decision.timeDeltaMs,
+                staleRetryCount: decision.staleRetryCount
               }
             : undefined;
         await this.deps.journal.append({
@@ -1407,7 +1798,17 @@ export class BotRuntime {
             error: droppedErrorContext?.error,
             message: droppedErrorContext?.message,
             errorCategory: droppedErrorContext?.errorCategory,
-            errorMessage: droppedErrorContext?.errorMessage
+            errorMessage: droppedErrorContext?.errorMessage,
+            errorSelector: droppedErrorContext?.errorSelector,
+            decodedErrorName: droppedErrorContext?.decodedErrorName,
+            prepareFailureReason: droppedErrorContext?.prepareFailureReason,
+            preflightStage: droppedErrorContext?.preflightStage,
+            runtimeSessionId: droppedErrorContext?.runtimeSessionId,
+            plannedAtBlockNumber: droppedErrorContext?.plannedAtBlockNumber,
+            candidateBlockNumberish: droppedErrorContext?.candidateBlockNumberish,
+            blockDelta: droppedErrorContext?.blockDelta,
+            timeDeltaMs: droppedErrorContext?.timeDeltaMs,
+            staleRetryCount: droppedErrorContext?.staleRetryCount
           }
         });
         this.deps.inflightTracker.markResolved(queued.orderHash);

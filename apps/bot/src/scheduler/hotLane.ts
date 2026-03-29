@@ -15,6 +15,8 @@ import type { SequencerClient, SequencerClientResult } from '../send/sequencerCl
 import { NonceManager } from '../send/nonceManager.js';
 import type { ConditionalEnvelope } from '../send/conditional.js';
 import type { NormalizedOrder } from '../store/types.js';
+import { PrepareFailureError, type PrepareFailureReason } from '../execution/prepareFailureTypes.js';
+import { decodeExecutionError } from '../execution/errorDecode.js';
 
 export type HotLaneEntry = {
   orderHash: `0x${string}`;
@@ -41,6 +43,40 @@ export type HotLaneDecision =
       chosenRouteConstraintReason?: ConstraintRejectReason;
       prepareError?: string;
       prepareMessage?: string;
+      prepareFailureReason?: PrepareFailureReason;
+      prepareErrorSelector?: `0x${string}`;
+      decodedErrorName?: string;
+      preflightStage?: 'validate' | 'anchor' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+      runtimeSessionId?: string;
+      plannedAtBlockNumber?: bigint;
+      candidateBlockNumberish?: bigint;
+      blockDelta?: bigint;
+      timeDeltaMs?: number;
+      staleRetryCount?: number;
+      routeAlternatives?: RouteCandidateSummary[];
+    }
+  | {
+      action: 'REQUEUE';
+      reason: 'PREPARE_STALE_PLAN';
+      retryReason: 'PREPARE_STALE_PLAN';
+      chosenRouteVenue?: 'UNISWAP_V3' | 'CAMELOT_AMMV3' | 'LFJ_LB';
+      pathKind?: RoutePathKind;
+      hopCount?: 1 | 2;
+      bridgeToken?: `0x${string}`;
+      executionMode?: HedgeExecutionMode;
+      pathDescriptor?: string;
+      prepareError?: string;
+      prepareMessage?: string;
+      prepareFailureReason: 'PREPARE_STALE_PLAN';
+      prepareErrorSelector?: `0x${string}`;
+      decodedErrorName?: string;
+      preflightStage?: 'staleness';
+      runtimeSessionId?: string;
+      plannedAtBlockNumber?: bigint;
+      candidateBlockNumberish?: bigint;
+      blockDelta?: bigint;
+      timeDeltaMs?: number;
+      staleRetryCount?: number;
       routeAlternatives?: RouteCandidateSummary[];
     }
   | {
@@ -74,28 +110,72 @@ export type HotLaneStepParams = {
   simService: ForkSimService;
   sequencerClient: SequencerClient;
   nonceManager: NonceManager;
-  executionPreparer: (input: { executionPlan: ExecutionPlan }) => Promise<PreparedExecution>;
+  executionPreparer: (input: {
+    executionPlan: ExecutionPlan;
+    staleRetryCount?: number;
+    runtimeSessionId: string;
+  }) => Promise<PreparedExecution>;
   shadowMode: boolean;
   leadBlocks?: bigint;
   routeEvalReadCache?: RouteEvalReadCache;
+  onPrepareAttempt?: () => void;
+  runtimeSessionId: string;
+  staleRetryCount?: number;
 };
 
 export function shouldMoveToHotLane(currentBlock: bigint, scheduledBlock: bigint, leadBlocks: bigint = 2n): boolean {
   return currentBlock >= scheduledBlock - leadBlocks;
 }
 
-function toPrepareErrorContext(error: unknown): { prepareError: string; prepareMessage: string } {
-  if (error instanceof Error) {
-    const cause = error.cause === undefined ? undefined : String(error.cause);
+function toPrepareErrorContext(error: unknown): {
+  prepareError: string;
+  prepareMessage: string;
+  prepareFailureReason: PrepareFailureReason;
+  prepareErrorSelector?: `0x${string}`;
+  decodedErrorName?: string;
+  preflightStage?: 'validate' | 'anchor' | 'call' | 'estimate_gas' | 'staleness' | 'tx_build' | 'sign';
+  runtimeSessionId?: string;
+  plannedAtBlockNumber?: bigint;
+  candidateBlockNumberish?: bigint;
+  blockDelta?: bigint;
+  timeDeltaMs?: number;
+  staleRetryCount?: number;
+} {
+  if (error instanceof PrepareFailureError) {
     return {
-      prepareError: cause ? `${error.name} (cause=${cause})` : error.name,
-      prepareMessage: error.message
+      prepareError: error.errorCategory,
+      prepareMessage: error.errorMessage,
+      prepareFailureReason: error.reason,
+      prepareErrorSelector: error.errorSelector,
+      decodedErrorName: error.decodedErrorName,
+      preflightStage: error.preflightStage,
+      runtimeSessionId: error.runtimeSessionId,
+      plannedAtBlockNumber: error.plannedAtBlockNumber,
+      candidateBlockNumberish: error.candidateBlockNumberish,
+      blockDelta: error.blockDelta,
+      timeDeltaMs: error.timeDeltaMs,
+      staleRetryCount: error.staleRetryCount
     };
   }
-  const normalized = String(error);
+  if (error instanceof Error) {
+    const decoded = decodeExecutionError(error);
+    return {
+      prepareError: decoded.errorCategory,
+      prepareMessage: decoded.errorMessage,
+      prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
+      prepareErrorSelector: decoded.errorSelector,
+      decodedErrorName: decoded.decodedErrorName,
+      preflightStage: 'tx_build'
+    };
+  }
+  const decoded = decodeExecutionError(error);
   return {
-    prepareError: 'UnknownError',
-    prepareMessage: normalized
+    prepareError: decoded.errorCategory,
+    prepareMessage: decoded.errorMessage,
+    prepareFailureReason: 'PREPARE_TX_BUILD_FAILED',
+    prepareErrorSelector: decoded.errorSelector,
+    decodedErrorName: decoded.decodedErrorName,
+    preflightStage: 'tx_build'
   };
 }
 
@@ -158,6 +238,7 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
     blockNumberish: params.currentBlock,
     resolveEnv: params.resolveEnv,
     conditionalEnvelope: params.conditionalEnvelope,
+    runtimeSessionId: params.runtimeSessionId,
     routeEvalReadCache: params.routeEvalReadCache
   } satisfies BuildExecutionPlanParams;
   const result = await buildExecutionPlan(planInput);
@@ -168,18 +249,57 @@ export async function runHotLaneStep(params: HotLaneStepParams): Promise<HotLane
 
   let preparedExecution: PreparedExecution;
   try {
+    params.onPrepareAttempt?.();
     preparedExecution = await params.executionPreparer({
-      executionPlan: result.plan
+      executionPlan: result.plan,
+      staleRetryCount: params.staleRetryCount,
+      runtimeSessionId: params.runtimeSessionId
     });
   } catch (error) {
     const prepareErrorContext = toPrepareErrorContext(error);
     const route = result.plan.route;
     const routeContextCandidate = chooseRouteContextCandidate(result.plan.routeAlternatives, route.venue);
+    if (prepareErrorContext.prepareFailureReason === 'PREPARE_STALE_PLAN') {
+      return {
+        action: 'REQUEUE',
+        reason: 'PREPARE_STALE_PLAN',
+        retryReason: 'PREPARE_STALE_PLAN',
+        prepareError: prepareErrorContext.prepareError,
+        prepareMessage: prepareErrorContext.prepareMessage,
+        prepareFailureReason: 'PREPARE_STALE_PLAN',
+        prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
+        decodedErrorName: prepareErrorContext.decodedErrorName,
+        preflightStage: 'staleness',
+        runtimeSessionId: prepareErrorContext.runtimeSessionId,
+        plannedAtBlockNumber: prepareErrorContext.plannedAtBlockNumber,
+        candidateBlockNumberish: prepareErrorContext.candidateBlockNumberish,
+        blockDelta: prepareErrorContext.blockDelta,
+        timeDeltaMs: prepareErrorContext.timeDeltaMs,
+        staleRetryCount: prepareErrorContext.staleRetryCount ?? params.staleRetryCount,
+        chosenRouteVenue: route.venue,
+        pathKind: route.pathKind,
+        hopCount: route.hopCount,
+        bridgeToken: route.bridgeToken,
+        executionMode: route.executionMode ?? result.plan.selectedExecutionMode,
+        pathDescriptor: toPathDescriptor(route.pathKind, route.tokenIn, route.tokenOut, route.bridgeToken),
+        routeAlternatives: result.plan.routeAlternatives
+      };
+    }
     return {
       action: 'DROP',
       reason: 'PREPARE_FAILED',
       prepareError: prepareErrorContext.prepareError,
       prepareMessage: prepareErrorContext.prepareMessage,
+      prepareFailureReason: prepareErrorContext.prepareFailureReason,
+      prepareErrorSelector: prepareErrorContext.prepareErrorSelector,
+      decodedErrorName: prepareErrorContext.decodedErrorName,
+      preflightStage: prepareErrorContext.preflightStage,
+      runtimeSessionId: prepareErrorContext.runtimeSessionId,
+      plannedAtBlockNumber: prepareErrorContext.plannedAtBlockNumber,
+      candidateBlockNumberish: prepareErrorContext.candidateBlockNumberish,
+      blockDelta: prepareErrorContext.blockDelta,
+      timeDeltaMs: prepareErrorContext.timeDeltaMs,
+      staleRetryCount: prepareErrorContext.staleRetryCount ?? params.staleRetryCount,
       chosenRouteVenue: route.venue,
       pathKind: route.pathKind,
       hopCount: route.hopCount,
