@@ -35,6 +35,7 @@ import {
 import type { ResolveEnvProvider } from './resolveEnvProvider.js';
 import { RouteEvalReadCache } from '../routing/rpc/readCache.js';
 import type { OrderState } from '../domain/orderState.js';
+import { isDeadlineReachedError, isOrderExpiredForLifecycle } from './orderExpiry.js';
 
 export type SchedulerContext = {
   routeBook: RouteBook;
@@ -252,32 +253,34 @@ export class BotRuntime {
           prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
         }
       });
-      if (record.reason === 'WINDOW_EXPIRED') {
+      if (record.reason === 'WINDOW_EXPIRED' || isOrderExpiredForLifecycle(record)) {
         await this.deps.store.transition(record.orderHash, 'DROPPED', 'WINDOW_EXPIRED');
+        this.removeOrderTracking(record.orderHash);
         this.deps.metrics.incrementScheduledWindowExpired();
+        this.deps.metrics.incrementScheduledRehydrateExpired();
         await this.deps.journal.append({
           type: 'ORDER_DROPPED',
           atMs: nowMs,
           orderHash: record.orderHash,
-          payload: {
-            reason: 'WINDOW_EXPIRED',
-            error: 'SCHEDULED_NOT_TRACKED',
-            message: 'scheduled order expired after losing runtime ownership',
-            errorCategory: 'SCHEDULED_NOT_TRACKED',
-            errorMessage: 'scheduled order expired after losing runtime ownership',
-            prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
-          }
-        });
+            payload: {
+              reason: 'WINDOW_EXPIRED',
+              error: 'SCHEDULED_NOT_TRACKED',
+              message: 'scheduled order was already expired during reconciliation',
+              errorCategory: 'SCHEDULED_NOT_TRACKED',
+              errorMessage: 'scheduled order was already expired during reconciliation',
+              prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
+            }
+          });
         await this.deps.journal.append({
           type: 'SCHEDULED_ORDER_RECONCILED',
           atMs: nowMs,
           orderHash: record.orderHash,
-          payload: {
-            orderHash: record.orderHash,
-            action: 'DROPPED',
-            reason: 'WINDOW_EXPIRED'
-          }
-        });
+            payload: {
+              orderHash: record.orderHash,
+              action: 'DROPPED',
+              reason: 'SCHEDULED_REHYDRATE_EXPIRED'
+            }
+          });
         continue;
       }
       this.deps.ingress.requeueForScheduling(record.orderHash);
@@ -1000,23 +1003,47 @@ export class BotRuntime {
       const resolveSnapshot = scheduler.resolveEnvProvider
         ? await scheduler.resolveEnvProvider.getCurrent().catch(() => undefined)
         : undefined;
-      const scheduleResult = await findFirstProfitableBlock({
-        order: record.normalizedOrder.decodedOrder.order,
-        resolveEnvProvider: scheduler.resolveEnvProvider,
-        baseEnv: scheduler.resolveEnv,
-        routeBook: scheduler.routeBook,
-        candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
-        maxCandidateBlocksPerOrder: this.deps.config.maxCandidateBlocksPerOrder,
-        routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
-        routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
-        onRouteEvalCacheStats: (stats) => {
-          this.deps.metrics.setGauge('route_eval_cache_entries', stats.entries);
-          this.deps.metrics.setGauge('route_eval_negative_cache_entries', stats.negativeEntries);
-          this.deps.metrics.setGauge('route_eval_cache_snapshots', stats.snapshots);
-        },
-        threshold: this.deps.config.thresholdOut,
-        competeWindowBlocks: this.deps.config.competeWindowBlocks
-      });
+      let scheduleResult: Awaited<ReturnType<typeof findFirstProfitableBlock>>;
+      try {
+        scheduleResult = await findFirstProfitableBlock({
+          order: record.normalizedOrder.decodedOrder.order,
+          resolveEnvProvider: scheduler.resolveEnvProvider,
+          baseEnv: scheduler.resolveEnv,
+          routeBook: scheduler.routeBook,
+          candidateBlockOffsets: this.deps.config.candidateBlockOffsets,
+          maxCandidateBlocksPerOrder: this.deps.config.maxCandidateBlocksPerOrder,
+          routeEvalCacheMaxEntries: this.deps.config.routeEvalCacheMaxEntries,
+          routeEvalNegativeCacheMaxEntries: this.deps.config.routeEvalNegativeCacheMaxEntries,
+          onRouteEvalCacheStats: (stats) => {
+            this.deps.metrics.setGauge('route_eval_cache_entries', stats.entries);
+            this.deps.metrics.setGauge('route_eval_negative_cache_entries', stats.negativeEntries);
+            this.deps.metrics.setGauge('route_eval_cache_snapshots', stats.snapshots);
+          },
+          threshold: this.deps.config.thresholdOut,
+          competeWindowBlocks: this.deps.config.competeWindowBlocks
+        });
+      } catch (error) {
+        if (!isDeadlineReachedError(error)) {
+          throw error;
+        }
+        await this.deps.store.transition(orderHash, 'DROPPED', 'WINDOW_EXPIRED');
+        this.removeOrderTracking(orderHash);
+        this.deps.metrics.incrementScheduledWindowExpired();
+        this.deps.metrics.incrementSchedulerDeadlineReached();
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: Date.now(),
+          orderHash,
+          payload: {
+            reason: 'WINDOW_EXPIRED',
+            error: 'DeadlineReached',
+            message: 'scheduler evaluation hit DeadlineReached',
+            errorCategory: 'SCHEDULED_REHYDRATE_EXPIRED',
+            errorMessage: 'scheduler evaluation hit DeadlineReached'
+          }
+        });
+        continue;
+      }
       if (!scheduleResult.ok && scheduleResult.reason === 'INCONCLUSIVE') {
         const blockedAttempts = scheduleResult.evaluations.flatMap((evaluation) =>
           evaluation.venueAttempts.filter(

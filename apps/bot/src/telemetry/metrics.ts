@@ -303,6 +303,14 @@ export class BotMetrics {
     this.increment('scheduled_requeued_total');
   }
 
+  incrementScheduledRehydrateExpired(): void {
+    this.increment('scheduled_rehydrate_expired_total');
+  }
+
+  incrementSchedulerDeadlineReached(): void {
+    this.increment('scheduler_deadline_reached_total');
+  }
+
   incrementOrdersSupportedToScheduled(): void {
     this.increment('orders_supported_to_scheduled_total');
   }

@@ -157,7 +157,12 @@ export type DecisionJournalEvent =
       {
         orderHash: `0x${string}`;
         action: 'ENQUEUED' | 'REQUEUED' | 'DROPPED' | 'UNCHANGED';
-        reason: 'STARTUP_REHYDRATE' | 'MISSING_RUNTIME_OWNERSHIP' | 'WINDOW_EXPIRED' | 'TERMINAL_STATE';
+        reason:
+          | 'STARTUP_REHYDRATE'
+          | 'MISSING_RUNTIME_OWNERSHIP'
+          | 'WINDOW_EXPIRED'
+          | 'SCHEDULED_REHYDRATE_EXPIRED'
+          | 'TERMINAL_STATE';
       }
     >
   | BaseJournalEvent<

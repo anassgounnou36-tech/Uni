@@ -674,6 +674,83 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(prepareCalls).toBe(0);
   });
 
+  it('does not requeue expired persisted SCHEDULED orders during startup reconciliation', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    (normalized.decodedOrder.order.info as { deadline: bigint }).deadline = 1n;
+    const { runtime, store, ingress, journal, metrics } = makeRuntime({ config: runtimeConfig() });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await (runtime as unknown as { bootstrapScheduledOrdersForRevalidation: () => Promise<void> }).bootstrapScheduledOrdersForRevalidation();
+
+    const pending = ingress.dequeueForScheduling();
+    expect(pending).toEqual([]);
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toBe('DROPPED');
+    expect(record?.reason).toBe('WINDOW_EXPIRED');
+    const events = await journal.byOrderHash(payload.orderHash);
+    const reconciled = events.find((event) => event.type === 'SCHEDULED_ORDER_RECONCILED');
+    expect((reconciled?.payload as Record<string, unknown>).reason).toBe('SCHEDULED_REHYDRATE_EXPIRED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_rehydrate_expired_total).toBe(1);
+  });
+
+  it('does not requeue expired persisted PLAN_BUILT orders during startup reconciliation', async () => {
+    const payload = makePayload('live-02.json');
+    const normalized = toNormalizedOrder(payload);
+    (normalized.decodedOrder.order.info as { deadline: bigint }).deadline = 1n;
+    const { runtime, store, ingress, metrics } = makeRuntime({ config: runtimeConfig() });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'PLAN_BUILT');
+
+    await (runtime as unknown as { bootstrapScheduledOrdersForRevalidation: () => Promise<void> }).bootstrapScheduledOrdersForRevalidation();
+
+    expect(ingress.dequeueForScheduling()).toEqual([]);
+    const record = await store.get(payload.orderHash);
+    expect(record?.state).toBe('DROPPED');
+    expect(record?.reason).toBe('WINDOW_EXPIRED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_rehydrate_expired_total).toBe(1);
+  });
+
+  it('catches DeadlineReached per order and continues scheduler queue processing', async () => {
+    const firstPayload = makePayload('live-01.json');
+    const secondPayload = makePayload('live-02.json');
+    let throwDeadline = true;
+    const fallbackRouteBook = noEdgeRouteBook();
+    const routeBook = {
+      selectBestRoute: async () => {
+        if (throwDeadline) {
+          throwDeadline = false;
+          throw new Error('DeadlineReached');
+        }
+        return fallbackRouteBook.selectBestRoute({} as never);
+      }
+    } as unknown as RouteBook;
+    const { runtime, store, ingress, metrics } = makeRuntime({
+      config: runtimeConfig({ candidateBlockOffsets: [0n], maxCandidateBlocksPerOrder: 1 }),
+      schedulerRouteBook: routeBook
+    });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 1, payload: firstPayload, orderHashHint: firstPayload.orderHash });
+    await ingress.ingest({ source: 'POLL', receivedAtMs: 2, payload: secondPayload, orderHashHint: secondPayload.orderHash });
+
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const firstRecord = await store.get(firstPayload.orderHash);
+    const secondRecord = await store.get(secondPayload.orderHash);
+    expect(firstRecord?.state).toBe('DROPPED');
+    expect(firstRecord?.reason).toBe('WINDOW_EXPIRED');
+    expect(secondRecord?.state).toBe('DROPPED');
+    expect(secondRecord?.reason).toBe('SCHEDULER_NO_EDGE');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduler_deadline_reached_total).toBe(1);
+  });
+
   it('reconciliation classifies missing scheduled runtime ownership explicitly', async () => {
     const payload = makePayload();
     const normalized = toNormalizedOrder(payload);
