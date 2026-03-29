@@ -1,4 +1,5 @@
 import { findFirstProfitableBlock, type BlockEvaluation } from '../scheduler/firstProfitableBlock.js';
+import { randomUUID } from 'node:crypto';
 import { runHotLaneStep, type HotLaneEntry } from '../scheduler/hotLane.js';
 import type { OrdersPoller } from '../intake/poller.js';
 import type { HybridIngressCoordinator } from '../ingress/hybridIngress.js';
@@ -95,7 +96,7 @@ export class BotRuntime {
   private readonly logger: StructuredLogger;
   private readonly blockedRetryByOrder = new Map<`0x${string}`, BlockedRetryState>();
   private readonly stalePlanRetryByOrder = new Map<`0x${string}`, StalePlanRetryState>();
-  private readonly runtimeSessionId = `runtime-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+  private readonly runtimeSessionId = `runtime-${randomUUID()}`;
   private maintenanceTickCounter = 0;
   private schedulerTickCounter = 0;
   private static readonly HOT_QUEUE_MAX_ENTRIES = 10_000;
@@ -188,13 +189,117 @@ export class BotRuntime {
     this.observeRuntimeGaugeSnapshot();
   }
 
-  private async bootstrapScheduledOrdersForRevalidation(): Promise<void> {
-    const records = await this.deps.store.list().catch(() => []);
-    for (const record of records) {
-      if (record.state === 'SCHEDULED' || record.state === 'PLAN_BUILT') {
-        this.deps.ingress.requeueForScheduling(record.orderHash);
+  private isOrderInHotQueue(orderHash: `0x${string}`): boolean {
+    return this.hotQueue.some((entry) => entry.orderHash === orderHash);
+  }
+
+  private isOrderRuntimeTracked(orderHash: `0x${string}`): boolean {
+    return (
+      this.isOrderInHotQueue(orderHash)
+      || this.blockedRetryByOrder.has(orderHash)
+      || this.stalePlanRetryByOrder.has(orderHash)
+      || this.deps.inflightTracker.has(orderHash)
+    );
+  }
+
+  private sortHotQueueByUrgency(currentBlock: bigint): void {
+    const urgentWindowMs = this.deps.config.scheduledUrgentWindowMs;
+    this.hotQueue.sort((a, b) => {
+      const aBlocksToDeadline = a.competeWindowEnd - currentBlock;
+      const bBlocksToDeadline = b.competeWindowEnd - currentBlock;
+      const aMsToDeadline = Number(aBlocksToDeadline > 0n ? aBlocksToDeadline : 0n) * 1_000;
+      const bMsToDeadline = Number(bBlocksToDeadline > 0n ? bBlocksToDeadline : 0n) * 1_000;
+      const aUrgent = aMsToDeadline <= urgentWindowMs;
+      const bUrgent = bMsToDeadline <= urgentWindowMs;
+      if (aUrgent !== bUrgent) {
+        return aUrgent ? -1 : 1;
       }
+      return Number(aBlocksToDeadline - bBlocksToDeadline);
+    });
+  }
+
+  private async reconcileScheduledOrderOwnership(reason: 'STARTUP_REHYDRATE' | 'MISSING_RUNTIME_OWNERSHIP'): Promise<void> {
+    const records = await this.deps.store.list().catch(() => []);
+    const nowMs = Date.now();
+    for (const record of records) {
+      if (record.state !== 'SCHEDULED' && record.state !== 'PLAN_BUILT') {
+        continue;
+      }
+      if (this.isOrderRuntimeTracked(record.orderHash)) {
+        await this.deps.journal.append({
+          type: 'SCHEDULED_ORDER_RECONCILED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+          payload: {
+            orderHash: record.orderHash,
+            action: 'UNCHANGED',
+            reason
+          }
+        });
+        continue;
+      }
+      this.deps.metrics.incrementScheduledNotTracked();
+      await this.deps.journal.append({
+        type: 'ORDER_PREPARE_FAILED',
+        atMs: nowMs,
+        orderHash: record.orderHash,
+        payload: {
+          orderHash: record.orderHash,
+          error: 'SCHEDULED_NOT_TRACKED',
+          message: 'scheduled order had no runtime ownership and was reconciled',
+          errorCategory: 'SCHEDULED_NOT_TRACKED',
+          errorMessage: 'scheduled order had no runtime ownership and was reconciled',
+          prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
+        }
+      });
+      if (record.reason === 'WINDOW_EXPIRED') {
+        await this.deps.store.transition(record.orderHash, 'DROPPED', 'WINDOW_EXPIRED');
+        this.deps.metrics.incrementScheduledWindowExpired();
+        await this.deps.journal.append({
+          type: 'ORDER_DROPPED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+          payload: {
+            reason: 'WINDOW_EXPIRED',
+            error: 'SCHEDULED_NOT_TRACKED',
+            message: 'scheduled order expired after losing runtime ownership',
+            errorCategory: 'SCHEDULED_NOT_TRACKED',
+            errorMessage: 'scheduled order expired after losing runtime ownership',
+            prepareFailureReason: 'SCHEDULED_NOT_TRACKED'
+          }
+        });
+        await this.deps.journal.append({
+          type: 'SCHEDULED_ORDER_RECONCILED',
+          atMs: nowMs,
+          orderHash: record.orderHash,
+          payload: {
+            orderHash: record.orderHash,
+            action: 'DROPPED',
+            reason: 'WINDOW_EXPIRED'
+          }
+        });
+        continue;
+      }
+      this.deps.ingress.requeueForScheduling(record.orderHash);
+      this.deps.metrics.incrementScheduledRequeued();
+      if (reason === 'STARTUP_REHYDRATE') {
+        this.deps.metrics.incrementScheduledRehydrated();
+      }
+      await this.deps.journal.append({
+        type: 'SCHEDULED_ORDER_RECONCILED',
+        atMs: nowMs,
+        orderHash: record.orderHash,
+        payload: {
+          orderHash: record.orderHash,
+          action: 'REQUEUED',
+          reason
+        }
+      });
     }
+  }
+
+  private async bootstrapScheduledOrdersForRevalidation(): Promise<void> {
+    await this.reconcileScheduledOrderOwnership('STARTUP_REHYDRATE');
   }
 
   private validatePlanAnchorForQueuedOrder(
@@ -860,8 +965,12 @@ export class BotRuntime {
     }
     this.schedulerTickCounter += 1;
     this.maintenanceTickCounter += 1;
+    if (this.hotQueue.length === 0) {
+      await this.reconcileScheduledOrderOwnership('MISSING_RUNTIME_OWNERSHIP');
+    }
     if (this.maintenanceTickCounter % BotRuntime.MAINTENANCE_SWEEP_EVERY_TICKS === 0) {
       await this.runMaintenanceSweep();
+      await this.reconcileScheduledOrderOwnership('MISSING_RUNTIME_OWNERSHIP');
     }
 
     for (const orderHash of this.deps.ingress.dequeueForScheduling()) {
@@ -1137,6 +1246,7 @@ export class BotRuntime {
         competeWindowEnd: schedule.competeWindowEnd,
         predictedEdgeOut: schedule.chosenRoute.netEdgeOut
       });
+      this.sortHotQueueByUrgency(schedule.scheduledBlock);
       while (this.hotQueue.length > BotRuntime.HOT_QUEUE_MAX_ENTRIES) {
         this.hotQueue.shift();
       }
@@ -1163,6 +1273,12 @@ export class BotRuntime {
     const hotLane = this.deps.hotLaneContext;
     if (!hotLane) {
       return;
+    }
+    if (this.hotQueue.length > 1) {
+      const priorityBlock = hotLane.resolveEnvProvider
+        ? (await hotLane.resolveEnvProvider.getCurrent().catch(() => ({ blockNumberish: this.hotQueue[0]!.scheduledBlock } as const))).blockNumberish
+        : this.hotQueue[0]!.scheduledBlock;
+      this.sortHotQueueByUrgency(priorityBlock);
     }
 
     for (let index = 0; index < this.hotQueue.length; ) {
@@ -1279,6 +1395,7 @@ export class BotRuntime {
             nextEligibleTick: this.schedulerTickCounter + this.deps.config.infraBlockedRetryCooldownTicks
           });
           this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.deps.metrics.incrementScheduledRequeued();
           this.removeQueuedEntries(queued.orderHash);
           this.deps.inflightTracker.markResolved(queued.orderHash);
           await this.deps.journal.append({
@@ -1584,6 +1701,7 @@ export class BotRuntime {
         } else if (decision.reason === 'INFRA_BLOCKED') {
           await this.deps.store.transition(queued.orderHash, 'SUPPORTED', 'INFRA_BLOCKED');
           this.deps.ingress.requeueForScheduling(queued.orderHash);
+          this.deps.metrics.incrementScheduledRequeued();
           this.deps.metrics.incrementOrdersEvaluationBlocked();
           await this.deps.journal.append({
             type: 'ORDER_EVALUATION_BLOCKED',
@@ -1601,6 +1719,9 @@ export class BotRuntime {
         } else {
           await this.deps.store.transition(queued.orderHash, 'DROPPED', decision.reason);
           this.blockedRetryByOrder.delete(queued.orderHash);
+        }
+        if (decision.reason === 'WINDOW_EXPIRED') {
+          this.deps.metrics.incrementScheduledWindowExpired();
         }
         if (decision.reason !== 'INFRA_BLOCKED') {
           this.deps.metrics.increment(`orders_dropped_total{reason="${decision.reason}"}`);

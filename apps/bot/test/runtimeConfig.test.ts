@@ -40,6 +40,7 @@ describe('runtime config', () => {
     expect(config.maxCandidateBlocksPerOrder).toBe(7);
     expect(config.maxRevertedProbesPerOrder).toBe(3);
     expect(config.maxPrepareStaleRetries).toBe(1);
+    expect(config.scheduledUrgentWindowMs).toBe(1_000);
   });
 
   it('rejects invalid bridge token addresses clearly', () => {

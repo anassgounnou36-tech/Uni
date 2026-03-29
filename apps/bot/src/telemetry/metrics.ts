@@ -287,6 +287,22 @@ export class BotMetrics {
     this.increment('prepare_stale_retry_exhausted_total');
   }
 
+  incrementScheduledWindowExpired(): void {
+    this.increment('scheduled_window_expired_total');
+  }
+
+  incrementScheduledRehydrated(): void {
+    this.increment('scheduled_rehydrated_total');
+  }
+
+  incrementScheduledNotTracked(): void {
+    this.increment('scheduled_not_tracked_total');
+  }
+
+  incrementScheduledRequeued(): void {
+    this.increment('scheduled_requeued_total');
+  }
+
   incrementOrdersSupportedToScheduled(): void {
     this.increment('orders_supported_to_scheduled_total');
   }

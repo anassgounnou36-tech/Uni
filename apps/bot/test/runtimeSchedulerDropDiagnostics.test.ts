@@ -80,6 +80,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
     maxPrepareStaleRetries: 1,
+    scheduledUrgentWindowMs: 1_000,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],
@@ -673,6 +674,71 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
     expect(prepareCalls).toBe(0);
   });
 
+  it('reconciliation classifies missing scheduled runtime ownership explicitly', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    const { runtime, store, journal, metrics } = makeRuntime({
+      config: runtimeConfig({ schedulerCadenceMs: 10, hotLaneCadenceMs: 10, pollCadenceMs: 10 }),
+      schedulerRouteBook: noEdgeRouteBook()
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+
+    await (runtime as unknown as { schedulerTick: () => Promise<void> }).schedulerTick();
+
+    const events = await journal.byOrderHash(payload.orderHash);
+    const prepareFailed = events.find((event) => event.type === 'ORDER_PREPARE_FAILED');
+    expect((prepareFailed?.payload as Record<string, unknown>).prepareFailureReason).toBe('SCHEDULED_NOT_TRACKED');
+    const reconciled = events.find((event) => event.type === 'SCHEDULED_ORDER_RECONCILED');
+    expect((reconciled?.payload as Record<string, unknown>).action).toBe('REQUEUED');
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_not_tracked_total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('near-deadline scheduled orders are prioritized in hot-lane prepare order', async () => {
+    const payloadUrgent = makePayload('live-01.json');
+    const payloadLater = makePayload('live-02.json');
+    const normalizedUrgent = toNormalizedOrder(payloadUrgent);
+    const normalizedLater = toNormalizedOrder(payloadLater);
+    const prepareOrder: string[] = [];
+    const { runtime, store } = makeRuntime({
+      config: runtimeConfig({ scheduledUrgentWindowMs: 10_000 }),
+      schedulerRouteBook: routeBookWithNetEdge(30n),
+      executionPreparer: async ({ executionPlan }) => {
+        prepareOrder.push(executionPlan.orderHash);
+        throw new Error('intentional prepare fail for priority ordering');
+      }
+    });
+    await store.upsertDiscovered(normalizedUrgent, normalizedUrgent);
+    await store.transition(payloadUrgent.orderHash, 'DECODED');
+    await store.transition(payloadUrgent.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payloadUrgent.orderHash, 'SCHEDULED');
+    await store.upsertDiscovered(normalizedLater, normalizedLater);
+    await store.transition(payloadLater.orderHash, 'DECODED');
+    await store.transition(payloadLater.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payloadLater.orderHash, 'SCHEDULED');
+    const hotQueueRef = runtime as unknown as {
+      hotQueue: Array<{ orderHash: `0x${string}`; scheduledBlock: bigint; competeWindowEnd: bigint; predictedEdgeOut: bigint }>;
+    };
+    hotQueueRef.hotQueue.push({
+      orderHash: payloadLater.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 3000n,
+      predictedEdgeOut: 30n
+    });
+    hotQueueRef.hotQueue.push({
+      orderHash: payloadUrgent.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 1001n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    expect(prepareOrder[0]).toBe(payloadUrgent.orderHash);
+  });
+
   it('scheduler no-edge transitions order to DROPPED with SCHEDULER_NO_EDGE reason', async () => {
     const payload = makePayload();
     const logs: string[] = [];
@@ -1121,6 +1187,29 @@ describe('runtime scheduler no-edge diagnostics + dropped state persistence', ()
 
     const record = await store.get(payload.orderHash);
     expect(record?.state).toEqual('SUBMITTING');
+  });
+
+  it('scheduled order expiring in hot-lane increments scheduled_window_expired_total', async () => {
+    const payload = makePayload();
+    const normalized = toNormalizedOrder(payload);
+    const { runtime, store, metrics } = makeRuntime({
+      config: runtimeConfig({ shadowMode: false, canaryMode: false }),
+      schedulerRouteBook: routeBookWithNetEdge(30n)
+    });
+    await store.upsertDiscovered(normalized, normalized);
+    await store.transition(payload.orderHash, 'DECODED');
+    await store.transition(payload.orderHash, 'SUPPORTED', 'SUPPORTED');
+    await store.transition(payload.orderHash, 'SCHEDULED');
+    (runtime as unknown as { hotQueue: Array<Record<string, unknown>> }).hotQueue.push({
+      orderHash: payload.orderHash,
+      scheduledBlock: 1000n,
+      competeWindowEnd: 999n,
+      predictedEdgeOut: 30n
+    });
+
+    await (runtime as unknown as { hotLaneTick: () => Promise<void> }).hotLaneTick();
+    const counters = metrics.snapshot().counters;
+    expect(counters.scheduled_window_expired_total).toBe(1);
   });
 
   it('prepare failure transitions to PREPARE_FAILED, emits rich prepare events, and avoids tight-loop retries', async () => {

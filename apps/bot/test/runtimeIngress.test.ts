@@ -107,6 +107,7 @@ function runtimeConfig(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
     maxPrepareStaleRetries: 1,
+    scheduledUrgentWindowMs: 1_000,
     shadowMode: true,
     canaryMode: false,
     canaryAllowlistedPairs: [],

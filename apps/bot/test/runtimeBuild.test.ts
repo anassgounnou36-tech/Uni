@@ -69,6 +69,7 @@ function config(overrides: Partial<RuntimeConfig> = {}): RuntimeConfig {
     maxPrepareStalenessBlocks: 2n,
     maxPrepareStalenessMs: 4_000,
     maxPrepareStaleRetries: 1,
+    scheduledUrgentWindowMs: 1_000,
     bridgeTokens: ['0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'],
 
     enableMetricsServer: false,
